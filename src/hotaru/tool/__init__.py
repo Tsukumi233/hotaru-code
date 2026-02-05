@@ -1,4 +1,26 @@
-"""Tool system modules."""
+"""Tool system modules.
+
+This module provides the tool framework for AI agent capabilities.
+Tools are functions that the AI can invoke to interact with the system.
+
+Built-in tools:
+- ReadTool: Read file contents
+- WriteTool: Write file contents
+- EditTool: Edit files with search/replace
+- BashTool: Execute shell commands
+- GlobTool: Find files by pattern
+- GrepTool: Search file contents
+- SkillTool: Load domain-specific skills
+
+Example:
+    from hotaru.tool import ToolRegistry
+
+    # Get all available tools
+    tools = ToolRegistry.list()
+
+    # Get tool definitions for LLM
+    definitions = ToolRegistry.get_tool_definitions()
+"""
 
 from .tool import Tool, ToolContext, ToolResult, ToolInfo
 from .truncation import Truncate
@@ -8,6 +30,7 @@ from .edit import EditTool
 from .bash import BashTool
 from .glob import GlobTool
 from .grep import GrepTool
+from .skill import SkillTool
 from .registry import ToolRegistry
 
 __all__ = [
@@ -22,5 +45,6 @@ __all__ = [
     "BashTool",
     "GlobTool",
     "GrepTool",
+    "SkillTool",
     "ToolRegistry",
 ]

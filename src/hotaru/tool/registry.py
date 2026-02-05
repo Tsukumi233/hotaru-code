@@ -1,4 +1,19 @@
-"""Tool registry for managing available tools."""
+"""Tool registry for managing available tools.
+
+The registry provides centralized access to all tools available to the AI.
+Tools are registered at startup and can be dynamically added at runtime.
+
+Built-in tools:
+- read: Read file contents
+- write: Write file contents
+- edit: Edit files with search/replace
+- bash: Execute shell commands
+- glob: Find files by pattern
+- grep: Search file contents
+- skill: Load domain-specific skills
+
+Custom tools can be registered using ToolRegistry.register().
+"""
 
 from typing import Any, Dict, List, Optional, Type
 
@@ -11,6 +26,7 @@ from .edit import EditTool
 from .bash import BashTool
 from .glob import GlobTool
 from .grep import GrepTool
+from .skill import SkillTool
 from ..util.log import Log
 
 log = Log.create({"service": "tool.registry"})
@@ -43,6 +59,7 @@ class ToolRegistry:
             BashTool,
             GlobTool,
             GrepTool,
+            SkillTool,
         ]
 
         for tool in builtin_tools:

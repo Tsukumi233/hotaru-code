@@ -30,6 +30,21 @@ def __getattr__(name: str):
     if name in ("Tool", "ToolContext", "ToolResult"):
         from . import tool
         return getattr(tool, name)
+    if name in ("Skill",):
+        from . import skill
+        return getattr(skill, name)
+    if name in ("Server", "ServerInfo"):
+        from . import server
+        return getattr(server, name)
+    if name in ("MCP", "MCPStatus", "MCPResource"):
+        from . import mcp
+        return getattr(mcp, name)
+    if name in ("LSP", "LSPStatus"):
+        from . import lsp
+        return getattr(lsp, name)
+    if name in ("TuiApp", "run_tui", "TuiEvent"):
+        from . import tui
+        return getattr(tui, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -63,4 +78,20 @@ __all__ = [
     "Tool",
     "ToolContext",
     "ToolResult",
+    # Skill
+    "Skill",
+    # Server
+    "Server",
+    "ServerInfo",
+    # MCP
+    "MCP",
+    "MCPStatus",
+    "MCPResource",
+    # LSP
+    "LSP",
+    "LSPStatus",
+    # TUI
+    "TuiApp",
+    "run_tui",
+    "TuiEvent",
 ]

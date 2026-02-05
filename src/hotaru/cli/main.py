@@ -1,4 +1,8 @@
-"""CLI entry point for Hotaru Code."""
+"""CLI entry point for Hotaru Code.
+
+This module provides the main CLI interface for Hotaru Code.
+Running `hotaru` without arguments launches the TUI (Terminal User Interface).
+"""
 
 import asyncio
 import sys
@@ -13,8 +17,9 @@ from .. import __version__
 app = typer.Typer(
     name="hotaru",
     help="Hotaru Code - AI-powered coding assistant",
-    no_args_is_help=True,
+    no_args_is_help=False,  # TUI is the default when no args
     add_completion=False,
+    invoke_without_command=True,  # Allow callback to run without subcommand
 )
 
 console = Console()
@@ -27,8 +32,9 @@ def version_callback(value: bool):
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     version: bool = typer.Option(
         None,
         "--version",
@@ -37,9 +43,55 @@ def main(
         is_eager=True,
         help="Show version and exit",
     ),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Model to use in format provider/model",
+    ),
+    agent: Optional[str] = typer.Option(
+        None,
+        "--agent",
+        "-a",
+        help="Agent to use",
+    ),
+    session: Optional[str] = typer.Option(
+        None,
+        "--session",
+        "-s",
+        help="Session ID to continue",
+    ),
+    continue_session: bool = typer.Option(
+        False,
+        "--continue",
+        "-c",
+        help="Continue the last session",
+    ),
+    prompt: Optional[str] = typer.Option(
+        None,
+        "--prompt",
+        "-p",
+        help="Initial prompt to send",
+    ),
 ):
-    """Hotaru Code - AI-powered coding assistant."""
-    pass
+    """Hotaru Code - AI-powered coding assistant.
+
+    Running without a subcommand launches the interactive TUI.
+    """
+    # If a subcommand was invoked, don't run TUI
+    if ctx.invoked_subcommand is not None:
+        return
+
+    # Launch TUI as default behavior
+    from .cmd.tui import tui_command
+
+    tui_command(
+        model=model,
+        agent=agent,
+        session_id=session,
+        continue_session=continue_session,
+        prompt=prompt,
+    )
 
 
 @app.command()
@@ -278,6 +330,59 @@ def sessions(
         console.print()
 
     asyncio.run(list_sessions())
+
+
+@app.command()
+def tui(
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Model to use in format provider/model",
+    ),
+    agent: Optional[str] = typer.Option(
+        None,
+        "--agent",
+        "-a",
+        help="Agent to use",
+    ),
+    session: Optional[str] = typer.Option(
+        None,
+        "--session",
+        "-s",
+        help="Session ID to continue",
+    ),
+    continue_session: bool = typer.Option(
+        False,
+        "--continue",
+        "-c",
+        help="Continue the last session",
+    ),
+    prompt: Optional[str] = typer.Option(
+        None,
+        "--prompt",
+        "-p",
+        help="Initial prompt to send",
+    ),
+):
+    """Start the interactive Terminal User Interface.
+
+    This is the default command when running `hotaru` without arguments.
+    The TUI provides a rich interactive experience with:
+    - Session management
+    - Real-time streaming responses
+    - Tool execution visualization
+    - Keyboard shortcuts and commands
+    """
+    from .cmd.tui import tui_command
+
+    tui_command(
+        model=model,
+        agent=agent,
+        session_id=session,
+        continue_session=continue_session,
+        prompt=prompt,
+    )
 
 
 if __name__ == "__main__":
