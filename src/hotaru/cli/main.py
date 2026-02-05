@@ -5,6 +5,7 @@ Running `hotaru` without arguments launches the TUI (Terminal User Interface).
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -32,6 +33,33 @@ def version_callback(value: bool):
         raise typer.Exit()
 
 
+def directory_callback(ctx: typer.Context, value: Optional[str]) -> Optional[str]:
+    """Change working directory if specified."""
+    if value:
+        target_dir = Path(value).resolve()
+        if not target_dir.exists():
+            console.print(f"[red]Error:[/red] Directory does not exist: {target_dir}")
+            raise typer.Exit(1)
+        if not target_dir.is_dir():
+            console.print(f"[red]Error:[/red] Not a directory: {target_dir}")
+            raise typer.Exit(1)
+
+        # Load config from current directory BEFORE changing
+        # This preserves provider configurations from the original project
+        import asyncio
+        from ..core.config import ConfigManager
+        from ..provider import Provider
+
+        async def preload_config():
+            await ConfigManager.load()
+            await Provider.list()
+
+        asyncio.run(preload_config())
+
+        os.chdir(target_dir)
+    return value
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -42,6 +70,14 @@ def main(
         callback=version_callback,
         is_eager=True,
         help="Show version and exit",
+    ),
+    directory: Optional[str] = typer.Option(
+        None,
+        "--directory",
+        "-d",
+        callback=directory_callback,
+        is_eager=True,
+        help="Working directory for the session",
     ),
     model: Optional[str] = typer.Option(
         None,
