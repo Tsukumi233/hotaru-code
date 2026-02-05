@@ -1,0 +1,17 @@
+{
+  "provider": {
+    "feisakura": {
+      "type": "openai",
+      "name": "Feisakura API",
+      "options": {
+        "baseURL": "https://api.feisakura.fun/v1"
+      },
+      "models": {
+        "claude-haiku-4-5": {
+          "name": "Claude Haiku 4.5"
+        }
+      }
+    }
+  },
+  "model": "feisakura/claude-haiku-4-5"
+}
