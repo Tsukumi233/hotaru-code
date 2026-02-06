@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional, List
 import asyncio
 
 from .widgets import (
-    Logo, PromptInput, MessageBubble, ToolDisplay,
+    Logo, PromptInput, MessageBubble, AssistantTextPart, ToolDisplay,
     StatusBar, Spinner, Toast, SlashCommandItem
 )
 from .theme import ThemeManager
@@ -394,9 +394,10 @@ class SessionScreen(Screen):
                 self.session_id = session_data["id"]
                 sync.update_session(session_data)
 
-            # Stream the response
-            current_text = ""
-            assistant_bubble = None
+            # Stream the response — component-per-part model
+            # Each text segment between tool calls gets its own widget.
+            text_parts: Dict[str, AssistantTextPart] = {}  # part_id -> widget
+            header_mounted = False
 
             async for event in sdk.send_message(
                 session_id=self.session_id,
@@ -414,24 +415,34 @@ class SessionScreen(Screen):
                     except Exception:
                         pass
 
-                    # Create assistant message bubble
-                    assistant_bubble = MessageBubble(
+                    # Mount a header label for the assistant turn
+                    header = MessageBubble(
                         content="",
                         role="assistant",
                         agent=agent,
                         classes="message assistant-message"
                     )
-                    await container.mount(assistant_bubble)
+                    await container.mount(header)
+                    header_mounted = True
 
                 elif event_type == "message.part.updated":
-                    # Update text content
                     part = event.get("data", {}).get("part", {})
                     if part.get("type") == "text":
-                        current_text = part.get("text", "")
-                        if assistant_bubble:
-                            # Update the bubble content
-                            assistant_bubble.content = current_text
-                            assistant_bubble.refresh()
+                        part_id = part.get("id", "")
+                        part_text = part.get("text", "")
+                        if part_id in text_parts:
+                            # Update existing text segment
+                            text_parts[part_id].content = part_text
+                            text_parts[part_id].refresh()
+                        else:
+                            # New text segment — mount a new widget
+                            text_widget = AssistantTextPart(
+                                content=part_text,
+                                part_id=part_id,
+                                classes="message assistant-message",
+                            )
+                            text_parts[part_id] = text_widget
+                            await container.mount(text_widget)
 
                 elif event_type == "message.part.tool.start":
                     data = event.get("data", {})
@@ -472,6 +483,16 @@ class SessionScreen(Screen):
                 elif event_type == "message.completed":
                     # Message complete — clear tool widget tracking
                     self._tool_widgets.clear()
+
+                elif event_type == "error":
+                    error_msg = event.get("data", {}).get("error", "Unknown error")
+                    self.app.notify(f"Error: {error_msg}", severity="error")
+                    # Remove spinner if still there
+                    try:
+                        spinner = self.query_one("#loading-spinner")
+                        await spinner.remove()
+                    except Exception:
+                        pass
 
                 # Scroll to bottom
                 container.scroll_end()

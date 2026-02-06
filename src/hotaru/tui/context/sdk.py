@@ -131,8 +131,12 @@ class SDKContext:
 
         # Track response state
         message_id = Identifier.ascending("message")
-        part_id = Identifier.ascending("part")
+        part_id_counter = [0]  # mutable counter for generating unique part IDs
         response_text = ""
+
+        def _next_part_id() -> str:
+            part_id_counter[0] += 1
+            return f"part-{part_id_counter[0]}"
 
         # Yield message created event
         yield {
@@ -145,10 +149,6 @@ class SDKContext:
         }
 
         # Callbacks for streaming
-        def on_text(text: str):
-            nonlocal response_text
-            response_text += text
-
         def on_tool_start(tool_name: str, tool_id: str, input_args: Optional[Dict[str, Any]] = None):
             event_queue.put_nowait({
                 "kind": "tool_start",
@@ -203,21 +203,24 @@ class SDKContext:
         process_task = asyncio.create_task(process_with_queue())
 
         # Yield events as they arrive
-        accumulated_text = ""
+        # Each text segment between tool calls gets its own part_id
+        # so the screen can mount separate widgets for each segment.
+        segment_text = ""
+        current_part_id = _next_part_id()
 
         def _make_event(evt: Dict[str, Any]):
             """Convert a queue event dict to a yield-able event dict."""
-            nonlocal accumulated_text
+            nonlocal segment_text, current_part_id
             kind = evt.get("kind")
             if kind == "text":
-                accumulated_text += evt["text"]
+                segment_text += evt["text"]
                 return {
                     "type": "message.part.updated",
                     "data": {
                         "part": {
                             "type": "text",
-                            "text": accumulated_text,
-                            "id": part_id,
+                            "text": segment_text,
+                            "id": current_part_id,
                         }
                     }
                 }
@@ -231,6 +234,9 @@ class SDKContext:
                     }
                 }
             elif kind == "tool_end":
+                # After a tool completes, reset text segment for next part
+                segment_text = ""
+                current_part_id = _next_part_id()
                 return {
                     "type": "message.part.tool.end",
                     "data": {

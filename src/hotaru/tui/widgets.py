@@ -454,30 +454,49 @@ class MessageBubble(Static):
         self.agent = agent
         self.timestamp = timestamp
 
-    def render(self) -> Panel:
+    def render(self):
         """Render the message bubble."""
         theme = ThemeManager.get_theme()
 
         if self.role == "user":
-            border_color = theme.accent
-            title = "You"
-        else:
-            border_color = theme.primary
-            title = self.agent or "Assistant"
+            return Panel(
+                Text(self.content),
+                title="You",
+                title_align="left",
+                border_style=theme.accent,
+                padding=(0, 1),
+            )
 
-        # Render content as markdown for assistant messages
-        if self.role == "assistant":
-            content = Markdown(self.content)
-        else:
-            content = Text(self.content)
+        # Assistant messages: render without Panel for clean text selection
+        text = Text()
+        title = self.agent or "Assistant"
+        text.append(f"{title}\n", style=f"bold {theme.primary}")
+        if self.content:
+            text.append(self.content)
+        return text
 
-        return Panel(
-            content,
-            title=title,
-            title_align="left",
-            border_style=border_color,
-            padding=(0, 1),
-        )
+
+class AssistantTextPart(Static):
+    """Widget for a single text segment of an assistant response.
+
+    Used to render text parts interleaved with tool calls.
+    Renders as Markdown; click to copy raw text to clipboard.
+    """
+
+    def __init__(self, content: str = "", part_id: str = "", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.content = content
+        self.part_id = part_id
+
+    def render(self):
+        if self.content:
+            return Markdown(self.content)
+        return Text("")
+
+    def on_click(self) -> None:
+        if self.content:
+            self.app.copy_to_clipboard(self.content)
+            self.app.notify("Copied to clipboard", timeout=1.5)
 
 
 class ToolDisplay(Static):
