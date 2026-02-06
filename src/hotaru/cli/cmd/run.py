@@ -167,6 +167,7 @@ async def run_command(
     await Session.add_message(session.id, user_message)
 
     # Create session processor for agentic loop
+    is_resuming = continue_session or (session_id is not None)
     processor = SessionProcessor(
         session_id=session.id,
         model_id=model_id,
@@ -174,6 +175,10 @@ async def run_command(
         agent=agent_name,
         cwd=cwd,
     )
+
+    # Load prior conversation history when resuming
+    if is_resuming:
+        await processor.load_history()
 
     # Build system prompt
     system_prompt = SystemPrompt.build_full_prompt(
@@ -193,7 +198,7 @@ async def run_command(
         if not json_output:
             text_buffer.append(text)
 
-    def on_tool_start(tool_name: str, tool_id: str):
+    def on_tool_start(tool_name: str, tool_id: str, input_args: Optional[Dict[str, Any]] = None):
         if json_output:
             event = {
                 "type": "tool_start",
@@ -206,7 +211,11 @@ async def run_command(
         else:
             console.print(f"\n[dim]> {tool_name}[/dim]", end="")
 
-    def on_tool_end(tool_name: str, tool_id: str, output: Optional[str], error: Optional[str]):
+    def on_tool_end(
+        tool_name: str, tool_id: str,
+        output: Optional[str], error: Optional[str],
+        title: str = "", metadata: Optional[Dict[str, Any]] = None,
+    ):
         if json_output:
             event = {
                 "type": "tool_end",

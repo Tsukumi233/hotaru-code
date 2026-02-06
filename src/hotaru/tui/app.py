@@ -242,29 +242,81 @@ class TuiApp(App):
         """Compose the application."""
         yield Footer()
 
-    def on_mount(self) -> None:
-        """Handle application mount."""
+    async def on_mount(self) -> None:
+        """Handle application mount — runs async bootstrap then shows screen."""
+        await self._bootstrap()
+
         # Determine initial screen
         if self.session_id:
-            # Continue specific session
             self.push_screen(SessionScreen(session_id=self.session_id))
         elif self.continue_session:
-            # Continue last session - try to find most recent
             self._continue_last_session()
         elif self.initial_prompt:
-            # Start with initial prompt
             self.push_screen(HomeScreen(initial_prompt=self.initial_prompt))
         else:
-            # Show home screen
             self.push_screen(HomeScreen())
+
+    async def _bootstrap(self) -> None:
+        """Load persisted data into contexts before showing the first screen."""
+        try:
+            from ..project import Project
+            from ..session import Session
+            from ..provider import Provider as ProviderModule
+
+            # Ensure project context
+            project, _ = await Project.from_directory(self.sdk_ctx.cwd)
+
+            # Load sessions into SyncContext
+            sessions = await Session.list(project.id)
+            session_dicts = [
+                {
+                    "id": s.id,
+                    "title": s.title or "Untitled",
+                    "agent": s.agent,
+                    "parentID": s.parent_id,
+                    "time": {
+                        "created": s.time.created,
+                        "updated": s.time.updated,
+                    },
+                }
+                for s in sessions
+            ]
+            self.sync_ctx.set_sessions(session_dicts)
+
+            # Load providers into SyncContext
+            providers = await ProviderModule.list()
+            provider_dicts = [
+                {
+                    "id": pid,
+                    "name": p.name,
+                    "models": {
+                        mid: {"id": mid, "name": m.name, "api_id": m.api_id}
+                        for mid, m in p.models.items()
+                    },
+                }
+                for pid, p in providers.items()
+            ]
+            self.sync_ctx.set_providers(provider_dicts)
+
+            self.sync_ctx.set_status("complete")
+            log.info("bootstrap complete", {
+                "sessions": len(session_dicts),
+                "providers": len(provider_dicts),
+            })
+        except Exception as e:
+            log.error("bootstrap error", {"error": str(e)})
+            self.sync_ctx.set_status("partial")
 
     def _continue_last_session(self) -> None:
         """Try to continue the last session."""
-        # Get sessions from sync context
         sessions = self.sync_ctx.data.sessions
         if sessions:
             # Find most recent non-child session
-            for session in sorted(sessions, key=lambda s: s.get("time", {}).get("updated", 0), reverse=True):
+            for session in sorted(
+                sessions,
+                key=lambda s: s.get("time", {}).get("updated", 0),
+                reverse=True,
+            ):
                 if not session.get("parentID"):
                     self.push_screen(SessionScreen(session_id=session["id"]))
                     return

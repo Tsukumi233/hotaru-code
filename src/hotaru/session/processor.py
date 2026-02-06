@@ -83,6 +83,70 @@ class SessionProcessor:
         self.messages: List[Dict[str, Any]] = []
         self.tool_calls: Dict[str, ToolCallState] = {}
 
+    async def load_history(self) -> None:
+        """Load prior conversation history from persisted messages.
+
+        Converts stored ``MessageInfo`` objects into the OpenAI-format
+        message list that the LLM expects.  Must be called before
+        ``process()`` when resuming an existing session.
+        """
+        from .session import Session
+        from .message import TextPart, ToolInvocationPart, ToolResult as MsgToolResult
+
+        stored = await Session.get_messages(self.session_id)
+        for msg in stored:
+            if msg.role == "user":
+                # Extract text from parts
+                text_parts = [p.text for p in msg.parts if isinstance(p, TextPart)]
+                self.messages.append({
+                    "role": "user",
+                    "content": "".join(text_parts),
+                })
+            elif msg.role == "assistant":
+                text_parts = [p.text for p in msg.parts if isinstance(p, TextPart)]
+                tool_invocations = [
+                    p for p in msg.parts
+                    if isinstance(p, ToolInvocationPart)
+                ]
+
+                assistant_msg: Dict[str, Any] = {"role": "assistant"}
+                assistant_msg["content"] = "".join(text_parts) or None
+
+                # Collect tool calls
+                tc_list = []
+                tc_results = []
+                for ti in tool_invocations:
+                    inv = ti.tool_invocation
+                    if hasattr(inv, "state") and inv.state == "result":
+                        # This is a completed tool call — add both call and result
+                        tc_list.append({
+                            "id": inv.tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": inv.tool_name,
+                                "arguments": json.dumps(inv.args) if not isinstance(inv.args, str) else inv.args,
+                            },
+                        })
+                        tc_results.append({
+                            "role": "tool",
+                            "tool_call_id": inv.tool_call_id,
+                            "content": inv.result if hasattr(inv, "result") else "",
+                        })
+
+                if tc_list:
+                    assistant_msg["tool_calls"] = tc_list
+
+                self.messages.append(assistant_msg)
+
+                # Append tool result messages
+                for tr in tc_results:
+                    self.messages.append(tr)
+
+        log.info("loaded history", {
+            "session_id": self.session_id,
+            "message_count": len(self.messages),
+        })
+
     async def process(
         self,
         user_message: str,

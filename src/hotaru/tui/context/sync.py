@@ -323,7 +323,7 @@ class SyncContext:
 
     # Session sync
     async def sync_session(self, session_id: str) -> None:
-        """Sync a session's full data.
+        """Sync a session's full data (loads messages from disk).
 
         Args:
             session_id: Session ID to sync
@@ -331,9 +331,33 @@ class SyncContext:
         if session_id in self._synced_sessions:
             return
 
+        from ...session import Session
+
+        # Load session info
+        session = await Session.get(session_id)
+        if session:
+            self.update_session({
+                "id": session.id,
+                "title": session.title or "Untitled",
+                "agent": session.agent,
+                "parentID": session.parent_id,
+                "time": {
+                    "created": session.time.created,
+                    "updated": session.time.updated,
+                },
+            })
+
+        # Load messages
+        messages = await Session.get_messages(session_id)
+        msg_dicts = [m.model_dump() for m in messages]
+        self.set_messages(session_id, msg_dicts)
+
         # Mark as synced
         self._synced_sessions.add(session_id)
-        log.debug("synced session", {"session_id": session_id})
+        log.debug("synced session", {
+            "session_id": session_id,
+            "message_count": len(msg_dicts),
+        })
 
     def is_session_synced(self, session_id: str) -> bool:
         """Check if a session has been fully synced."""

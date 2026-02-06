@@ -122,6 +122,9 @@ class SDKContext:
             cwd=self._cwd,
         )
 
+        # Load prior conversation history for resumed sessions
+        await processor.load_history()
+
         # Build system prompt
         system_prompt = SystemPrompt.build_full_prompt(
             model=model_info,
@@ -425,8 +428,9 @@ class SDKContext:
         Args:
             session_id: Session ID
         """
-        # TODO: Implement actual API call
+        from ...session import Session
         log.info("deleting session", {"session_id": session_id})
+        await Session.delete(session_id)
 
     async def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
         """Get messages for a session.
@@ -437,9 +441,10 @@ class SDKContext:
         Returns:
             List of messages
         """
-        # TODO: Implement actual API call
+        from ...session import Session
         log.debug("getting messages", {"session_id": session_id})
-        return []
+        messages = await Session.get_messages(session_id)
+        return [m.model_dump() for m in messages]
 
     async def abort_message(self, session_id: str) -> None:
         """Abort the current message generation.
