@@ -152,12 +152,19 @@ class PromptInput(Input):
 
     def _update_popover_position(self) -> None:
         """Update popover position relative to input."""
-        if self._popover:
-            region = self.region
-            popover_height = self._popover.size.height or 12
-            # Position above the input, clamped so it doesn't go off-screen
-            y = max(0, region.y - popover_height)
-            self._popover.styles.offset = (region.x, y)
+        if not self._popover:
+            return
+
+        # outer_size includes border; size does not
+        popover_h = self._popover.outer_size.height
+
+        if popover_h == 0:
+            self.call_after_refresh(self._update_popover_position)
+            return
+
+        region = self.region
+        y = max(0, region.y - popover_h)
+        self._popover.styles.offset = (region.x, y)
 
     def action_popover_up(self) -> None:
         """Move selection up in popover."""
