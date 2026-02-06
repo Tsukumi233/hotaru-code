@@ -132,7 +132,8 @@ class PromptInput(Input):
             )
             # Mount above the input
             self.screen.mount(self._popover)
-            self._update_popover_position()
+            # Defer positioning until after layout
+            self.call_after_refresh(self._update_popover_position)
         else:
             # Update existing popover
             if self._popover:
@@ -140,6 +141,7 @@ class PromptInput(Input):
                     self._filtered_list.filtered,
                     self._filtered_list.active_index,
                 )
+                self.call_after_refresh(self._update_popover_position)
 
     def _hide_popover(self) -> None:
         """Hide slash command popover."""
@@ -151,9 +153,11 @@ class PromptInput(Input):
     def _update_popover_position(self) -> None:
         """Update popover position relative to input."""
         if self._popover:
-            # Position above the input
             region = self.region
-            self._popover.styles.offset = (region.x, region.y - self._popover.size.height - 1)
+            popover_height = self._popover.size.height or 12
+            # Position above the input, clamped so it doesn't go off-screen
+            y = max(0, region.y - popover_height)
+            self._popover.styles.offset = (region.x, y)
 
     def action_popover_up(self) -> None:
         """Move selection up in popover."""
@@ -262,6 +266,7 @@ class SlashPopover(Widget):
     DEFAULT_CSS = """
     SlashPopover {
         layer: overlay;
+        position: absolute;
         width: auto;
         min-width: 40;
         max-width: 60;
@@ -476,70 +481,184 @@ class MessageBubble(Static):
 
 
 class ToolDisplay(Static):
-    """Widget for displaying tool execution.
+    """Widget for displaying tool execution inline.
 
-    Shows tool name, status, and output in a collapsible format.
+    Renders tool-specific icons, descriptions, and status indicators
+    following the OpenCode InlineTool/BlockTool pattern.
     """
+
+    # Tool-specific configuration: (icon, pending_text)
+    TOOL_CONFIG: Dict[str, tuple] = {
+        "bash": ("$", "Running command..."),
+        "read": ("\u2192", "Reading file..."),
+        "write": ("\u2190", "Writing file..."),
+        "edit": ("\u2190", "Editing file..."),
+        "glob": ("\u2731", "Finding files..."),
+        "grep": ("\u2731", "Searching content..."),
+        "skill": ("\u2192", "Loading skill..."),
+    }
+
+    MAX_OUTPUT_LINES = 10
 
     def __init__(
         self,
         tool_name: str,
-        status: str = "pending",
+        tool_id: str = "",
+        status: str = "running",
         input_data: Optional[Dict[str, Any]] = None,
         output: Optional[str] = None,
         error: Optional[str] = None,
+        title: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> None:
-        """Initialize tool display.
-
-        Args:
-            tool_name: Name of the tool
-            status: Execution status
-            input_data: Tool input parameters
-            output: Tool output
-            error: Error message if failed
-        """
         super().__init__(**kwargs)
         self.tool_name = tool_name
+        self.tool_id = tool_id
         self.status = status
         self.input_data = input_data or {}
         self.output = output
         self.error = error
+        self.title = title
+        self.metadata = metadata or {}
 
     def render(self) -> Text:
         """Render the tool display."""
         theme = ThemeManager.get_theme()
 
-        # Status icon
-        if self.status == "completed":
-            icon = "✓"
-            color = theme.success
-        elif self.status == "error":
-            icon = "✗"
-            color = theme.error
-        elif self.status == "running":
-            icon = "⟳"
-            color = theme.warning
-        else:
-            icon = "○"
-            color = theme.text_muted
+        if self.status == "error":
+            return self._render_error(theme)
+        if self.status == "running":
+            return self._render_running(theme)
+        return self._render_completed(theme)
 
-        # Build display text
+    def _render_running(self, theme) -> Text:
+        """Render a tool in running state."""
+        _, pending_text = self.TOOL_CONFIG.get(
+            self.tool_name, ("\u2699", f"Running {self.tool_name}...")
+        )
         text = Text()
-        text.append(f"{icon} ", style=color)
-        text.append(self.tool_name, style="bold")
-
-        # Add input summary
-        if self.input_data:
-            summary = self._format_input_summary()
-            if summary:
-                text.append(f" {summary}", style=theme.text_muted)
-
-        # Add error if present
-        if self.error:
-            text.append(f"\n  Error: {self.error}", style=theme.error)
-
+        text.append("~ ", style=theme.text_muted)
+        text.append(pending_text, style=theme.text_muted)
         return text
+
+    def _render_error(self, theme) -> Text:
+        """Render a tool in error state."""
+        text = Text()
+        text.append("\u2717 ", style=theme.error)
+        text.append(self.tool_name, style=theme.error)
+        if self.error:
+            text.append(f"\n  {self.error}", style=theme.error)
+        return text
+
+    def _render_completed(self, theme) -> Text:
+        """Render a completed tool with tool-specific formatting."""
+        name = self.tool_name
+        text = Text()
+
+        if name == "bash":
+            return self._render_bash(theme)
+        elif name == "read":
+            return self._render_file_tool(theme, "\u2192", "Read")
+        elif name == "write":
+            return self._render_file_tool(theme, "\u2190", "Write")
+        elif name == "edit":
+            return self._render_file_tool(theme, "\u2190", "Edit")
+        elif name == "glob":
+            return self._render_glob(theme)
+        elif name == "grep":
+            return self._render_grep(theme)
+        elif name == "skill":
+            return self._render_skill(theme)
+        else:
+            return self._render_generic(theme)
+
+    def _render_bash(self, theme) -> Text:
+        """Render bash tool with command and output block."""
+        text = Text()
+        description = self.title or self._get_bash_description()
+        text.append("$ ", style=theme.text_muted)
+        text.append(description, style=theme.text_muted)
+
+        command = self.input_data.get("command", "")
+        if command:
+            text.append(f"\n  $ {command}", style=theme.text_muted)
+
+        if self.output:
+            lines = self.output.splitlines()
+            shown = lines[: self.MAX_OUTPUT_LINES]
+            for line in shown:
+                text.append(f"\n  \u2502 {line}", style=theme.text_muted)
+            if len(lines) > self.MAX_OUTPUT_LINES:
+                remaining = len(lines) - self.MAX_OUTPUT_LINES
+                text.append(
+                    f"\n  \u2502 ... {remaining} more lines",
+                    style=theme.text_muted,
+                )
+        return text
+
+    def _get_bash_description(self) -> str:
+        """Build a short description for bash from input."""
+        cmd = self.input_data.get("command", "")
+        if cmd:
+            first_line = cmd.split("\n")[0]
+            return first_line[:60] + ("..." if len(first_line) > 60 else "")
+        return "command"
+
+    def _render_file_tool(self, theme, icon: str, verb: str) -> Text:
+        """Render read/write/edit tool."""
+        text = Text()
+        file_path = self.input_data.get("file_path", self.input_data.get("path", ""))
+        text.append(f"{icon} ", style=theme.text_muted)
+        text.append(f"{verb} {file_path}", style=theme.text_muted)
+        return text
+
+    def _render_glob(self, theme) -> Text:
+        """Render glob tool."""
+        text = Text()
+        pattern = self.input_data.get("pattern", "")
+        count = self._count_matches()
+        text.append("\u2731 ", style=theme.text_muted)
+        label = f'Glob "{pattern}"'
+        if count is not None:
+            label += f" ({count} matches)"
+        text.append(label, style=theme.text_muted)
+        return text
+
+    def _render_grep(self, theme) -> Text:
+        """Render grep tool."""
+        text = Text()
+        pattern = self.input_data.get("pattern", "")
+        count = self._count_matches()
+        text.append("\u2731 ", style=theme.text_muted)
+        label = f'Grep "{pattern}"'
+        if count is not None:
+            label += f" ({count} matches)"
+        text.append(label, style=theme.text_muted)
+        return text
+
+    def _render_skill(self, theme) -> Text:
+        """Render skill tool."""
+        text = Text()
+        name = self.input_data.get("name", self.input_data.get("skill", ""))
+        text.append("\u2192 ", style=theme.text_muted)
+        text.append(f"Skill {name}", style=theme.text_muted)
+        return text
+
+    def _render_generic(self, theme) -> Text:
+        """Render a generic/unknown tool."""
+        text = Text()
+        text.append("\u2699 ", style=theme.text_muted)
+        summary = self._format_input_summary()
+        text.append(f"{self.tool_name} {summary}".strip(), style=theme.text_muted)
+        return text
+
+    def _count_matches(self) -> Optional[int]:
+        """Count matches from output lines."""
+        if not self.output:
+            return None
+        lines = [l for l in self.output.strip().splitlines() if l.strip()]
+        return len(lines)
 
     def _format_input_summary(self) -> str:
         """Format input data as a brief summary."""
@@ -549,7 +668,6 @@ class ToolDisplay(Static):
                 parts.append(f"{key}={value}")
             elif isinstance(value, (int, float, bool)):
                 parts.append(f"{key}={value}")
-
         if parts:
             return f"[{', '.join(parts[:3])}]"
         return ""

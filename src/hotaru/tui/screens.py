@@ -12,7 +12,7 @@ from textual.binding import Binding
 from rich.text import Text
 from rich.panel import Panel
 from rich.markdown import Markdown
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 import asyncio
 
 from .widgets import (
@@ -67,7 +67,7 @@ class HomeScreen(Screen):
     BINDINGS = [
         Binding("ctrl+x", "command_palette", "Commands"),
         Binding("ctrl+s", "session_list", "Sessions"),
-        Binding("ctrl+q", "quit", "Quit"),
+        Binding("ctrl+d", "quit", "Quit"),
     ]
 
     CSS = """
@@ -209,7 +209,7 @@ class SessionScreen(Screen):
         Binding("escape", "go_home", "Home"),
         Binding("pageup", "page_up", "Page Up", show=False),
         Binding("pagedown", "page_down", "Page Down", show=False),
-        Binding("ctrl+q", "quit", "Quit"),
+        Binding("ctrl+d", "quit", "Quit"),
     ]
 
     CSS = """
@@ -274,6 +274,7 @@ class SessionScreen(Screen):
         self.session_id = session_id
         self.initial_message = initial_message
         self._messages: list = []
+        self._tool_widgets: dict = {}
         self._command_registry = CommandRegistry()
         for cmd in create_default_commands():
             self._command_registry.register(cmd)
@@ -432,9 +433,45 @@ class SessionScreen(Screen):
                             assistant_bubble.content = current_text
                             assistant_bubble.refresh()
 
+                elif event_type == "message.part.tool.start":
+                    data = event.get("data", {})
+                    tool_id = data.get("tool_id", "")
+                    tool_name = data.get("tool_name", "")
+                    input_data = data.get("input", {})
+
+                    if tool_id in self._tool_widgets:
+                        # Update existing widget with parsed input
+                        widget = self._tool_widgets[tool_id]
+                        widget.input_data = input_data
+                        widget.refresh()
+                    else:
+                        # Mount a new ToolDisplay
+                        tool_widget = ToolDisplay(
+                            tool_name=tool_name,
+                            tool_id=tool_id,
+                            status="running",
+                            input_data=input_data,
+                            classes="message tool-display",
+                        )
+                        self._tool_widgets[tool_id] = tool_widget
+                        await container.mount(tool_widget)
+
+                elif event_type == "message.part.tool.end":
+                    data = event.get("data", {})
+                    tool_id = data.get("tool_id", "")
+
+                    if tool_id in self._tool_widgets:
+                        widget = self._tool_widgets[tool_id]
+                        widget.output = data.get("output")
+                        widget.error = data.get("error")
+                        widget.title = data.get("title", "")
+                        widget.metadata = data.get("metadata", {})
+                        widget.status = "error" if data.get("error") else "completed"
+                        widget.refresh()
+
                 elif event_type == "message.completed":
-                    # Message complete
-                    pass
+                    # Message complete — clear tool widget tracking
+                    self._tool_widgets.clear()
 
                 # Scroll to bottom
                 container.scroll_end()

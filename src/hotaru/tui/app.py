@@ -106,7 +106,7 @@ class TuiApp(App):
         Binding("ctrl+s", "session_list", "Sessions", show=False),
         Binding("ctrl+m", "model_list", "Models", show=False),
         Binding("ctrl+t", "toggle_theme", "Theme", show=False),
-        Binding("ctrl+q", "quit", "Quit", show=True),
+        Binding("ctrl+d", "quit", "Quit", show=True),
     ]
 
     COMMANDS = {HotaruCommandProvider}

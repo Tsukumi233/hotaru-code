@@ -149,35 +149,42 @@ class SDKContext:
             nonlocal response_text
             response_text += text
 
-        def on_tool_start(tool_name: str, tool_id: str):
-            self.emit_event("tool.start", {
-                "session_id": session_id,
-                "tool": tool_name,
+        def on_tool_start(tool_name: str, tool_id: str, input_args: Optional[Dict[str, Any]] = None):
+            event_queue.put_nowait({
+                "kind": "tool_start",
+                "tool_name": tool_name,
                 "tool_id": tool_id,
+                "input": input_args or {},
             })
 
-        def on_tool_end(tool_name: str, tool_id: str, output: Optional[str], error: Optional[str]):
-            self.emit_event("tool.end", {
-                "session_id": session_id,
-                "tool": tool_name,
+        def on_tool_end(
+            tool_name: str, tool_id: str,
+            output: Optional[str], error: Optional[str],
+            title: str = "", metadata: Optional[Dict[str, Any]] = None,
+        ):
+            event_queue.put_nowait({
+                "kind": "tool_end",
+                "tool_name": tool_name,
                 "tool_id": tool_id,
                 "output": output[:500] if output else None,
                 "error": error,
+                "title": title,
+                "metadata": metadata or {},
             })
 
-        # Process with streaming text updates
-        # We need to yield text updates as they come in
-        text_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        # Process with streaming text/tool updates
+        # We need to yield events as they come in
+        event_queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
         result_holder: List[Any] = []
         error_holder: List[str] = []
 
         async def process_with_queue():
-            """Run processor and put text chunks in queue."""
+            """Run processor and put events in queue."""
             try:
                 def queue_text(text: str):
                     nonlocal response_text
                     response_text += text
-                    text_queue.put_nowait(text)
+                    event_queue.put_nowait({"kind": "text", "text": text})
 
                 result = await processor.process(
                     user_message=content,
@@ -190,20 +197,21 @@ class SDKContext:
             except Exception as e:
                 error_holder.append(str(e))
             finally:
-                text_queue.put_nowait(None)  # Signal completion
+                event_queue.put_nowait(None)  # Signal completion
 
         # Start processing in background
         process_task = asyncio.create_task(process_with_queue())
 
-        # Yield text updates as they arrive
+        # Yield events as they arrive
         accumulated_text = ""
-        while True:
-            try:
-                text_chunk = await asyncio.wait_for(text_queue.get(), timeout=0.1)
-                if text_chunk is None:
-                    break
-                accumulated_text += text_chunk
-                yield {
+
+        def _make_event(evt: Dict[str, Any]):
+            """Convert a queue event dict to a yield-able event dict."""
+            nonlocal accumulated_text
+            kind = evt.get("kind")
+            if kind == "text":
+                accumulated_text += evt["text"]
+                return {
                     "type": "message.part.updated",
                     "data": {
                         "part": {
@@ -213,25 +221,48 @@ class SDKContext:
                         }
                     }
                 }
+            elif kind == "tool_start":
+                return {
+                    "type": "message.part.tool.start",
+                    "data": {
+                        "tool_name": evt["tool_name"],
+                        "tool_id": evt["tool_id"],
+                        "input": evt.get("input", {}),
+                    }
+                }
+            elif kind == "tool_end":
+                return {
+                    "type": "message.part.tool.end",
+                    "data": {
+                        "tool_name": evt["tool_name"],
+                        "tool_id": evt["tool_id"],
+                        "output": evt.get("output"),
+                        "error": evt.get("error"),
+                        "title": evt.get("title", ""),
+                        "metadata": evt.get("metadata", {}),
+                    }
+                }
+            return None
+
+        while True:
+            try:
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                if event is None:
+                    break
+                result_event = _make_event(event)
+                if result_event:
+                    yield result_event
             except asyncio.TimeoutError:
                 # Check if task is done
                 if process_task.done():
                     # Drain remaining items
-                    while not text_queue.empty():
-                        text_chunk = text_queue.get_nowait()
-                        if text_chunk is None:
+                    while not event_queue.empty():
+                        event = event_queue.get_nowait()
+                        if event is None:
                             break
-                        accumulated_text += text_chunk
-                        yield {
-                            "type": "message.part.updated",
-                            "data": {
-                                "part": {
-                                    "type": "text",
-                                    "text": accumulated_text,
-                                    "id": part_id,
-                                }
-                            }
-                        }
+                        result_event = _make_event(event)
+                        if result_event:
+                            yield result_event
                     break
 
         # Wait for task to complete

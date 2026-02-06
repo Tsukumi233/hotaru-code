@@ -225,7 +225,7 @@ class SessionProcessor:
                     )
                     current_tool_calls[tc.id] = tc
                     if on_tool_start:
-                        await self._call_callback(on_tool_start, tc.name, tc.id)
+                        await self._call_callback(on_tool_start, tc.name, tc.id, {})
 
                 elif chunk.type == "tool_call_delta":
                     if chunk.tool_call_id and chunk.tool_call_id in current_tool_calls:
@@ -237,6 +237,10 @@ class SessionProcessor:
                         tc = current_tool_calls[tc_id]
                         tc.input = chunk.tool_call.input
                         tc.status = "running"
+
+                        # Notify with parsed input args
+                        if on_tool_start:
+                            await self._call_callback(on_tool_start, tc.name, tc.id, tc.input)
 
                         # Execute the tool
                         tool_result = await self._execute_tool(tc.name, tc.input)
@@ -251,7 +255,11 @@ class SessionProcessor:
 
                         result.tool_calls.append(tc)
                         if on_tool_end:
-                            await self._call_callback(on_tool_end, tc.name, tc.id, tc.output, tc.error)
+                            await self._call_callback(
+                                on_tool_end, tc.name, tc.id, tc.output, tc.error,
+                                tool_result.get("title", ""),
+                                tool_result.get("metadata", {}),
+                            )
 
                 elif chunk.type == "message_delta" and chunk.usage:
                     result.usage.update(chunk.usage)

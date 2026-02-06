@@ -328,7 +328,7 @@ def create_default_commands() -> List[Command]:
             id="app.exit",
             title="Exit the app",
             category=CommandCategory.SYSTEM,
-            keybind="ctrl+q",
+            keybind="ctrl+d",
             slash_name="exit",
             slash_aliases=["quit", "q"],
         ),
