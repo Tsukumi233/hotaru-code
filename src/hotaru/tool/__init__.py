@@ -18,8 +18,8 @@ Example:
     # Get all available tools
     tools = ToolRegistry.list()
 
-    # Get tool definitions for LLM
-    definitions = ToolRegistry.get_tool_definitions()
+    # Get tool definitions for LLM (async)
+    definitions = await ToolRegistry.get_tool_definitions()
 """
 
 from .tool import Tool, ToolContext, ToolResult, ToolInfo

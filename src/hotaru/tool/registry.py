@@ -115,12 +115,14 @@ class ToolRegistry:
         log.info("registered custom tool", {"tool_id": tool.id})
 
     @classmethod
-    def get_tool_definitions(cls) -> List[Dict[str, Any]]:
+    async def get_tool_definitions(cls) -> List[Dict[str, Any]]:
         """Get tool definitions for the LLM.
 
         Returns:
             List of tool definitions in OpenAI format
         """
+        from .skill import build_skill_description
+
         tools = cls._initialize()
         definitions = []
 
@@ -131,11 +133,18 @@ class ToolRegistry:
             # Remove title and description from schema (they go in the tool definition)
             schema.pop("title", None)
 
+            description = tool.description
+            if tool.id == "skill":
+                try:
+                    description = await build_skill_description()
+                except Exception:
+                    pass  # fall back to static description
+
             definitions.append({
                 "type": "function",
                 "function": {
                     "name": tool.id,
-                    "description": tool.description,
+                    "description": description,
                     "parameters": schema,
                 },
             })

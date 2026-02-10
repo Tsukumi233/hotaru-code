@@ -82,7 +82,7 @@ def _list_skill_files(directory: str, limit: int = MAX_SKILL_FILES) -> List[str]
     return results
 
 
-async def _build_description() -> str:
+async def build_skill_description() -> str:
     """Build the tool description with available skills.
 
     Returns:

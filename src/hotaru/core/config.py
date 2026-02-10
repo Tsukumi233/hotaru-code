@@ -140,6 +140,11 @@ class ServerConfig(BaseModel):
     cors: Optional[List[str]] = None
 
 
+class SkillsConfig(BaseModel):
+    """Skills configuration."""
+    paths: Optional[List[str]] = None
+
+
 class CompactionConfig(BaseModel):
     """Compaction settings."""
     auto: Optional[bool] = None
@@ -174,6 +179,9 @@ class Config(BaseModel):
 
     # Command settings
     command: Optional[Dict[str, CommandConfig]] = None
+
+    # Skills settings
+    skills: Optional[SkillsConfig] = None
 
     # MCP settings
     mcp: Optional[Dict[str, McpConfig]] = None

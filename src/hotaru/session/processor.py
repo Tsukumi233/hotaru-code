@@ -177,7 +177,7 @@ class SessionProcessor:
             log.info("processing turn", {"turn": self.turn, "session_id": self.session_id})
 
             # Get tool definitions
-            tool_definitions = ToolRegistry.get_tool_definitions()
+            tool_definitions = await ToolRegistry.get_tool_definitions()
 
             # Merge MCP tools
             try:
