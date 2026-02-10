@@ -179,6 +179,25 @@ class SessionProcessor:
             # Get tool definitions
             tool_definitions = ToolRegistry.get_tool_definitions()
 
+            # Merge MCP tools
+            try:
+                from ..mcp import MCP
+                mcp_tools = await MCP.tools()
+                for tool_id, tool_info in mcp_tools.items():
+                    schema = dict(tool_info.get("input_schema") or {})
+                    schema.setdefault("type", "object")
+                    schema["additionalProperties"] = False
+                    tool_definitions.append({
+                        "type": "function",
+                        "function": {
+                            "name": tool_id,
+                            "description": tool_info.get("description", ""),
+                            "parameters": schema,
+                        },
+                    })
+            except Exception as e:
+                log.warn("failed to load MCP tools", {"error": str(e)})
+
             # Create stream input
             stream_input = StreamInput(
                 session_id=self.session_id,
@@ -352,6 +371,14 @@ class SessionProcessor:
         """
         tool = ToolRegistry.get(tool_name)
         if not tool:
+            # Check if it's an MCP tool
+            try:
+                from ..mcp import MCP
+                mcp_tools = await MCP.tools()
+                if tool_name in mcp_tools:
+                    return await self._execute_mcp_tool(tool_name, mcp_tools[tool_name], tool_input)
+            except Exception as e:
+                log.error("MCP tool lookup failed", {"tool": tool_name, "error": str(e)})
             return {"error": f"Unknown tool: {tool_name}"}
 
         try:
@@ -389,3 +416,57 @@ class SessionProcessor:
             await callback(*args)
         else:
             callback(*args)
+
+    async def _execute_mcp_tool(
+        self,
+        tool_id: str,
+        mcp_info: Dict[str, Any],
+        tool_input: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Execute a tool via MCP.
+
+        Args:
+            tool_id: The sanitized tool ID (client_name + tool_name)
+            mcp_info: MCP tool info dict with 'client', 'name', 'timeout' keys
+            tool_input: Tool input parameters
+
+        Returns:
+            Dict with output or error
+        """
+        from ..mcp import MCP
+
+        client_name = mcp_info["client"]
+        original_name = mcp_info["name"]
+
+        state = await MCP._get_state()
+        client = state.clients.get(client_name)
+        if not client:
+            return {"error": f"MCP client not connected: {client_name}"}
+
+        try:
+            timeout = mcp_info.get("timeout", 30.0)
+            result = await asyncio.wait_for(
+                client.call_tool(original_name, tool_input),
+                timeout=timeout,
+            )
+
+            # Extract text from content blocks
+            text_parts = []
+            for content in (result.content or []):
+                if hasattr(content, "text"):
+                    text_parts.append(content.text)
+
+            return {
+                "output": "\n".join(text_parts) or "Tool completed",
+                "title": "",
+                "metadata": {},
+            }
+        except asyncio.TimeoutError:
+            return {"error": f"MCP tool call timed out: {original_name}"}
+        except Exception as e:
+            log.error("MCP tool execution error", {
+                "tool": original_name,
+                "client": client_name,
+                "error": str(e),
+            })
+            return {"error": str(e)}

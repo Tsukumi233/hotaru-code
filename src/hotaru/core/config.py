@@ -41,6 +41,7 @@ class McpRemoteConfig(BaseModel):
     enabled: Optional[bool] = None
     headers: Optional[Dict[str, str]] = None
     timeout: Optional[int] = None
+    oauth: Optional[Union[bool, Dict[str, Any]]] = None
 
 
 McpConfig = Union[McpLocalConfig, McpRemoteConfig]

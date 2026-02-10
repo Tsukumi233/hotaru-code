@@ -5,12 +5,18 @@ MCP servers and exposing their tools to the AI agent.
 
 Supports both remote (HTTP/SSE) and local (stdio) MCP servers, with
 optional OAuth authentication for remote servers.
+
+Uses the `mcp` Python SDK (ClientSession, transports) for real protocol
+communication instead of stubs.
 """
 
 import asyncio
 import os
-import subprocess
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+import re
+import secrets
+from contextlib import AsyncExitStack
+from typing import Any, Dict, List, Literal, Optional, Union
+
 from pydantic import BaseModel
 
 from ..core.bus import Bus, BusEvent
@@ -21,20 +27,12 @@ from .auth import McpAuth
 
 log = Log.create({"service": "mcp"})
 
-# Default connection timeout
+# Default connection timeout in seconds
 DEFAULT_TIMEOUT = 30.0
 
 
 class MCPResource(BaseModel):
-    """MCP resource definition.
-
-    Attributes:
-        name: Resource name
-        uri: Resource URI
-        description: Optional description
-        mime_type: Optional MIME type
-        client: Name of the MCP client providing this resource
-    """
+    """MCP resource definition."""
     name: str
     uri: str
     description: Optional[str] = None
@@ -79,89 +77,124 @@ MCPStatus = Union[
 
 
 class MCPToolDefinition(BaseModel):
-    """MCP tool definition from server.
-
-    Attributes:
-        name: Tool name
-        description: Tool description
-        input_schema: JSON Schema for tool input
-    """
+    """MCP tool definition from server."""
     name: str
     description: str = ""
     input_schema: Dict[str, Any] = {}
 
 
 class MCPClient:
-    """Wrapper for MCP client connection.
+    """Wrapper for a real MCP SDK ClientSession.
 
-    This is a simplified implementation that wraps the mcp SDK client
-    or provides a mock implementation when the SDK is not available.
+    Manages the async context stack for transport + session lifecycle.
+    Supports both stdio and remote (StreamableHTTP / SSE) transports.
     """
 
-    def __init__(
+    def __init__(self, name: str):
+        self.name = name
+        self._session = None  # mcp.ClientSession
+        self._cm_stack: Optional[AsyncExitStack] = None
+
+    async def connect_stdio(
         self,
-        name: str,
-        process: Optional[subprocess.Popen] = None,
-        url: Optional[str] = None,
-    ):
-        """Initialize MCP client.
+        command: str,
+        args: List[str],
+        cwd: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Connect via stdio transport.
 
         Args:
-            name: Client name for identification
-            process: Subprocess for local MCP servers
-            url: URL for remote MCP servers
+            command: Executable command
+            args: Command arguments
+            cwd: Working directory
+            env: Environment variables
         """
-        self.name = name
-        self.process = process
-        self.url = url
-        self._tools: List[MCPToolDefinition] = []
-        self._connected = False
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
 
-    async def connect(self) -> bool:
-        """Connect to the MCP server.
+        params = StdioServerParameters(
+            command=command,
+            args=args,
+            cwd=cwd,
+            env=env,
+        )
 
-        Returns:
-            True if connection successful, False otherwise
+        stack = AsyncExitStack()
+        read, write = await stack.enter_async_context(stdio_client(params))
+        session = await stack.enter_async_context(ClientSession(read, write))
+        await session.initialize()
+
+        self._session = session
+        self._cm_stack = stack
+
+    async def connect_remote(
+        self,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        oauth_auth=None,
+    ) -> None:
+        """Connect via StreamableHTTP, falling back to SSE.
+
+        Args:
+            url: Server URL
+            headers: Optional HTTP headers
+            oauth_auth: Optional httpx.Auth (OAuthClientProvider) for OAuth
         """
-        # For local servers, check if process is running
-        if self.process:
-            if self.process.poll() is None:
-                self._connected = True
-                return True
-            return False
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
 
-        # For remote servers, try to connect
-        if self.url:
-            try:
-                import httpx
-                async with httpx.AsyncClient() as client:
-                    # Try to reach the server
-                    response = await client.get(
-                        self.url,
-                        timeout=DEFAULT_TIMEOUT
-                    )
-                    self._connected = response.status_code < 500
-                    return self._connected
-            except Exception:
-                return False
+        # Build kwargs for transport
+        http_kwargs: Dict[str, Any] = {}
+        if headers:
+            http_kwargs["headers"] = headers
 
-        return False
+        # Try StreamableHTTP first
+        stack = AsyncExitStack()
+        try:
+            transport_cm = streamable_http_client(url, **http_kwargs)
+            read, write, _ = await stack.enter_async_context(transport_cm)
+            session = await stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+
+            self._session = session
+            self._cm_stack = stack
+            return
+        except Exception:
+            await stack.aclose()
+
+        # Fallback to SSE
+        from mcp.client.sse import sse_client
+
+        stack = AsyncExitStack()
+        transport_cm = sse_client(url, **http_kwargs)
+        read, write = await stack.enter_async_context(transport_cm)
+        session = await stack.enter_async_context(ClientSession(read, write))
+        await session.initialize()
+
+        self._session = session
+        self._cm_stack = stack
+
+    @property
+    def connected(self) -> bool:
+        return self._session is not None
 
     async def list_tools(self) -> List[MCPToolDefinition]:
-        """List available tools from the MCP server.
+        """List available tools from the MCP server."""
+        if not self._session:
+            return []
 
-        Returns:
-            List of tool definitions
-        """
-        # In a full implementation, this would communicate with the MCP server
-        # For now, return cached tools
-        return self._tools
+        result = await self._session.list_tools()
+        tools = []
+        for t in result.tools:
+            tools.append(MCPToolDefinition(
+                name=t.name,
+                description=t.description or "",
+                input_schema=t.inputSchema if isinstance(t.inputSchema, dict) else {},
+            ))
+        return tools
 
-    async def call_tool(
-        self,
-        name: str,
-        arguments: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def call_tool(self, name: str, arguments: Dict[str, Any]):
         """Call a tool on the MCP server.
 
         Args:
@@ -169,36 +202,67 @@ class MCPClient:
             arguments: Tool arguments
 
         Returns:
-            Tool execution result
+            CallToolResult from the SDK
         """
-        # In a full implementation, this would send the request to the MCP server
-        return {"error": "MCP tool execution not implemented"}
+        if not self._session:
+            raise RuntimeError(f"MCPClient '{self.name}' is not connected")
+        return await self._session.call_tool(name, arguments)
 
     async def list_prompts(self) -> List[Dict[str, Any]]:
-        """List available prompts from the MCP server.
+        """List available prompts from the MCP server."""
+        if not self._session:
+            return []
 
-        Returns:
-            List of prompt definitions
-        """
-        return []
+        result = await self._session.list_prompts()
+        prompts = []
+        for p in result.prompts:
+            prompts.append({
+                "name": p.name,
+                "description": getattr(p, "description", None) or "",
+                "arguments": [
+                    {"name": a.name, "description": getattr(a, "description", None), "required": getattr(a, "required", False)}
+                    for a in (getattr(p, "arguments", None) or [])
+                ],
+            })
+        return prompts
 
     async def list_resources(self) -> List[Dict[str, Any]]:
-        """List available resources from the MCP server.
+        """List available resources from the MCP server."""
+        if not self._session:
+            return []
 
-        Returns:
-            List of resource definitions
-        """
-        return []
+        result = await self._session.list_resources()
+        resources = []
+        for r in result.resources:
+            resources.append({
+                "name": r.name,
+                "uri": str(r.uri),
+                "description": getattr(r, "description", None),
+                "mimeType": getattr(r, "mimeType", None),
+            })
+        return resources
+
+    async def get_prompt(self, name: str, args: Optional[Dict[str, str]] = None):
+        """Get a specific prompt from the server."""
+        if not self._session:
+            return None
+        return await self._session.get_prompt(name, arguments=args)
+
+    async def read_resource(self, uri: str):
+        """Read a resource from the server."""
+        if not self._session:
+            return None
+        return await self._session.read_resource(uri)
 
     async def close(self) -> None:
         """Close the MCP client connection."""
-        self._connected = False
-        if self.process:
-            self.process.terminate()
+        if self._cm_stack:
             try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+                await self._cm_stack.aclose()
+            except Exception:
+                pass
+        self._session = None
+        self._cm_stack = None
 
 
 class MCPState:
@@ -209,8 +273,14 @@ class MCPState:
         self.status: Dict[str, MCPStatus] = {}
 
 
-# Global state (per-instance in full implementation)
+# Global state
 _state: Optional[MCPState] = None
+_init_lock: Optional[asyncio.Lock] = None
+
+
+def _sanitize_name(name: str) -> str:
+    """Sanitize a name for use in tool/prompt/resource IDs."""
+    return re.sub(r"[^a-zA-Z0-9_]", "_", name)
 
 
 class ToolsChangedProps(BaseModel):
@@ -229,6 +299,23 @@ ToolsChanged = BusEvent.define("mcp.tools.changed", ToolsChangedProps)
 BrowserOpenFailed = BusEvent.define("mcp.browser.open.failed", BrowserOpenFailedProps)
 
 
+def _get_mcp_config_dict(mcp) -> Optional[Dict[str, Any]]:
+    """Convert an MCP config entry (Pydantic model or dict) to a dict.
+
+    Returns None if the entry is not a valid MCP config.
+    """
+    if isinstance(mcp, dict):
+        if "type" not in mcp:
+            return None
+        return mcp
+    if hasattr(mcp, "model_dump"):
+        d = mcp.model_dump()
+        if "type" not in d:
+            return None
+        return d
+    return None
+
+
 class MCP:
     """MCP client manager.
 
@@ -238,16 +325,21 @@ class MCP:
 
     @classmethod
     async def _get_state(cls) -> MCPState:
-        """Get or initialize the MCP state.
+        """Get or initialize the MCP state."""
+        global _state, _init_lock
+        if _init_lock is None:
+            _init_lock = asyncio.Lock()
 
-        Returns:
-            MCPState instance
-        """
-        global _state
-        if _state is None:
+        if _state is not None:
+            return _state
+
+        async with _init_lock:
+            # Double-check after acquiring lock
+            if _state is not None:
+                return _state
             _state = MCPState()
             await cls._init_clients()
-        return _state
+            return _state
 
     @classmethod
     async def _init_clients(cls) -> None:
@@ -259,20 +351,37 @@ class MCP:
         config = await ConfigManager.get()
         mcp_config = config.mcp or {}
 
+        tasks = []
         for name, mcp in mcp_config.items():
-            if not isinstance(mcp, dict) or "type" not in mcp:
+            cfg_dict = _get_mcp_config_dict(mcp)
+            if cfg_dict is None:
                 log.error("Ignoring MCP config entry without type", {"key": name})
                 continue
 
-            # Check if disabled
-            if mcp.get("enabled") is False:
+            if cfg_dict.get("enabled") is False:
                 state.status[name] = MCPStatusDisabled()
                 continue
 
-            result = await cls._create_client(name, mcp)
+            tasks.append(cls._init_single_client(name, cfg_dict))
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    @classmethod
+    async def _init_single_client(cls, name: str, cfg_dict: Dict[str, Any]) -> None:
+        """Initialize a single MCP client and store in state."""
+        state = _state
+        if not state:
+            return
+
+        try:
+            result = await cls._create_client(name, cfg_dict)
             state.status[name] = result["status"]
             if result.get("client"):
                 state.clients[name] = result["client"]
+        except Exception as e:
+            log.error("failed to initialize MCP client", {"name": name, "error": str(e)})
+            state.status[name] = MCPStatusFailed(error=str(e))
 
     @classmethod
     async def _create_client(
@@ -280,15 +389,7 @@ class MCP:
         name: str,
         config: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Create an MCP client from configuration.
-
-        Args:
-            name: Client name
-            config: MCP configuration
-
-        Returns:
-            Dictionary with 'client' and 'status' keys
-        """
+        """Create an MCP client from configuration."""
         mcp_type = config.get("type")
 
         if mcp_type == "remote":
@@ -307,15 +408,7 @@ class MCP:
         name: str,
         config: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Create a remote MCP client.
-
-        Args:
-            name: Client name
-            config: MCP configuration
-
-        Returns:
-            Dictionary with 'client' and 'status' keys
-        """
+        """Create a remote MCP client using StreamableHTTP/SSE transport."""
         url = config.get("url")
         if not url:
             return {
@@ -324,18 +417,35 @@ class MCP:
             }
 
         timeout = config.get("timeout", DEFAULT_TIMEOUT)
+        headers = config.get("headers")
 
         try:
-            client = MCPClient(name=name, url=url)
+            client = MCPClient(name=name)
 
-            # Try to connect
-            connected = await asyncio.wait_for(
-                client.connect(),
+            await asyncio.wait_for(
+                client.connect_remote(url, headers=headers),
                 timeout=timeout
             )
 
-            if connected:
+            if client.connected:
+                # Verify connection by listing tools
+                try:
+                    await asyncio.wait_for(
+                        client.list_tools(),
+                        timeout=timeout
+                    )
+                except Exception as e:
+                    log.error("failed to list tools after connect", {
+                        "name": name, "error": str(e)
+                    })
+                    await client.close()
+                    return {
+                        "client": None,
+                        "status": MCPStatusFailed(error=f"Failed to get tools: {e}")
+                    }
+
                 log.info("connected to remote MCP", {"name": name, "url": url})
+                await Bus.publish(ToolsChanged, ToolsChangedProps(server=name))
                 return {
                     "client": client,
                     "status": MCPStatusConnected()
@@ -355,12 +465,12 @@ class MCP:
             error_msg = str(e)
 
             # Check for auth-related errors
-            if "unauthorized" in error_msg.lower():
-                if "registration" in error_msg.lower():
+            if "unauthorized" in error_msg.lower() or "401" in error_msg:
+                if "registration" in error_msg.lower() or "client_id" in error_msg.lower():
                     return {
                         "client": None,
                         "status": MCPStatusNeedsClientRegistration(
-                            error="Server requires pre-registered client ID"
+                            error="Server does not support dynamic client registration. Please provide clientId in config."
                         )
                     }
                 return {
@@ -368,6 +478,11 @@ class MCP:
                     "status": MCPStatusNeedsAuth()
                 }
 
+            log.debug("remote MCP connection failed", {
+                "name": name,
+                "url": url,
+                "error": error_msg,
+            })
             return {
                 "client": None,
                 "status": MCPStatusFailed(error=error_msg)
@@ -379,15 +494,7 @@ class MCP:
         name: str,
         config: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Create a local MCP client.
-
-        Args:
-            name: Client name
-            config: MCP configuration
-
-        Returns:
-            Dictionary with 'client' and 'status' keys
-        """
+        """Create a local MCP client using stdio transport."""
         command = config.get("command", [])
         if not command:
             return {
@@ -395,46 +502,55 @@ class MCP:
                 "status": MCPStatusFailed(error="Missing command for local MCP")
             }
 
-        environment = config.get("environment", {})
+        environment = config.get("environment") or {}
         timeout = config.get("timeout", DEFAULT_TIMEOUT)
 
         try:
             # Get working directory
-            cwd = Instance.directory()
+            cwd = Instance.directory
 
             # Prepare environment
             env = os.environ.copy()
             env.update(environment)
 
-            # Start the process
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=cwd,
-                env=env,
-            )
+            # Split command into executable + args
+            cmd = command[0]
+            args = command[1:] if len(command) > 1 else []
 
-            client = MCPClient(name=name, process=process)
+            client = MCPClient(name=name)
 
-            # Wait for connection
-            connected = await asyncio.wait_for(
-                client.connect(),
+            await asyncio.wait_for(
+                client.connect_stdio(command=cmd, args=args, cwd=cwd, env=env),
                 timeout=timeout
             )
 
-            if connected:
+            if client.connected:
+                # Verify connection by listing tools
+                try:
+                    await asyncio.wait_for(
+                        client.list_tools(),
+                        timeout=timeout
+                    )
+                except Exception as e:
+                    log.error("failed to list tools after connect", {
+                        "name": name, "error": str(e)
+                    })
+                    await client.close()
+                    return {
+                        "client": None,
+                        "status": MCPStatusFailed(error=f"Failed to get tools: {e}")
+                    }
+
                 log.info("connected to local MCP", {
                     "name": name,
-                    "command": command
+                    "command": command,
                 })
+                await Bus.publish(ToolsChanged, ToolsChangedProps(server=name))
                 return {
                     "client": client,
                     "status": MCPStatusConnected()
                 }
             else:
-                process.terminate()
                 return {
                     "client": None,
                     "status": MCPStatusFailed(error="Process failed to start")
@@ -463,18 +579,15 @@ class MCP:
 
     @classmethod
     async def status(cls) -> Dict[str, MCPStatus]:
-        """Get status of all configured MCP servers.
-
-        Returns:
-            Dictionary of server name to status
-        """
+        """Get status of all configured MCP servers."""
         state = await cls._get_state()
         config = await ConfigManager.get()
         mcp_config = config.mcp or {}
 
         result: Dict[str, MCPStatus] = {}
         for name, mcp in mcp_config.items():
-            if not isinstance(mcp, dict) or "type" not in mcp:
+            cfg_dict = _get_mcp_config_dict(mcp)
+            if cfg_dict is None:
                 continue
             result[name] = state.status.get(name, MCPStatusDisabled())
 
@@ -482,21 +595,13 @@ class MCP:
 
     @classmethod
     async def clients(cls) -> Dict[str, MCPClient]:
-        """Get all connected MCP clients.
-
-        Returns:
-            Dictionary of client name to client instance
-        """
+        """Get all connected MCP clients."""
         state = await cls._get_state()
         return state.clients
 
     @classmethod
     async def connect(cls, name: str) -> None:
-        """Connect to a specific MCP server.
-
-        Args:
-            name: Name of the MCP server to connect
-        """
+        """Connect to a specific MCP server."""
         config = await ConfigManager.get()
         mcp_config = config.mcp or {}
         mcp = mcp_config.get(name)
@@ -505,15 +610,16 @@ class MCP:
             log.error("MCP config not found", {"name": name})
             return
 
-        if not isinstance(mcp, dict) or "type" not in mcp:
+        cfg_dict = _get_mcp_config_dict(mcp)
+        if cfg_dict is None:
             log.error("Invalid MCP config", {"name": name})
             return
 
         # Force enabled
-        mcp_copy = dict(mcp)
-        mcp_copy["enabled"] = True
+        cfg_dict = dict(cfg_dict)
+        cfg_dict["enabled"] = True
 
-        result = await cls._create_client(name, mcp_copy)
+        result = await cls._create_client(name, cfg_dict)
 
         state = await cls._get_state()
         state.status[name] = result["status"]
@@ -526,11 +632,7 @@ class MCP:
 
     @classmethod
     async def disconnect(cls, name: str) -> None:
-        """Disconnect from a specific MCP server.
-
-        Args:
-            name: Name of the MCP server to disconnect
-        """
+        """Disconnect from a specific MCP server."""
         state = await cls._get_state()
 
         if name in state.clients:
@@ -544,7 +646,8 @@ class MCP:
         """Get all tools from connected MCP servers.
 
         Returns:
-            Dictionary of tool name to tool definition
+            Dictionary of tool_id to tool definition dict with keys:
+            name, description, input_schema, client, timeout
         """
         state = await cls._get_state()
         config = await ConfigManager.get()
@@ -552,8 +655,7 @@ class MCP:
 
         result: Dict[str, Dict[str, Any]] = {}
 
-        for client_name, client in state.clients.items():
-            # Only include tools from connected MCPs
+        for client_name, client in list(state.clients.items()):
             status = state.status.get(client_name)
             if not isinstance(status, MCPStatusConnected):
                 continue
@@ -561,13 +663,13 @@ class MCP:
             try:
                 tools = await client.list_tools()
 
-                mcp_cfg = mcp_config.get(client_name, {})
-                timeout = mcp_cfg.get("timeout", DEFAULT_TIMEOUT) if isinstance(mcp_cfg, dict) else DEFAULT_TIMEOUT
+                mcp_entry = mcp_config.get(client_name)
+                cfg_dict = _get_mcp_config_dict(mcp_entry) if mcp_entry else None
+                timeout = (cfg_dict.get("timeout", DEFAULT_TIMEOUT) if cfg_dict else DEFAULT_TIMEOUT)
 
                 for tool in tools:
-                    # Sanitize names for tool ID
-                    safe_client = client_name.replace("-", "_").replace(".", "_")
-                    safe_tool = tool.name.replace("-", "_").replace(".", "_")
+                    safe_client = _sanitize_name(client_name)
+                    safe_tool = _sanitize_name(tool.name)
                     tool_id = f"{safe_client}_{safe_tool}"
 
                     result[tool_id] = {
@@ -591,15 +693,11 @@ class MCP:
 
     @classmethod
     async def prompts(cls) -> Dict[str, Dict[str, Any]]:
-        """Get all prompts from connected MCP servers.
-
-        Returns:
-            Dictionary of prompt name to prompt definition
-        """
+        """Get all prompts from connected MCP servers."""
         state = await cls._get_state()
         result: Dict[str, Dict[str, Any]] = {}
 
-        for client_name, client in state.clients.items():
+        for client_name, client in list(state.clients.items()):
             status = state.status.get(client_name)
             if not isinstance(status, MCPStatusConnected):
                 continue
@@ -608,8 +706,8 @@ class MCP:
                 prompts = await client.list_prompts()
 
                 for prompt in prompts:
-                    safe_client = client_name.replace("-", "_").replace(".", "_")
-                    safe_prompt = prompt.get("name", "").replace("-", "_").replace(".", "_")
+                    safe_client = _sanitize_name(client_name)
+                    safe_prompt = _sanitize_name(prompt.get("name", ""))
                     prompt_id = f"{safe_client}:{safe_prompt}"
 
                     result[prompt_id] = {
@@ -627,15 +725,11 @@ class MCP:
 
     @classmethod
     async def resources(cls) -> Dict[str, MCPResource]:
-        """Get all resources from connected MCP servers.
-
-        Returns:
-            Dictionary of resource name to resource definition
-        """
+        """Get all resources from connected MCP servers."""
         state = await cls._get_state()
         result: Dict[str, MCPResource] = {}
 
-        for client_name, client in state.clients.items():
+        for client_name, client in list(state.clients.items()):
             status = state.status.get(client_name)
             if not isinstance(status, MCPStatusConnected):
                 continue
@@ -644,8 +738,8 @@ class MCP:
                 resources = await client.list_resources()
 
                 for resource in resources:
-                    safe_client = client_name.replace("-", "_").replace(".", "_")
-                    safe_name = resource.get("name", "").replace("-", "_").replace(".", "_")
+                    safe_client = _sanitize_name(client_name)
+                    safe_name = _sanitize_name(resource.get("name", ""))
                     resource_id = f"{safe_client}:{safe_name}"
 
                     result[resource_id] = MCPResource(
@@ -670,17 +764,8 @@ class MCP:
         client_name: str,
         name: str,
         args: Optional[Dict[str, str]] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Get a specific prompt from an MCP server.
-
-        Args:
-            client_name: Name of the MCP client
-            name: Prompt name
-            args: Optional prompt arguments
-
-        Returns:
-            Prompt result or None if not found
-        """
+    ) -> Optional[Any]:
+        """Get a specific prompt from an MCP server."""
         state = await cls._get_state()
         client = state.clients.get(client_name)
 
@@ -688,24 +773,23 @@ class MCP:
             log.warn("client not found for prompt", {"client": client_name})
             return None
 
-        # In full implementation, would call client.get_prompt()
-        return None
+        try:
+            return await client.get_prompt(name, args)
+        except Exception as e:
+            log.error("failed to get prompt from MCP server", {
+                "client": client_name,
+                "prompt": name,
+                "error": str(e),
+            })
+            return None
 
     @classmethod
     async def read_resource(
         cls,
         client_name: str,
         resource_uri: str
-    ) -> Optional[Dict[str, Any]]:
-        """Read a resource from an MCP server.
-
-        Args:
-            client_name: Name of the MCP client
-            resource_uri: URI of the resource to read
-
-        Returns:
-            Resource content or None if not found
-        """
+    ) -> Optional[Any]:
+        """Read a resource from an MCP server."""
         state = await cls._get_state()
         client = state.clients.get(client_name)
 
@@ -713,40 +797,38 @@ class MCP:
             log.warn("client not found for resource", {"client": client_name})
             return None
 
-        # In full implementation, would call client.read_resource()
-        return None
+        try:
+            return await client.read_resource(resource_uri)
+        except Exception as e:
+            log.error("failed to read resource from MCP server", {
+                "client": client_name,
+                "uri": resource_uri,
+                "error": str(e),
+            })
+            return None
 
     @classmethod
     async def supports_oauth(cls, mcp_name: str) -> bool:
         """Check if an MCP server supports OAuth.
 
         Remote servers support OAuth by default unless explicitly disabled.
-
-        Args:
-            mcp_name: Name of the MCP server
-
-        Returns:
-            True if OAuth is supported
         """
         config = await ConfigManager.get()
         mcp_config = config.mcp or {}
         mcp = mcp_config.get(mcp_name)
 
-        if not mcp or not isinstance(mcp, dict):
+        if not mcp:
             return False
 
-        return mcp.get("type") == "remote" and mcp.get("oauth") is not False
+        cfg_dict = _get_mcp_config_dict(mcp)
+        if cfg_dict is None:
+            return False
+
+        return cfg_dict.get("type") == "remote" and cfg_dict.get("oauth") is not False
 
     @classmethod
     async def has_stored_tokens(cls, mcp_name: str) -> bool:
-        """Check if an MCP server has stored OAuth tokens.
-
-        Args:
-            mcp_name: Name of the MCP server
-
-        Returns:
-            True if tokens are stored
-        """
+        """Check if an MCP server has stored OAuth tokens."""
         entry = await McpAuth.get(mcp_name)
         return entry is not None and entry.tokens is not None
 
@@ -755,14 +837,7 @@ class MCP:
         cls,
         mcp_name: str
     ) -> Literal["authenticated", "expired", "not_authenticated"]:
-        """Get the authentication status for an MCP server.
-
-        Args:
-            mcp_name: Name of the MCP server
-
-        Returns:
-            Authentication status string
-        """
+        """Get the authentication status for an MCP server."""
         has_tokens = await cls.has_stored_tokens(mcp_name)
         if not has_tokens:
             return "not_authenticated"
@@ -771,12 +846,132 @@ class MCP:
         return "expired" if expired else "authenticated"
 
     @classmethod
-    async def remove_auth(cls, mcp_name: str) -> None:
-        """Remove OAuth credentials for an MCP server.
+    async def start_auth(cls, mcp_name: str) -> Dict[str, str]:
+        """Start OAuth authentication flow for an MCP server.
 
-        Args:
-            mcp_name: Name of the MCP server
+        Returns dict with 'authorization_url' key (empty if already authenticated).
         """
+        from .oauth_callback import McpOAuthCallback
+        from .oauth_provider import McpOAuthConfig, create_oauth_provider
+
+        config = await ConfigManager.get()
+        mcp_config = config.mcp or {}
+        mcp = mcp_config.get(mcp_name)
+
+        if not mcp:
+            raise ValueError(f"MCP server not found: {mcp_name}")
+
+        cfg_dict = _get_mcp_config_dict(mcp)
+        if cfg_dict is None:
+            raise ValueError(f"MCP server {mcp_name} is disabled or missing configuration")
+
+        if cfg_dict.get("type") != "remote":
+            raise ValueError(f"MCP server {mcp_name} is not a remote server")
+
+        if cfg_dict.get("oauth") is False:
+            raise ValueError(f"MCP server {mcp_name} has OAuth explicitly disabled")
+
+        # Start the callback server
+        await McpOAuthCallback.ensure_running()
+
+        # Generate and store state
+        oauth_state = secrets.token_hex(32)
+        await McpAuth.update_oauth_state(mcp_name, oauth_state)
+
+        # Build OAuth config from config entry
+        oauth_cfg = cfg_dict.get("oauth") if isinstance(cfg_dict.get("oauth"), dict) else {}
+        mcp_oauth_config = McpOAuthConfig(
+            client_id=oauth_cfg.get("clientId") if oauth_cfg else None,
+            client_secret=oauth_cfg.get("clientSecret") if oauth_cfg else None,
+            scope=oauth_cfg.get("scope") if oauth_cfg else None,
+        )
+
+        captured_url = None
+
+        async def redirect_handler(auth_url: str) -> None:
+            nonlocal captured_url
+            captured_url = auth_url
+
+        async def callback_handler():
+            # Wait for the OAuth callback
+            code = await McpOAuthCallback.wait_for_callback(oauth_state)
+            return code, oauth_state
+
+        auth_provider = create_oauth_provider(
+            mcp_name=mcp_name,
+            server_url=cfg_dict["url"],
+            config=mcp_oauth_config,
+            redirect_handler=redirect_handler,
+            callback_handler=callback_handler,
+        )
+
+        # Try to connect with auth — this may trigger redirect
+        import httpx
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+
+        try:
+            async with httpx.AsyncClient(auth=auth_provider, follow_redirects=True) as http_client:
+                async with streamable_http_client(cfg_dict["url"], http_client=http_client) as (read, write, _):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        # Already authenticated
+                        return {"authorization_url": ""}
+        except Exception:
+            if captured_url:
+                return {"authorization_url": captured_url}
+            raise
+
+    @classmethod
+    async def authenticate(cls, mcp_name: str) -> MCPStatus:
+        """Complete OAuth authentication — opens browser and waits for callback."""
+        import webbrowser
+        from .oauth_callback import McpOAuthCallback
+
+        result = await cls.start_auth(mcp_name)
+        auth_url = result.get("authorization_url", "")
+
+        if not auth_url:
+            # Already authenticated, reconnect
+            await cls.connect(mcp_name)
+            state = await cls._get_state()
+            return state.status.get(mcp_name, MCPStatusConnected())
+
+        oauth_state = await McpAuth.get_oauth_state(mcp_name)
+        if not oauth_state:
+            raise RuntimeError("OAuth state not found")
+
+        log.info("opening browser for oauth", {"mcp_name": mcp_name, "url": auth_url})
+
+        # Register callback BEFORE opening browser
+        callback_promise = McpOAuthCallback.wait_for_callback(oauth_state)
+
+        try:
+            webbrowser.open(auth_url)
+        except Exception:
+            log.warn("failed to open browser, user must open URL manually", {"mcp_name": mcp_name})
+            await Bus.publish(BrowserOpenFailed, BrowserOpenFailedProps(mcp_name=mcp_name, url=auth_url))
+
+        # Wait for callback
+        await callback_promise
+
+        # Validate and clear state
+        stored_state = await McpAuth.get_oauth_state(mcp_name)
+        if stored_state != oauth_state:
+            await McpAuth.clear_oauth_state(mcp_name)
+            raise RuntimeError("OAuth state mismatch - potential CSRF attack")
+
+        await McpAuth.clear_oauth_state(mcp_name)
+        await McpAuth.clear_code_verifier(mcp_name)
+
+        # Reconnect with new tokens
+        await cls.connect(mcp_name)
+        state = await cls._get_state()
+        return state.status.get(mcp_name, MCPStatusFailed(error="Unknown error after auth"))
+
+    @classmethod
+    async def remove_auth(cls, mcp_name: str) -> None:
+        """Remove OAuth credentials for an MCP server."""
         from .oauth_callback import McpOAuthCallback
 
         await McpAuth.remove(mcp_name)

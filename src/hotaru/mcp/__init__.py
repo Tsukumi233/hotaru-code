@@ -21,9 +21,13 @@ Example:
 """
 
 from .mcp import MCP, MCPStatus, MCPResource
+from .oauth_provider import McpOAuthConfig, McpTokenStorage, create_oauth_provider
 
 __all__ = [
     "MCP",
     "MCPStatus",
     "MCPResource",
+    "McpOAuthConfig",
+    "McpTokenStorage",
+    "create_oauth_provider",
 ]

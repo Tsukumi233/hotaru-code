@@ -73,7 +73,7 @@ class McpAuth:
     @classmethod
     def _filepath(cls) -> Path:
         """Get the path to the auth storage file."""
-        return GlobalPath.data() / "mcp-auth.json"
+        return Path(GlobalPath.data) / "mcp-auth.json"
 
     @classmethod
     async def get(cls, mcp_name: str) -> Optional[AuthEntry]:

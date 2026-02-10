@@ -102,7 +102,8 @@ class McpOAuthCallback:
 
     _server: Optional[asyncio.Server] = None
     _app: Optional[Starlette] = None
-    _pending_auths: Dict[str, PendingAuth] = {}
+    _pending_auths: Dict[str, PendingAuth] = {}  # keyed by OAuth state
+    _mcp_to_state: Dict[str, str] = {}  # mcp_name -> OAuth state (reverse mapping)
 
     @classmethod
     async def _handle_callback(cls, request: Request) -> Response:
@@ -140,6 +141,7 @@ class McpOAuthCallback:
                 if pending.timeout_task:
                     pending.timeout_task.cancel()
                 pending.future.set_exception(Exception(error_msg))
+                cls._mcp_to_state = {k: v for k, v in cls._mcp_to_state.items() if v != state}
             return HTMLResponse(html_error(error_msg))
 
         if not code:
@@ -161,6 +163,9 @@ class McpOAuthCallback:
         if pending.timeout_task:
             pending.timeout_task.cancel()
         pending.future.set_result(code)
+
+        # Clean up reverse mapping
+        cls._mcp_to_state = {k: v for k, v in cls._mcp_to_state.items() if v != state}
 
         return HTMLResponse(HTML_SUCCESS)
 
@@ -234,11 +239,12 @@ class McpOAuthCallback:
         log.info("oauth callback server started", {"port": OAUTH_CALLBACK_PORT})
 
     @classmethod
-    async def wait_for_callback(cls, oauth_state: str) -> str:
+    async def wait_for_callback(cls, oauth_state: str, mcp_name: Optional[str] = None) -> str:
         """Wait for OAuth callback with the given state.
 
         Args:
             oauth_state: The state parameter to wait for
+            mcp_name: Optional MCP server name for reverse lookup in cancel_pending
 
         Returns:
             The authorization code from the callback
@@ -252,12 +258,18 @@ class McpOAuthCallback:
             await asyncio.sleep(CALLBACK_TIMEOUT_MS / 1000)
             if oauth_state in cls._pending_auths:
                 del cls._pending_auths[oauth_state]
+                if mcp_name and mcp_name in cls._mcp_to_state:
+                    del cls._mcp_to_state[mcp_name]
                 pending.future.set_exception(
                     Exception("OAuth callback timeout - authorization took too long")
                 )
 
         pending.timeout_task = asyncio.create_task(timeout())
         cls._pending_auths[oauth_state] = pending
+
+        # Register reverse mapping so cancel_pending(mcp_name) works
+        if mcp_name:
+            cls._mcp_to_state[mcp_name] = oauth_state
 
         return await pending.future
 
@@ -266,10 +278,12 @@ class McpOAuthCallback:
         """Cancel a pending OAuth authorization.
 
         Args:
-            mcp_name: Name of the MCP server (used as state)
+            mcp_name: Name of the MCP server
         """
-        if mcp_name in cls._pending_auths:
-            pending = cls._pending_auths.pop(mcp_name)
+        # Look up the OAuth state for this MCP server
+        oauth_state = cls._mcp_to_state.pop(mcp_name, None)
+        if oauth_state and oauth_state in cls._pending_auths:
+            pending = cls._pending_auths.pop(oauth_state)
             if pending.timeout_task:
                 pending.timeout_task.cancel()
             if not pending.future.done():
@@ -294,6 +308,7 @@ class McpOAuthCallback:
                     Exception("OAuth callback server stopped")
                 )
         cls._pending_auths.clear()
+        cls._mcp_to_state.clear()
 
     @classmethod
     def is_running(cls) -> bool:
