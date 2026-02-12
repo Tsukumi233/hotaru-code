@@ -14,7 +14,9 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from ...agent import Agent
+from ...core.bus import Bus
 from ...core.id import Identifier
+from ...permission import Permission, PermissionAsked, PermissionReply
 from ...project import Project
 from ...provider import Provider
 from ...session import Message, Session, SessionProcessor, SystemPrompt
@@ -173,13 +175,60 @@ async def chat_command(
 
             try:
                 with Live(text_buffer, console=console, refresh_per_second=10, transient=True) as live:
-                    result = await processor.process(
-                        user_message=user_input,
-                        system_prompt=system_prompt,
-                        on_text=lambda t: (on_text(t), live.update(text_buffer)),
-                        on_tool_start=on_tool_start,
-                        on_tool_end=on_tool_end,
-                    )
+                    # Subscribe to permission events for terminal prompts
+                    async def on_permission_asked(payload):
+                        req = payload.properties
+                        permission = req.get("permission", "unknown")
+                        patterns = req.get("patterns", [])
+                        metadata = req.get("metadata", {})
+
+                        live.stop()
+                        console.print()
+                        console.print(f"[yellow]Permission required:[/yellow] {permission}")
+                        for p in patterns:
+                            console.print(f"  Pattern: {p}")
+                        if metadata:
+                            for k, v in metadata.items():
+                                if isinstance(v, str) and len(v) < 200:
+                                    console.print(f"  {k}: {v}")
+
+                        loop = asyncio.get_event_loop()
+                        choice = await loop.run_in_executor(
+                            None,
+                            lambda: Prompt.ask(
+                                "[bold]Allow?[/bold] [dim](y=once, a=always, n=reject)[/dim]",
+                                choices=["y", "a", "n"],
+                                default="y",
+                            )
+                        )
+
+                        reply_map = {"y": "once", "a": "always", "n": "reject"}
+                        message = None
+                        if choice == "n":
+                            msg = await loop.run_in_executor(
+                                None,
+                                lambda: Prompt.ask("[dim]Feedback (optional, press Enter to skip)[/dim]", default="")
+                            )
+                            message = msg.strip() or None
+
+                        await Permission.reply(
+                            req["id"],
+                            PermissionReply(reply_map[choice]),
+                            message,
+                        )
+                        live.start()
+
+                    unsub = Bus.subscribe(PermissionAsked, on_permission_asked)
+                    try:
+                        result = await processor.process(
+                            user_message=user_input,
+                            system_prompt=system_prompt,
+                            on_text=lambda t: (on_text(t), live.update(text_buffer)),
+                            on_tool_start=on_tool_start,
+                            on_tool_end=on_tool_end,
+                        )
+                    finally:
+                        unsub()
 
                 # Print final response
                 if response_text:

@@ -26,6 +26,7 @@ class ToolContext:
     extra: Dict[str, Any] = field(default_factory=dict)
     _metadata: Dict[str, Any] = field(default_factory=dict)
     _aborted: bool = False
+    _ruleset: List[Dict[str, Any]] = field(default_factory=list)
 
     def metadata(self, title: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Update tool metadata during execution."""
@@ -43,11 +44,29 @@ class ToolContext:
     ) -> None:
         """Request permission for an action.
 
-        In the current implementation, this is a no-op placeholder.
-        Full permission system will be implemented in Phase 5.
+        Delegates to Permission.ask() which blocks until the user responds.
+
+        Args:
+            permission: Permission type (e.g. "bash", "edit")
+            patterns: Patterns to check (e.g. command string, file path)
+            always: Patterns to remember if user chooses "always"
+            metadata: Additional context for the permission dialog
+
+        Raises:
+            DeniedError: If permission is denied by configuration rule
+            RejectedError: If user rejects the permission request
+            CorrectedError: If user rejects with feedback
         """
-        # Permission system will be integrated in Phase 5
-        pass
+        from ..permission import Permission
+
+        await Permission.ask(
+            session_id=self.session_id,
+            permission=permission,
+            patterns=patterns,
+            ruleset=Permission.from_config_list(self._ruleset),
+            always=always,
+            metadata=metadata,
+        )
 
     @property
     def aborted(self) -> bool:

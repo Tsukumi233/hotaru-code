@@ -1,5 +1,6 @@
 """Run command - execute a single message."""
 
+import asyncio
 import json
 import platform
 import sys
@@ -11,10 +12,13 @@ from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.prompt import Prompt
 from rich.text import Text
 
 from ...agent import Agent
+from ...core.bus import Bus
 from ...core.id import Identifier
+from ...permission import Permission, PermissionAsked, PermissionReply
 from ...project import Instance, Project
 from ...provider import Provider
 from ...session import Message, Session, SessionProcessor, SystemPrompt
@@ -64,6 +68,7 @@ async def run_command(
     files: Optional[List[str]] = None,
     show_thinking: bool = False,
     json_output: bool = False,
+    yes: bool = False,
 ) -> None:
     """Execute a single message and display results.
 
@@ -76,6 +81,7 @@ async def run_command(
         files: Files to attach
         show_thinking: Show thinking blocks
         json_output: Output raw JSON events
+        yes: Auto-approve all permission requests
     """
     cwd = str(Path.cwd())
 
@@ -233,6 +239,56 @@ async def run_command(
             else:
                 console.print(f" [green]done[/green]")
 
+    # Permission handling — auto-approve with --yes, otherwise terminal prompt
+    async def on_permission_asked(payload):
+        req = payload.properties
+        if yes:
+            await Permission.reply(
+                req["id"],
+                PermissionReply.ONCE,
+            )
+            return
+
+        permission = req.get("permission", "unknown")
+        patterns = req.get("patterns", [])
+        metadata = req.get("metadata", {})
+
+        console.print()
+        console.print(f"[yellow]Permission required:[/yellow] {permission}")
+        for p in patterns:
+            console.print(f"  Pattern: {p}")
+        if metadata:
+            for k, v in metadata.items():
+                if isinstance(v, str) and len(v) < 200:
+                    console.print(f"  {k}: {v}")
+
+        loop = asyncio.get_event_loop()
+        choice = await loop.run_in_executor(
+            None,
+            lambda: Prompt.ask(
+                "[bold]Allow?[/bold] [dim](y=once, a=always, n=reject)[/dim]",
+                choices=["y", "a", "n"],
+                default="y",
+            )
+        )
+
+        reply_map = {"y": "once", "a": "always", "n": "reject"}
+        msg = None
+        if choice == "n":
+            msg = await loop.run_in_executor(
+                None,
+                lambda: Prompt.ask("[dim]Feedback (optional, press Enter to skip)[/dim]", default="")
+            )
+            msg = msg.strip() or None
+
+        await Permission.reply(
+            req["id"],
+            PermissionReply(reply_map[choice]),
+            msg,
+        )
+
+    unsub = Bus.subscribe(PermissionAsked, on_permission_asked)
+
     try:
         if json_output:
             # JSON output mode
@@ -291,6 +347,8 @@ async def run_command(
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
+    finally:
+        unsub()
 
     # Create assistant message record
     assistant_message = Message.create_assistant(

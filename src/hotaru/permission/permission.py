@@ -3,6 +3,7 @@
 Controls what actions AI agents can perform based on configurable rules.
 """
 
+import asyncio
 import fnmatch
 import os
 from enum import Enum
@@ -228,6 +229,25 @@ class Permission:
         )
 
     @classmethod
+    def from_config_list(cls, rules: List[Dict[str, Any]]) -> List[PermissionRule]:
+        """Convert a list of permission config dicts to PermissionRule objects.
+
+        Args:
+            rules: List of dicts with permission, pattern, action keys
+
+        Returns:
+            List of PermissionRule objects
+        """
+        return [
+            PermissionRule(
+                permission=r["permission"],
+                pattern=r.get("pattern", "*"),
+                action=PermissionAction(r["action"]),
+            )
+            for r in rules
+        ]
+
+    @classmethod
     async def ask(
         cls,
         session_id: str,
@@ -239,6 +259,11 @@ class Permission:
         request_id: Optional[str] = None
     ) -> None:
         """Request permission for an action.
+
+        Evaluates the permission against the ruleset. If the action is "allow",
+        returns immediately. If "deny", raises DeniedError. If "ask", publishes
+        a PermissionAsked event and blocks on an asyncio.Future until the user
+        responds via reply().
 
         Args:
             session_id: Session ID
@@ -273,13 +298,31 @@ class Permission:
                 raise DeniedError(matching_rules)
 
             if rule.action == PermissionAction.ASK:
-                # In a real implementation, this would wait for user input
-                # For now, we auto-approve (will be implemented with UI)
-                log.warn("auto-approving permission (UI not implemented)", {
+                rid = request_id or Identifier.ascending("permission")
+                loop = asyncio.get_event_loop()
+                future = loop.create_future()
+
+                request = PermissionRequest(
+                    id=rid,
+                    session_id=session_id,
+                    permission=permission,
+                    patterns=patterns,
+                    metadata=metadata or {},
+                    always=always or [],
+                )
+
+                cls._pending[rid] = {
+                    "request": request,
+                    "session_id": session_id,
                     "permission": permission,
-                    "pattern": pattern
-                })
-                continue
+                    "always": always or [],
+                    "resolve": lambda f=future: f.set_result(None) if not f.done() else None,
+                    "reject": lambda e, f=future: f.set_exception(e) if not f.done() else None,
+                }
+
+                await Bus.publish(PermissionAsked, request)
+                await future  # Block until user responds
+                return  # After first "ask" pattern resolves, all are approved
 
             # action == "allow" - continue to next pattern
 
@@ -291,6 +334,10 @@ class Permission:
         message: Optional[str] = None
     ) -> None:
         """Reply to a permission request.
+
+        On reject: rejects ALL pending requests for the same session.
+        On always: adds to approved rules, then auto-resolves any other
+        pending requests that now match.
 
         Args:
             request_id: Request ID
@@ -312,10 +359,20 @@ class Permission:
         ))
 
         if reply == PermissionReply.REJECT:
+            # Reject this request
             if message:
                 pending["reject"](CorrectedError(message))
             else:
                 pending["reject"](RejectedError())
+
+            # Also reject ALL other pending requests for this session
+            session_pending = [
+                (rid, p) for rid, p in list(cls._pending.items())
+                if p["session_id"] == session_id
+            ]
+            for rid, p in session_pending:
+                del cls._pending[rid]
+                p["reject"](RejectedError())
             return
 
         if reply == PermissionReply.ONCE:
@@ -335,6 +392,26 @@ class Permission:
                 ))
 
             pending["resolve"]()
+
+            # Auto-resolve any other pending requests that now match
+            approved = cls._approved.get(session_id, [])
+            auto_resolved = []
+            for rid, p in list(cls._pending.items()):
+                if p["session_id"] != session_id:
+                    continue
+                # Check if all patterns are now approved
+                all_approved = True
+                for pat in p["request"].patterns:
+                    rule = cls.evaluate(p["permission"], pat, [], approved)
+                    if rule.action != PermissionAction.ALLOW:
+                        all_approved = False
+                        break
+                if all_approved:
+                    auto_resolved.append(rid)
+
+            for rid in auto_resolved:
+                p = cls._pending.pop(rid)
+                p["resolve"]()
 
     @classmethod
     def disabled_tools(

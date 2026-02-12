@@ -176,6 +176,12 @@ def run(
         "--json",
         help="Output raw JSON events",
     ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Auto-approve all permission requests",
+    ),
 ):
     """Run hotaru with a message."""
     from .cmd.run import run_command
@@ -203,6 +209,7 @@ def run(
         files=file,
         show_thinking=thinking,
         json_output=json_output,
+        yes=yes,
     ))
 
 

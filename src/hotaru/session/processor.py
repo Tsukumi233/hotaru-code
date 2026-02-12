@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..core.id import Identifier
+from ..permission import RejectedError, CorrectedError, DeniedError
 from ..provider import Provider
 from ..tool import ToolContext, ToolResult
 from ..tool.registry import ToolRegistry
@@ -198,6 +199,25 @@ class SessionProcessor:
             except Exception as e:
                 log.warn("failed to load MCP tools", {"error": str(e)})
 
+            # Filter out disabled tools based on agent permission rules
+            try:
+                from ..agent import Agent
+                from ..permission import Permission
+
+                agent_info = await Agent.get(self.agent)
+                if agent_info and agent_info.permission:
+                    ruleset = Permission.from_config_list(agent_info.permission)
+                    tool_names = [d["function"]["name"] for d in tool_definitions]
+                    disabled = Permission.disabled_tools(tool_names, ruleset)
+                    if disabled:
+                        log.info("filtering disabled tools", {"disabled": list(disabled)})
+                        tool_definitions = [
+                            d for d in tool_definitions
+                            if d["function"]["name"] not in disabled
+                        ]
+            except Exception as e:
+                log.warn("failed to filter disabled tools", {"error": str(e)})
+
             # Create stream input
             stream_input = StreamInput(
                 session_id=self.session_id,
@@ -381,14 +401,25 @@ class SessionProcessor:
                 log.error("MCP tool lookup failed", {"tool": tool_name, "error": str(e)})
             return {"error": f"Unknown tool: {tool_name}"}
 
+        # Load agent permission ruleset
+        agent_ruleset: List[Dict[str, Any]] = []
         try:
-            # Create tool context
+            from ..agent import Agent
+            agent_info = await Agent.get(self.agent)
+            if agent_info:
+                agent_ruleset = agent_info.permission
+        except Exception as e:
+            log.warn("failed to load agent permissions", {"error": str(e)})
+
+        try:
+            # Create tool context with permission ruleset
             ctx = ToolContext(
                 session_id=self.session_id,
                 message_id=Identifier.ascending("message"),
                 agent=self.agent,
                 call_id=Identifier.ascending("call"),
                 extra={"cwd": self.cwd},
+                _ruleset=agent_ruleset,
             )
 
             # Validate and parse input
@@ -406,6 +437,9 @@ class SessionProcessor:
                 "metadata": result.metadata,
             }
 
+        except (RejectedError, CorrectedError, DeniedError) as e:
+            log.info("permission error", {"tool": tool_name, "error": str(e)})
+            return {"error": str(e)}
         except Exception as e:
             log.error("tool execution error", {"tool": tool_name, "error": str(e)})
             return {"error": str(e)}

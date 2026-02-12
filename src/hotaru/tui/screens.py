@@ -22,6 +22,7 @@ from .widgets import (
 from .theme import ThemeManager
 from .context import use_sdk, use_sync, use_local
 from .commands import CommandRegistry, create_default_commands
+from .dialogs import PermissionDialog
 
 
 def _build_slash_commands(registry: CommandRegistry) -> List[SlashCommandItem]:
@@ -375,6 +376,36 @@ class SessionScreen(Screen):
             content: Message content
             container: Container to add messages to
         """
+        from ..core.bus import Bus
+        from ..permission import Permission, PermissionAsked, PermissionReply
+
+        # Subscribe to permission events — show dialog when permission is requested
+        async def on_permission_asked(payload):
+            request_data = payload.properties
+            prompt = self.query_one("#prompt-input", PromptInput)
+            prompt.disabled = True
+
+            try:
+                result = await self.app.push_screen_wait(
+                    PermissionDialog(request=request_data)
+                )
+                reply_type, message = result or ("reject", None)
+                await Permission.reply(
+                    request_id=request_data["id"],
+                    reply=PermissionReply(reply_type),
+                    message=message,
+                )
+            except Exception:
+                # If dialog fails, reject to unblock
+                await Permission.reply(
+                    request_id=request_data["id"],
+                    reply=PermissionReply.REJECT,
+                )
+            finally:
+                prompt.disabled = False
+
+        unsub = Bus.subscribe(PermissionAsked, on_permission_asked)
+
         try:
             # Get contexts
             sdk = use_sdk()
@@ -507,6 +538,8 @@ class SessionScreen(Screen):
                 await spinner.remove()
             except Exception:
                 pass
+        finally:
+            unsub()
 
     def action_command_palette(self) -> None:
         """Show command palette."""
