@@ -7,14 +7,10 @@ including model selection, session list, and confirmation dialogs.
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Static, Input, Button, Label, ListView, ListItem
+from textual.widgets import Static, Input, Button, ListView, ListItem
 from textual.binding import Binding
 from rich.text import Text
-from rich.panel import Panel
-from typing import Any, Callable, Dict, List, Optional, Tuple
-
-from .theme import ThemeManager
-from .widgets import Spinner
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class DialogBase(ModalScreen):
@@ -172,6 +168,7 @@ class InputDialog(DialogBase):
         placeholder: str = "",
         default_value: str = "",
         submit_label: str = "Submit",
+        password: bool = False,
         **kwargs
     ) -> None:
         """Initialize input dialog.
@@ -181,12 +178,14 @@ class InputDialog(DialogBase):
             placeholder: Input placeholder text
             default_value: Default input value
             submit_label: Label for submit button
+            password: Whether to hide typed input
         """
         super().__init__(**kwargs)
         self.title_text = title
         self.placeholder = placeholder
         self.default_value = default_value
         self.submit_label = submit_label
+        self.password = password
 
     def compose(self) -> ComposeResult:
         """Compose the dialog."""
@@ -195,6 +194,7 @@ class InputDialog(DialogBase):
             Input(
                 placeholder=self.placeholder,
                 value=self.default_value,
+                password=self.password,
                 id="dialog-input"
             ),
             Horizontal(
@@ -335,12 +335,12 @@ class ModelSelectDialog(DialogBase):
         super().__init__(**kwargs)
         self.providers = providers
         self.current_model = current_model
+        self._model_options: List[Tuple[str, str]] = []
 
     def compose(self) -> ComposeResult:
         """Compose the dialog."""
-        theme = ThemeManager.get_theme()
-
         items = []
+        self._model_options = []
         for provider_id, models in self.providers.items():
             # Add provider header
             items.append(
@@ -359,10 +359,12 @@ class ModelSelectDialog(DialogBase):
                     self.current_model[1] == model_id
                 )
                 label = f"{'● ' if is_current else '  '}{model_name}"
+                option_index = len(self._model_options)
+                self._model_options.append((provider_id, model_id))
                 items.append(
                     ListItem(
                         Static(label),
-                        id=f"model-{provider_id}-{model_id}"
+                        id=f"model-option-{option_index}",
                     )
                 )
 
@@ -377,12 +379,18 @@ class ModelSelectDialog(DialogBase):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Handle model selection."""
-        if event.item and event.item.id and event.item.id.startswith("model-"):
-            parts = event.item.id.split("-", 2)
-            if len(parts) == 3:
-                provider_id = parts[1]
-                model_id = parts[2]
-                self.dismiss((provider_id, model_id))
+        if not event.item or not event.item.id:
+            return
+        if not event.item.id.startswith("model-option-"):
+            return
+
+        try:
+            index = int(event.item.id.split("-")[-1])
+        except ValueError:
+            return
+
+        if 0 <= index < len(self._model_options):
+            self.dismiss(self._model_options[index])
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press."""
@@ -521,14 +529,19 @@ class HelpDialog(DialogBase):
   [cyan]Ctrl+M[/cyan]     Switch model
   [cyan]Ctrl+A[/cyan]     Switch agent
   [cyan]Ctrl+T[/cyan]     Toggle theme
-  [cyan]Ctrl+Q[/cyan]     Quit
+  [cyan]Ctrl+D[/cyan]     Quit
 
 [bold]Slash Commands[/bold]
 
   [cyan]/new[/cyan]       Start new session
   [cyan]/sessions[/cyan]  List sessions
   [cyan]/models[/cyan]    List models
+  [cyan]/connect[/cyan]   Connect provider
   [cyan]/agents[/cyan]    List agents
+  [cyan]/copy[/cyan]      Copy session transcript
+  [cyan]/export[/cyan]    Export session transcript
+  [cyan]/share[/cyan]     Share session snapshot
+  [cyan]/mcps[/cyan]      View MCP status
   [cyan]/status[/cyan]    View status
   [cyan]/help[/cyan]      Show this help
   [cyan]/exit[/cyan]      Exit application
@@ -558,6 +571,149 @@ class HelpDialog(DialogBase):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press."""
+        self.dismiss(True)
+
+
+class AgentSelectDialog(DialogBase):
+    """Agent selection dialog."""
+
+    DEFAULT_CSS = DialogBase.DEFAULT_CSS + """
+    AgentSelectDialog > Container {
+        width: 70;
+    }
+
+    AgentSelectDialog ListView {
+        height: auto;
+        max-height: 20;
+    }
+    """
+
+    def __init__(
+        self,
+        agents: List[Dict[str, Any]],
+        current_agent: Optional[str] = None,
+        **kwargs
+    ) -> None:
+        super().__init__(**kwargs)
+        self.agents = agents
+        self.current_agent = current_agent
+
+    def compose(self) -> ComposeResult:
+        items = []
+        for agent in self.agents:
+            name = agent.get("name", "")
+            description = agent.get("description", "")
+            marker = "● " if name == self.current_agent else "  "
+            label = Text()
+            label.append(f"{marker}{name}", style="bold")
+            if description:
+                label.append(f"\n  {description}", style="dim")
+            items.append(ListItem(Static(label), id=f"agent-{name}"))
+
+        yield Container(
+            Static("Select Agent", classes="dialog-title"),
+            ListView(*items, id="agents-list") if items else Static("No agents found"),
+            Horizontal(
+                Button("Cancel", variant="default", id="cancel-btn"),
+                classes="dialog-buttons"
+            )
+        )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item and event.item.id and event.item.id.startswith("agent-"):
+            self.dismiss(event.item.id[6:])
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+
+class StatusDialog(DialogBase):
+    """Runtime status dialog for model, agent, MCP, and LSP state."""
+
+    DEFAULT_CSS = DialogBase.DEFAULT_CSS + """
+    StatusDialog > Container {
+        width: 76;
+        max-height: 85%;
+    }
+
+    StatusDialog .status-content {
+        height: auto;
+        max-height: 24;
+        padding: 0 1;
+        margin-bottom: 1;
+        background: $surface-darken-1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Close"),
+        Binding("r", "refresh", "Refresh"),
+    ]
+
+    def __init__(
+        self,
+        model: str,
+        agent: str,
+        mcp: Dict[str, Dict[str, Any]],
+        lsp: List[Dict[str, Any]],
+        **kwargs
+    ) -> None:
+        super().__init__(**kwargs)
+        self.model = model
+        self.agent = agent
+        self.mcp = mcp
+        self.lsp = lsp
+
+    def compose(self) -> ComposeResult:
+        lines = []
+        lines.append("[bold]Current Selection[/bold]")
+        lines.append(f"Agent: {self.agent}")
+        lines.append(f"Model: {self.model}")
+        lines.append("")
+
+        lines.append("[bold]MCP[/bold]")
+        if self.mcp:
+            for name in sorted(self.mcp.keys()):
+                status = self.mcp[name].get("status", "unknown")
+                error = self.mcp[name].get("error")
+                line = f"- {name}: {status}"
+                if error:
+                    line += f" ({error})"
+                lines.append(line)
+        else:
+            lines.append("- No MCP servers configured")
+        lines.append("")
+
+        lines.append("[bold]LSP[/bold]")
+        if self.lsp:
+            for server in self.lsp:
+                name = server.get("name", server.get("id", "unknown"))
+                root = server.get("root", ".")
+                status = server.get("status", "unknown")
+                lines.append(f"- {name} @ {root}: {status}")
+        else:
+            lines.append("- No active LSP servers")
+
+        yield Container(
+            Static("Runtime Status", classes="dialog-title"),
+            ScrollableContainer(
+                Static("\n".join(lines), classes="status-content"),
+                classes="dialog-content",
+            ),
+            Horizontal(
+                Button("Refresh", variant="default", id="refresh-btn"),
+                Button("Close", variant="primary", id="close-btn"),
+                classes="dialog-buttons"
+            )
+        )
+
+    def action_refresh(self) -> None:
+        self.dismiss("refresh")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "refresh-btn":
+            self.dismiss("refresh")
+            return
         self.dismiss(True)
 
 

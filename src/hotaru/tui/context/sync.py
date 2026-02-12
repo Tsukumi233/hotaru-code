@@ -66,6 +66,14 @@ class SyncContext:
         self._listeners: Dict[str, List[Callable[[Any], None]]] = {}
         self._synced_sessions: Set[str] = set()
 
+    @staticmethod
+    def _session_sort_key(session: Dict[str, Any]) -> int:
+        """Build a descending sort key for session recency."""
+        updated = session.get("time", {}).get("updated")
+        if isinstance(updated, (int, float)):
+            return int(updated)
+        return 0
+
     @property
     def data(self) -> SyncData:
         """Get the synchronized data."""
@@ -115,7 +123,11 @@ class SyncContext:
     # Session methods
     def set_sessions(self, sessions: List[Dict[str, Any]]) -> None:
         """Set sessions list."""
-        self._data.sessions = sorted(sessions, key=lambda s: s.get("id", ""))
+        self._data.sessions = sorted(
+            sessions,
+            key=self._session_sort_key,
+            reverse=True,
+        )
         self._notify("sessions", self._data.sessions)
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
@@ -146,12 +158,19 @@ class SyncContext:
         for i, s in enumerate(self._data.sessions):
             if s.get("id") == session_id:
                 self._data.sessions[i] = session
+                self._data.sessions.sort(
+                    key=self._session_sort_key,
+                    reverse=True,
+                )
                 self._notify("session.updated", session)
                 return
 
         # Insert in sorted order
         self._data.sessions.append(session)
-        self._data.sessions.sort(key=lambda s: s.get("id", ""))
+        self._data.sessions.sort(
+            key=self._session_sort_key,
+            reverse=True,
+        )
         self._notify("session.updated", session)
 
     def delete_session(self, session_id: str) -> None:
@@ -341,6 +360,7 @@ class SyncContext:
                 "title": session.title or "Untitled",
                 "agent": session.agent,
                 "parentID": session.parent_id,
+                "share": session.share.model_dump() if session.share else None,
                 "time": {
                     "created": session.time.created,
                     "updated": session.time.updated,

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..core.config import ConfigManager, ProviderConfig
 from ..util.log import Log
+from .auth import ProviderAuth
 from .models import (
     ModelCapabilities,
     ModelCost,
@@ -191,7 +192,6 @@ def _create_custom_provider(provider_id: str, config: ProviderConfig) -> Optiona
 
     options = config.options or {}
     base_url = options.get("baseURL")
-    api_key = options.get("apiKey")
     headers = options.get("headers", {})
 
     # Determine provider type: "openai" (default) or "anthropic"
@@ -233,16 +233,40 @@ def _create_custom_provider(provider_id: str, config: ProviderConfig) -> Optiona
 
     # Determine env var name for API key
     env_var = f"{provider_id.upper().replace('-', '_')}_API_KEY"
+    resolved_key = _resolve_provider_key(provider_id, [env_var], options)
 
     return ProviderInfo(
         id=provider_id,
         name=config.name or provider_id,
         source=ProviderSource.CONFIG,
         env=[env_var],
-        key=api_key or os.environ.get(env_var),
+        key=resolved_key,
         options={**options, "type": provider_type},
         models=models,
     )
+
+
+def _resolve_provider_key(
+    provider_id: str,
+    env_vars: List[str],
+    options: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Resolve an API key from auth store, config, or environment."""
+    stored_key = ProviderAuth.get(provider_id)
+    if stored_key:
+        return stored_key
+
+    if options:
+        configured_key = options.get("apiKey")
+        if isinstance(configured_key, str) and configured_key:
+            return configured_key
+
+    for env_var in env_vars:
+        api_key = os.environ.get(env_var)
+        if api_key:
+            return api_key
+
+    return None
 
 
 class Provider:
@@ -284,19 +308,29 @@ class Provider:
                 return False
             return True
 
-        # Check environment variables for API keys
+        # Load built-in providers with keys from auth/config/env
         for provider_id, provider in database.items():
             if not is_allowed(provider_id):
                 continue
 
-            for env_var in provider.env:
-                api_key = os.environ.get(env_var)
-                if api_key:
-                    provider.source = ProviderSource.ENV
-                    if len(provider.env) == 1:
-                        provider.key = api_key
-                    providers[provider_id] = provider
-                    break
+            provider = provider.model_copy()
+            provider_config = config.provider.get(provider_id) if config.provider else None
+            if provider_config and provider_config.options:
+                provider.options.update(provider_config.options)
+                base_url = provider_config.options.get("baseURL")
+                if base_url:
+                    for model in provider.models.values():
+                        model.api_url = base_url
+
+            provider.key = _resolve_provider_key(provider_id, provider.env, provider.options)
+
+            if provider.key:
+                provider.source = ProviderSource.CONFIG if provider_config else ProviderSource.ENV
+            elif provider_config:
+                provider.source = ProviderSource.CONFIG
+
+            if provider.key or provider_config:
+                providers[provider_id] = provider
 
         # Apply config overrides and add custom providers
         if config.provider:
@@ -323,6 +357,7 @@ class Provider:
                         if base_url:
                             for model in existing.models.values():
                                 model.api_url = base_url
+                    existing.key = _resolve_provider_key(provider_id, existing.env, existing.options)
                     existing.source = ProviderSource.CONFIG
                 elif provider_id in database:
                     # Add provider from database with config
@@ -334,6 +369,7 @@ class Provider:
                         if base_url:
                             for model in provider.models.values():
                                 model.api_url = base_url
+                    provider.key = _resolve_provider_key(provider_id, provider.env, provider.options)
                     provider.source = ProviderSource.CONFIG
                     providers[provider_id] = provider
 

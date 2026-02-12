@@ -1,69 +1,73 @@
-"""Screens for TUI application.
+"""Screens for TUI application."""
 
-This module provides the main screens used in the TUI,
-including the home screen and session screen.
-"""
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 from textual.app import ComposeResult
-from textual.screen import Screen
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Static, Input, Button, Footer, Header
 from textual.binding import Binding
-from rich.text import Text
-from rich.panel import Panel
-from rich.markdown import Markdown
-from typing import Any, Dict, Optional, List
-import asyncio
+from textual.containers import Container, ScrollableContainer
+from textual.screen import Screen
+from textual.widgets import Static
 
-from .widgets import (
-    Logo, PromptInput, MessageBubble, AssistantTextPart, ToolDisplay,
-    StatusBar, Spinner, Toast, SlashCommandItem
-)
-from .theme import ThemeManager
-from .context import use_sdk, use_sync, use_local
 from .commands import CommandRegistry, create_default_commands
+from .context import use_local, use_route, use_sdk, use_sync
+from .context.route import HomeRoute, PromptInfo, SessionRoute
 from .dialogs import PermissionDialog
+from .widgets import (
+    AssistantTextPart,
+    Logo,
+    MessageBubble,
+    PromptInput,
+    SlashCommandItem,
+    Spinner,
+    StatusBar,
+    ToolDisplay,
+)
+
+
+@dataclass
+class AssistantTurnState:
+    """Mounted widgets for the currently streaming assistant turn."""
+
+    text_parts: Dict[str, AssistantTextPart] = field(default_factory=dict)
+    tool_widgets: Dict[str, ToolDisplay] = field(default_factory=dict)
 
 
 def _build_slash_commands(registry: CommandRegistry) -> List[SlashCommandItem]:
-    """Build slash command items from registry.
-
-    Args:
-        registry: Command registry
-
-    Returns:
-        List of slash command items
-    """
-    items = []
+    """Build slash command items from registry."""
+    items: List[SlashCommandItem] = []
     for cmd in registry.list_commands():
-        if cmd.slash_name:
-            items.append(SlashCommandItem(
+        if not cmd.slash_name:
+            continue
+
+        description = cmd.availability_reason if not cmd.enabled else ""
+        items.append(
+            SlashCommandItem(
                 id=cmd.id,
                 trigger=cmd.slash_name,
                 title=cmd.title,
-                description="",
+                description=description,
                 keybind=cmd.keybind,
                 type="builtin",
-            ))
-            # Add aliases as separate items
-            for alias in cmd.slash_aliases:
-                items.append(SlashCommandItem(
+            )
+        )
+
+        for alias in cmd.slash_aliases:
+            items.append(
+                SlashCommandItem(
                     id=cmd.id,
                     trigger=alias,
                     title=cmd.title,
                     description=f"Alias for /{cmd.slash_name}",
                     keybind=cmd.keybind,
                     type="builtin",
-                ))
+                )
+            )
     return items
 
 
 class HomeScreen(Screen):
-    """Home screen with logo and prompt.
-
-    The initial screen shown when starting the TUI,
-    featuring the Hotaru logo and a prompt input.
-    """
+    """Home screen with logo and prompt."""
 
     BINDINGS = [
         Binding("ctrl+x", "command_palette", "Commands"),
@@ -106,16 +110,7 @@ class HomeScreen(Screen):
     }
     """
 
-    def __init__(
-        self,
-        initial_prompt: Optional[str] = None,
-        **kwargs
-    ) -> None:
-        """Initialize home screen.
-
-        Args:
-            initial_prompt: Optional initial prompt text
-        """
+    def __init__(self, initial_prompt: Optional[str] = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.initial_prompt = initial_prompt
         self._command_registry = CommandRegistry()
@@ -123,85 +118,49 @@ class HomeScreen(Screen):
             self._command_registry.register(cmd)
 
     def compose(self) -> ComposeResult:
-        """Compose the home screen."""
-        # Build slash commands from registry
         slash_commands = _build_slash_commands(self._command_registry)
-
         yield Container(
             Container(Logo(), id="logo-container"),
             Container(
                 PromptInput(
                     placeholder="What would you like to do?",
                     commands=slash_commands,
-                    id="prompt-input"
+                    id="prompt-input",
                 ),
-                id="prompt-container"
+                id="prompt-container",
             ),
-            Container(
-                StatusBar(id="status-bar"),
-                id="status-container"
-            ),
-            id="home-container"
+            Container(StatusBar(id="status-bar"), id="status-container"),
+            id="home-container",
         )
 
     def on_mount(self) -> None:
-        """Handle mount event."""
-        # Focus the prompt input
         prompt = self.query_one("#prompt-input", PromptInput)
         prompt.focus()
-
-        # Set initial prompt if provided
         if self.initial_prompt:
             prompt.value = self.initial_prompt
 
     def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
-        """Handle prompt submission."""
-        # Create new session and navigate to it
-        self.app.push_screen(SessionScreen(initial_message=event.value))
+        use_route().navigate(
+            SessionRoute(initial_prompt=PromptInfo(input=event.value))
+        )
 
-    def on_prompt_input_slash_command_selected(self, event: PromptInput.SlashCommandSelected) -> None:
-        """Handle slash command selection."""
-        self._execute_slash_command(event.command_id)
-
-    def _execute_slash_command(self, command_id: str) -> None:
-        """Execute a slash command.
-
-        Args:
-            command_id: Command ID to execute
-        """
-        # Map command IDs to actions
-        if command_id == "session.new":
-            self.app.push_screen(HomeScreen())
-        elif command_id == "session.list":
-            self.app.action_session_list()
-        elif command_id == "model.list":
-            self.app.action_model_list()
-        elif command_id == "theme.toggle_mode":
-            self.app.action_toggle_theme()
-        elif command_id == "help.show":
-            self.app.notify("Help: Type a message or use /commands")
-        elif command_id == "app.exit":
-            self.app.exit()
+    def on_prompt_input_slash_command_selected(
+        self, event: PromptInput.SlashCommandSelected
+    ) -> None:
+        self.app.execute_command(event.command_id, source="slash")
 
     def action_command_palette(self) -> None:
-        """Show command palette."""
         self.app.action_command_palette()
 
     def action_session_list(self) -> None:
-        """Show session list."""
-        # TODO: Implement session list dialog
-        pass
+        self.app.action_session_list()
 
     def action_quit(self) -> None:
-        """Quit the application."""
         self.app.exit()
 
 
 class SessionScreen(Screen):
-    """Session screen with message history and prompt.
-
-    Displays the conversation history and allows sending new messages.
-    """
+    """Session screen with message history and prompt input."""
 
     BINDINGS = [
         Binding("ctrl+x", "command_palette", "Commands"),
@@ -263,132 +222,245 @@ class SessionScreen(Screen):
         self,
         session_id: Optional[str] = None,
         initial_message: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ) -> None:
-        """Initialize session screen.
-
-        Args:
-            session_id: Session ID to load
-            initial_message: Initial message to send
-        """
         super().__init__(**kwargs)
         self.session_id = session_id
         self.initial_message = initial_message
-        self._messages: list = []
-        self._tool_widgets: dict = {}
+        self._active_turn: Optional[AssistantTurnState] = None
+        self._loading_spinner: Optional[Spinner] = None
         self._command_registry = CommandRegistry()
         for cmd in create_default_commands():
             self._command_registry.register(cmd)
 
     def compose(self) -> ComposeResult:
-        """Compose the session screen."""
-        # Build slash commands from registry
         slash_commands = _build_slash_commands(self._command_registry)
-
         yield Container(
             Static("Session", id="session-title"),
             StatusBar(id="session-status"),
-            id="session-header"
+            id="session-header",
         )
         yield ScrollableContainer(id="messages-container")
         yield Container(
             PromptInput(
                 placeholder="Type your message...",
                 commands=slash_commands,
-                id="prompt-input"
+                id="prompt-input",
             ),
-            id="prompt-container"
+            id="prompt-container",
         )
 
     def on_mount(self) -> None:
-        """Handle mount event."""
-        # Focus the prompt input
         prompt = self.query_one("#prompt-input", PromptInput)
         prompt.focus()
+        self._refresh_header()
 
-        # Send initial message if provided
+        if self.session_id:
+            self.run_worker(self._load_session_history(), exclusive=False)
+
         if self.initial_message:
-            self._send_message(self.initial_message)
+            self.call_after_refresh(lambda: self._send_message(self.initial_message or ""))
+
+    async def _load_session_history(self) -> None:
+        """Load and render historical messages for an existing session."""
+        if not self.session_id:
+            return
+
+        sync = use_sync()
+        if not sync.is_session_synced(self.session_id):
+            await sync.sync_session(self.session_id)
+
+        container = self.query_one("#messages-container", ScrollableContainer)
+        container.remove_children()
+        self._active_turn = None
+        self._loading_spinner = None
+
+        for message in sync.get_messages(self.session_id):
+            await self._mount_message_from_history(message, container)
+
+        container.scroll_end(animate=False)
+        self._refresh_header()
+
+    async def _mount_message_from_history(
+        self, message: Dict[str, Any], container: ScrollableContainer
+    ) -> None:
+        """Render a persisted message in the message timeline."""
+        role = message.get("role", "")
+        if role == "user":
+            text = self._extract_text(message)
+            await container.mount(
+                MessageBubble(
+                    content=text,
+                    role="user",
+                    classes="message user-message",
+                )
+            )
+            return
+
+        agent = use_local().agent.current().get("name", "assistant")
+        await container.mount(
+            MessageBubble(
+                content="",
+                role="assistant",
+                agent=agent,
+                classes="message assistant-message",
+            )
+        )
+
+        parts = message.get("parts", [])
+        for idx, part in enumerate(parts):
+            if not isinstance(part, dict):
+                continue
+
+            part_type = part.get("type")
+            if part_type in ("text", "reasoning"):
+                text = part.get("text", "")
+                if text:
+                    await container.mount(
+                        AssistantTextPart(
+                            content=text,
+                            part_id=f"history-{message.get('id', '')}-{idx}",
+                            classes="message assistant-message",
+                        )
+                    )
+            elif part_type == "tool-invocation":
+                invocation = part.get("tool_invocation", {})
+                if not isinstance(invocation, dict):
+                    continue
+
+                state = invocation.get("state")
+                tool_name = invocation.get("tool_name", "tool")
+                tool_id = invocation.get("tool_call_id", f"history-tool-{idx}")
+                args = invocation.get("args") or {}
+
+                if state == "result":
+                    output = invocation.get("result")
+                    await container.mount(
+                        ToolDisplay(
+                            tool_name=tool_name,
+                            tool_id=tool_id,
+                            status="completed",
+                            input_data=args if isinstance(args, dict) else {},
+                            output=self._stringify_output(output),
+                            classes="message tool-display",
+                        )
+                    )
+                elif state in ("call", "partial-call"):
+                    await container.mount(
+                        ToolDisplay(
+                            tool_name=tool_name,
+                            tool_id=tool_id,
+                            status="running",
+                            input_data=args if isinstance(args, dict) else {},
+                            classes="message tool-display",
+                        )
+                    )
+
+    def _extract_text(self, message: Dict[str, Any]) -> str:
+        parts = message.get("parts", [])
+        chunks: List[str] = []
+        for part in parts:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+        return "".join(chunks)
+
+    def _stringify_output(self, output: Any) -> str:
+        if output is None:
+            return ""
+        if isinstance(output, str):
+            return output
+        return str(output)
+
+    def _refresh_header(self) -> None:
+        """Refresh session title and status line."""
+        title = self.query_one("#session-title", Static)
+        if self.session_id:
+            title.update(f"Session {self.session_id[:8]}")
+        else:
+            title.update("Session")
+
+        local = use_local()
+        status = self.query_one("#session-status", StatusBar)
+        model_selection = local.model.current()
+        status.model = (
+            f"{model_selection.provider_id}/{model_selection.model_id}"
+            if model_selection
+            else None
+        )
+        status.agent = local.agent.current().get("name", "build")
+        status.session_id = self.session_id
+        status.refresh()
 
     def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
-        """Handle prompt submission."""
         self._send_message(event.value)
 
-    def on_prompt_input_slash_command_selected(self, event: PromptInput.SlashCommandSelected) -> None:
-        """Handle slash command selection."""
-        self._execute_slash_command(event.command_id)
-
-    def _execute_slash_command(self, command_id: str) -> None:
-        """Execute a slash command.
-
-        Args:
-            command_id: Command ID to execute
-        """
-        # Map command IDs to actions
-        if command_id == "session.new":
-            self.app.push_screen(HomeScreen())
-        elif command_id == "session.list":
-            self.app.action_session_list()
-        elif command_id == "model.list":
-            self.app.action_model_list()
-        elif command_id == "theme.toggle_mode":
-            self.app.action_toggle_theme()
-        elif command_id == "help.show":
-            self.app.notify("Help: Type a message or use /commands")
-        elif command_id == "app.exit":
-            self.app.exit()
-        elif command_id == "session.compact":
-            self.app.notify("Compact: Session compaction not yet implemented")
-        elif command_id == "session.export":
-            self.app.notify("Export: Session export not yet implemented")
-        elif command_id == "session.copy":
-            self.app.notify("Copy: Session copy not yet implemented")
+    def on_prompt_input_slash_command_selected(
+        self, event: PromptInput.SlashCommandSelected
+    ) -> None:
+        self.app.execute_command(event.command_id, source="slash")
 
     def _send_message(self, content: str) -> None:
-        """Send a message and get AI response.
+        content = content.strip()
+        if not content:
+            return
 
-        Args:
-            content: Message content
-        """
-        # Add user message to display
-        messages_container = self.query_one("#messages-container")
-        user_bubble = MessageBubble(
-            content=content,
-            role="user",
-            classes="message user-message"
+        container = self.query_one("#messages-container", ScrollableContainer)
+        container.mount(
+            MessageBubble(
+                content=content,
+                role="user",
+                classes="message user-message",
+            )
         )
-        messages_container.mount(user_bubble)
+        container.scroll_end()
 
-        # Scroll to bottom
-        messages_container.scroll_end()
+        self._loading_spinner = Spinner("Thinking...")
+        container.mount(self._loading_spinner)
 
-        # Add loading indicator
-        spinner = Spinner("Thinking...", id="loading-spinner")
-        messages_container.mount(spinner)
+        prompt = self.query_one("#prompt-input", PromptInput)
+        prompt.disabled = True
 
-        # Start async message sending using run_worker
-        self.run_worker(self._send_message_async(content, messages_container), exclusive=True)
+        self.run_worker(
+            self._send_message_async(content, container),
+            exclusive=True,
+        )
 
-    async def _send_message_async(self, content: str, container: ScrollableContainer) -> None:
-        """Send message asynchronously and stream response.
+    async def _remove_spinner(self) -> None:
+        if not self._loading_spinner:
+            return
+        try:
+            await self._loading_spinner.remove()
+        except Exception:
+            pass
+        self._loading_spinner = None
 
-        Args:
-            content: Message content
-            container: Container to add messages to
-        """
+    async def _begin_turn(self, container: ScrollableContainer, agent: str) -> None:
+        await self._remove_spinner()
+        await container.mount(
+            MessageBubble(
+                content="",
+                role="assistant",
+                agent=agent,
+                classes="message assistant-message",
+            )
+        )
+        self._active_turn = AssistantTurnState()
+
+    async def _send_message_async(
+        self, content: str, container: ScrollableContainer
+    ) -> None:
+        """Send a message and stream assistant output."""
         from ..core.bus import Bus
         from ..permission import Permission, PermissionAsked, PermissionReply
 
-        # Subscribe to permission events — show dialog when permission is requested
-        async def on_permission_asked(payload):
+        async def on_permission_asked(payload: Any) -> None:
             request_data = payload.properties
             prompt = self.query_one("#prompt-input", PromptInput)
             prompt.disabled = True
-
             try:
-                result = await self.app.push_screen_wait(
-                    PermissionDialog(request=request_data)
-                )
+                result = await self.app.push_screen_wait(PermissionDialog(request=request_data))
                 reply_type, message = result or ("reject", None)
                 await Permission.reply(
                     request_id=request_data["id"],
@@ -396,7 +468,6 @@ class SessionScreen(Screen):
                     message=message,
                 )
             except Exception:
-                # If dialog fails, reject to unblock
                 await Permission.reply(
                     request_id=request_data["id"],
                     reply=PermissionReply.REJECT,
@@ -405,30 +476,25 @@ class SessionScreen(Screen):
                 prompt.disabled = False
 
         unsub = Bus.subscribe(PermissionAsked, on_permission_asked)
-
         try:
-            # Get contexts
             sdk = use_sdk()
             sync = use_sync()
             local = use_local()
 
-            # Get current agent and model
             agent = local.agent.current().get("name", "build")
             model_selection = local.model.current()
             model = None
             if model_selection:
                 model = f"{model_selection.provider_id}/{model_selection.model_id}"
 
-            # Create session if needed
             if not self.session_id:
                 session_data = await sdk.create_session(agent=agent, model=model)
                 self.session_id = session_data["id"]
                 sync.update_session(session_data)
-
-            # Stream the response — component-per-part model
-            # Each text segment between tool calls gets its own widget.
-            text_parts: Dict[str, AssistantTextPart] = {}  # part_id -> widget
-            header_mounted = False
+                route = use_route()
+                if route.is_session():
+                    route.data.session_id = self.session_id
+                self._refresh_header()
 
             async for event in sdk.send_message(
                 session_id=self.session_id,
@@ -437,137 +503,129 @@ class SessionScreen(Screen):
                 model=model,
             ):
                 event_type = event.get("type")
-
                 if event_type == "message.created":
-                    # Remove spinner
-                    try:
-                        spinner = self.query_one("#loading-spinner")
-                        await spinner.remove()
-                    except Exception:
-                        pass
-
-                    # Mount a header label for the assistant turn
-                    header = MessageBubble(
-                        content="",
-                        role="assistant",
-                        agent=agent,
-                        classes="message assistant-message"
-                    )
-                    await container.mount(header)
-                    header_mounted = True
-
+                    await self._begin_turn(container, agent)
                 elif event_type == "message.part.updated":
-                    part = event.get("data", {}).get("part", {})
-                    if part.get("type") == "text":
-                        part_id = part.get("id", "")
-                        part_text = part.get("text", "")
-                        if part_id in text_parts:
-                            # Update existing text segment
-                            text_parts[part_id].content = part_text
-                            text_parts[part_id].refresh()
-                        else:
-                            # New text segment — mount a new widget
-                            text_widget = AssistantTextPart(
-                                content=part_text,
-                                part_id=part_id,
-                                classes="message assistant-message",
-                            )
-                            text_parts[part_id] = text_widget
-                            await container.mount(text_widget)
-
+                    await self._handle_part_update(event, container, agent)
                 elif event_type == "message.part.tool.start":
-                    data = event.get("data", {})
-                    tool_id = data.get("tool_id", "")
-                    tool_name = data.get("tool_name", "")
-                    input_data = data.get("input", {})
-
-                    if tool_id in self._tool_widgets:
-                        # Update existing widget with parsed input
-                        widget = self._tool_widgets[tool_id]
-                        widget.input_data = input_data
-                        widget.refresh()
-                    else:
-                        # Mount a new ToolDisplay
-                        tool_widget = ToolDisplay(
-                            tool_name=tool_name,
-                            tool_id=tool_id,
-                            status="running",
-                            input_data=input_data,
-                            classes="message tool-display",
-                        )
-                        self._tool_widgets[tool_id] = tool_widget
-                        await container.mount(tool_widget)
-
+                    await self._handle_tool_start(event, container, agent)
                 elif event_type == "message.part.tool.end":
-                    data = event.get("data", {})
-                    tool_id = data.get("tool_id", "")
-
-                    if tool_id in self._tool_widgets:
-                        widget = self._tool_widgets[tool_id]
-                        widget.output = data.get("output")
-                        widget.error = data.get("error")
-                        widget.title = data.get("title", "")
-                        widget.metadata = data.get("metadata", {})
-                        widget.status = "error" if data.get("error") else "completed"
-                        widget.refresh()
-
+                    await self._handle_tool_end(event, container)
                 elif event_type == "message.completed":
-                    # Message complete — clear tool widget tracking
-                    self._tool_widgets.clear()
-
+                    self._active_turn = None
+                    if self.session_id:
+                        await sync.sync_session(self.session_id)
                 elif event_type == "error":
                     error_msg = event.get("data", {}).get("error", "Unknown error")
                     self.app.notify(f"Error: {error_msg}", severity="error")
-                    # Remove spinner if still there
-                    try:
-                        spinner = self.query_one("#loading-spinner")
-                        await spinner.remove()
-                    except Exception:
-                        pass
+                    await self._remove_spinner()
 
-                # Scroll to bottom
                 container.scroll_end()
-
         except Exception as e:
-            # Show error
             self.app.notify(f"Error sending message: {str(e)}", severity="error")
-
-            # Remove spinner if still there
-            try:
-                spinner = self.query_one("#loading-spinner")
-                await spinner.remove()
-            except Exception:
-                pass
+            await self._remove_spinner()
         finally:
             unsub()
+            await self._remove_spinner()
+            self._active_turn = None
+            prompt = self.query_one("#prompt-input", PromptInput)
+            prompt.disabled = False
+            prompt.focus()
+
+    async def _ensure_turn(
+        self, container: ScrollableContainer, agent: str
+    ) -> AssistantTurnState:
+        if self._active_turn is None:
+            await self._begin_turn(container, agent)
+        return self._active_turn or AssistantTurnState()
+
+    async def _handle_part_update(
+        self, event: Dict[str, Any], container: ScrollableContainer, agent: str
+    ) -> None:
+        part = event.get("data", {}).get("part", {})
+        if part.get("type") != "text":
+            return
+
+        part_id = part.get("id", "")
+        text = part.get("text", "")
+        turn = await self._ensure_turn(container, agent)
+
+        widget = turn.text_parts.get(part_id)
+        if widget:
+            widget.content = text
+            widget.refresh()
+            return
+
+        text_widget = AssistantTextPart(
+            content=text,
+            part_id=part_id,
+            classes="message assistant-message",
+        )
+        turn.text_parts[part_id] = text_widget
+        await container.mount(text_widget)
+
+    async def _handle_tool_start(
+        self, event: Dict[str, Any], container: ScrollableContainer, agent: str
+    ) -> None:
+        data = event.get("data", {})
+        tool_id = data.get("tool_id", "")
+        tool_name = data.get("tool_name", "tool")
+        input_data = data.get("input", {})
+        turn = await self._ensure_turn(container, agent)
+
+        widget = turn.tool_widgets.get(tool_id)
+        if widget:
+            widget.status = "running"
+            widget.input_data = input_data
+            widget.refresh()
+            return
+
+        widget = ToolDisplay(
+            tool_name=tool_name,
+            tool_id=tool_id,
+            status="running",
+            input_data=input_data,
+            classes="message tool-display",
+        )
+        turn.tool_widgets[tool_id] = widget
+        await container.mount(widget)
+
+    async def _handle_tool_end(
+        self, event: Dict[str, Any], container: ScrollableContainer
+    ) -> None:
+        if self._active_turn is None:
+            return
+
+        data = event.get("data", {})
+        tool_id = data.get("tool_id", "")
+        widget = self._active_turn.tool_widgets.get(tool_id)
+        if not widget:
+            return
+
+        widget.output = data.get("output")
+        widget.error = data.get("error")
+        widget.title = data.get("title", "")
+        widget.metadata = data.get("metadata", {})
+        widget.status = "error" if data.get("error") else "completed"
+        widget.refresh()
 
     def action_command_palette(self) -> None:
-        """Show command palette."""
         self.app.action_command_palette()
 
     def action_new_session(self) -> None:
-        """Start a new session."""
-        self.app.push_screen(HomeScreen())
+        use_route().navigate(HomeRoute())
 
     def action_session_list(self) -> None:
-        """Show session list."""
-        # TODO: Implement session list dialog
-        pass
+        self.app.action_session_list()
 
     def action_go_home(self) -> None:
-        """Go back to home screen."""
-        self.app.pop_screen()
+        use_route().navigate(HomeRoute())
 
     def action_page_up(self) -> None:
-        """Scroll messages up."""
-        container = self.query_one("#messages-container")
-        container.scroll_page_up()
+        self.query_one("#messages-container", ScrollableContainer).scroll_page_up()
 
     def action_page_down(self) -> None:
-        """Scroll messages down."""
-        container = self.query_one("#messages-container")
-        container.scroll_page_down()
+        self.query_one("#messages-container", ScrollableContainer).scroll_page_down()
 
     def action_quit(self) -> None:
-        """Quit the application."""
         self.app.exit()
