@@ -341,13 +341,14 @@ class SyncContext:
         self._data.paths = paths
 
     # Session sync
-    async def sync_session(self, session_id: str) -> None:
+    async def sync_session(self, session_id: str, force: bool = False) -> None:
         """Sync a session's full data (loads messages from disk).
 
         Args:
             session_id: Session ID to sync
+            force: If True, re-sync even if already synced
         """
-        if session_id in self._synced_sessions:
+        if not force and session_id in self._synced_sessions:
             return
 
         from ...session import Session

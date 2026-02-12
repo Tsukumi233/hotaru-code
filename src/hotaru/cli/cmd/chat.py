@@ -158,6 +158,7 @@ async def chat_command(
             console.print("[bold green]Assistant[/bold green]")
 
             response_text = ""
+            result = None
             text_buffer = Text()
 
             def on_text(text: str):
@@ -257,7 +258,16 @@ async def chat_command(
                 root=sandbox,
                 created=now,
             )
-            Message.add_text(assistant_message, response_text)
+            if response_text:
+                Message.add_text(assistant_message, response_text)
+            for tc in (result.tool_calls if result else []):
+                Message.add_tool_result(
+                    assistant_message,
+                    tool_call_id=tc.id,
+                    tool_name=tc.name,
+                    args=tc.input,
+                    result=tc.output if tc.status == "completed" else (tc.error or ""),
+                )
             Message.complete(assistant_message, int(time.time() * 1000))
             await Session.add_message(session.id, assistant_message)
 

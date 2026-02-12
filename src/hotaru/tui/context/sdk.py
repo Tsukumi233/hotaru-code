@@ -15,7 +15,7 @@ from ...agent import Agent
 from ...core.id import Identifier
 from ...project import Project
 from ...provider import Provider
-from ...session import Session, SessionProcessor, SystemPrompt
+from ...session import Message, Session, SessionProcessor, SystemPrompt
 from ...util.log import Log
 
 log = Log.create({"service": "tui.context.sdk"})
@@ -125,6 +125,16 @@ class SDKContext:
 
         # Load prior conversation history for resumed sessions
         await processor.load_history()
+
+        # Persist user message to disk so load_history() can find it
+        now = int(time.time() * 1000)
+        user_msg = Message.create_user(
+            message_id=Identifier.ascending("message"),
+            session_id=session_id,
+            text=content,
+            created=now,
+        )
+        await Session.add_message(session_id, user_msg)
 
         # Build system prompt
         system_prompt = SystemPrompt.build_full_prompt(
@@ -295,6 +305,29 @@ class SDKContext:
                     "data": {"error": result.error}
                 }
                 return
+
+            # Persist assistant message (with tool calls) to disk
+            assistant_msg = Message.create_assistant(
+                message_id=message_id,
+                session_id=session_id,
+                model_id=model_id,
+                provider_id=provider_id,
+                cwd=self._cwd,
+                root=self._sandbox or self._cwd,
+                created=now,
+            )
+            if response_text:
+                Message.add_text(assistant_msg, response_text)
+            for tc in result.tool_calls:
+                Message.add_tool_result(
+                    assistant_msg,
+                    tool_call_id=tc.id,
+                    tool_name=tc.name,
+                    args=tc.input,
+                    result=tc.output if tc.status == "completed" else (tc.error or ""),
+                )
+            Message.complete(assistant_msg, int(time.time() * 1000))
+            await Session.add_message(session_id, assistant_msg)
 
             # Yield completion event
             yield {

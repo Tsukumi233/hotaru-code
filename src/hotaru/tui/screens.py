@@ -514,7 +514,7 @@ class SessionScreen(Screen):
                 elif event_type == "message.completed":
                     self._active_turn = None
                     if self.session_id:
-                        await sync.sync_session(self.session_id)
+                        await sync.sync_session(self.session_id, force=True)
                 elif event_type == "error":
                     error_msg = event.get("data", {}).get("error", "Unknown error")
                     self.app.notify(f"Error: {error_msg}", severity="error")
