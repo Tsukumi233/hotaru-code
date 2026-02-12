@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from ..core.id import Identifier
 from ..util.log import Log
+from .external_directory import assert_external_directory
 from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "read"})
@@ -77,13 +78,16 @@ def _is_binary_file(filepath: Path) -> bool:
 
 async def read_execute(params: ReadParams, ctx: ToolContext) -> ToolResult:
     """Execute the read tool."""
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
     filepath = Path(params.file_path)
 
     # Make path absolute if relative
     if not filepath.is_absolute():
-        filepath = Path.cwd() / filepath
+        filepath = cwd / filepath
 
     title = filepath.name
+
+    await assert_external_directory(ctx, filepath)
 
     # Request permission
     await ctx.ask(

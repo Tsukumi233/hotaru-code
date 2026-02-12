@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from ..util.log import Log
+from .external_directory import assert_external_directory
 from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "glob"})
@@ -114,6 +115,15 @@ def _match_glob(root: Path, pattern: str, limit: int = 100) -> List[Tuple[Path, 
 
 async def glob_execute(params: GlobParams, ctx: ToolContext) -> ToolResult:
     """Execute the glob tool."""
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+
+    # Determine search path
+    search_path = Path(params.path) if params.path else cwd
+    if not search_path.is_absolute():
+        search_path = cwd / search_path
+
+    await assert_external_directory(ctx, search_path, kind="directory")
+
     # Request permission
     await ctx.ask(
         permission="glob",
@@ -124,11 +134,6 @@ async def glob_execute(params: GlobParams, ctx: ToolContext) -> ToolResult:
             "path": params.path,
         }
     )
-
-    # Determine search path
-    search_path = Path(params.path) if params.path else Path.cwd()
-    if not search_path.is_absolute():
-        search_path = Path.cwd() / search_path
 
     if not search_path.exists():
         raise FileNotFoundError(f"Directory not found: {search_path}")
@@ -157,8 +162,13 @@ async def glob_execute(params: GlobParams, ctx: ToolContext) -> ToolResult:
             output_lines.append("")
             output_lines.append("(Results are truncated. Consider using a more specific path or pattern.)")
 
+    try:
+        title = str(search_path.relative_to(cwd)) if search_path != cwd else "."
+    except ValueError:
+        title = str(search_path)
+
     return ToolResult(
-        title=str(search_path.relative_to(Path.cwd())) if search_path != Path.cwd() else ".",
+        title=title,
         output="\n".join(output_lines),
         metadata={
             "count": len(files),

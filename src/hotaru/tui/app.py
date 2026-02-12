@@ -340,6 +340,7 @@ class TuiApp(App):
             from ..session import Session
             from ..provider import Provider as ProviderModule
             from ..agent import Agent
+            from ..core.config import ConfigManager
             from .context.local import ModelSelection
 
             # Ensure project context
@@ -381,14 +382,39 @@ class TuiApp(App):
 
             # Initialize model and agent selection
             try:
-                model_value = self.model
-                if model_value:
-                    provider_id, model_id = ProviderModule.parse_model(model_value)
-                else:
+                selected_model: Optional[ModelSelection] = None
+
+                if self.model:
+                    provider_id, model_id = ProviderModule.parse_model(self.model)
+                    candidate = ModelSelection(provider_id=provider_id, model_id=model_id)
+                    if self.local_ctx.model.is_available(candidate):
+                        selected_model = candidate
+                    else:
+                        log.warning("requested startup model unavailable", {"model": self.model})
+
+                if selected_model is None:
+                    config = await ConfigManager.get()
+                    if config.model:
+                        provider_id, model_id = ProviderModule.parse_model(config.model)
+                        candidate = ModelSelection(provider_id=provider_id, model_id=model_id)
+                        if self.local_ctx.model.is_available(candidate):
+                            selected_model = candidate
+                        else:
+                            log.warning("configured default model unavailable", {"model": config.model})
+
+                if selected_model is None:
+                    selected_model = self.local_ctx.model.current()
+
+                if selected_model is None:
+                    selected_model = self.local_ctx.model.first_available()
+
+                if selected_model is None:
                     provider_id, model_id = await ProviderModule.default_model()
+                    selected_model = ModelSelection(provider_id=provider_id, model_id=model_id)
+
                 self.local_ctx.model.set(
-                    ModelSelection(provider_id=provider_id, model_id=model_id),
-                    add_to_recent=True
+                    selected_model,
+                    add_to_recent=bool(self.model),
                 )
             except Exception as e:
                 log.warning("failed to set initial model", {"error": str(e)})

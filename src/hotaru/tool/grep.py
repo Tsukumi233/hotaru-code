@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from ..util.log import Log
+from .external_directory import assert_external_directory
 from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "grep"})
@@ -91,6 +92,22 @@ async def grep_execute(params: GrepParams, ctx: ToolContext) -> ToolResult:
     if not params.pattern:
         raise ValueError("pattern is required")
 
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+
+    # Determine search path
+    search_path = Path(params.path) if params.path else cwd
+    if not search_path.is_absolute():
+        search_path = cwd / search_path
+
+    if not search_path.exists():
+        raise FileNotFoundError(f"Path not found: {search_path}")
+
+    await assert_external_directory(
+        ctx,
+        search_path,
+        kind="directory" if search_path.is_dir() else "file",
+    )
+
     # Request permission
     await ctx.ask(
         permission="grep",
@@ -102,14 +119,6 @@ async def grep_execute(params: GrepParams, ctx: ToolContext) -> ToolResult:
             "include": params.include,
         }
     )
-
-    # Determine search path
-    search_path = Path(params.path) if params.path else Path.cwd()
-    if not search_path.is_absolute():
-        search_path = Path.cwd() / search_path
-
-    if not search_path.exists():
-        raise FileNotFoundError(f"Path not found: {search_path}")
 
     # Compile regex
     try:

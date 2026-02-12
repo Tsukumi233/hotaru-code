@@ -6,6 +6,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from ..util.log import Log
+from .external_directory import assert_external_directory
 from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "write"})
@@ -46,13 +47,16 @@ def _create_diff(old_content: str, new_content: str, filepath: str) -> str:
 
 async def write_execute(params: WriteParams, ctx: ToolContext) -> ToolResult:
     """Execute the write tool."""
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
     filepath = Path(params.file_path)
 
     # Make path absolute if relative
     if not filepath.is_absolute():
-        filepath = Path.cwd() / filepath
+        filepath = cwd / filepath
 
     title = filepath.name
+
+    await assert_external_directory(ctx, filepath)
 
     # Check if file exists and get old content
     exists = filepath.exists()

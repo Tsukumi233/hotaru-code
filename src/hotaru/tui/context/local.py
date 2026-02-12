@@ -119,6 +119,25 @@ class ModelState:
         self._listeners: List[Callable[[Optional[ModelSelection]], None]] = []
         self._path = Path(GlobalPath.state) / "model.json"
         self._load()
+        self._ensure_current()
+
+    def _is_available(self, model: ModelSelection) -> bool:
+        for provider in self._providers:
+            if provider.get("id") != model.provider_id:
+                continue
+            models = provider.get("models", {})
+            return model.model_id in models
+        return False
+
+    def _ensure_current(self) -> None:
+        if self._current and self._is_available(self._current):
+            return
+
+        self._current = None
+        for model in self._recent:
+            if self._is_available(model):
+                self._current = model
+                return
 
     def _load(self) -> None:
         """Load model state from disk."""
@@ -130,12 +149,24 @@ class ModelState:
                         self._recent = [
                             ModelSelection(m["provider_id"], m["model_id"])
                             for m in data["recent"]
+                            if "provider_id" in m and "model_id" in m
                         ]
                     if "favorite" in data:
                         self._favorite = [
                             ModelSelection(m["provider_id"], m["model_id"])
                             for m in data["favorite"]
+                            if "provider_id" in m and "model_id" in m
                         ]
+                    current = data.get("current")
+                    if (
+                        isinstance(current, dict)
+                        and "provider_id" in current
+                        and "model_id" in current
+                    ):
+                        self._current = ModelSelection(
+                            current["provider_id"],
+                            current["model_id"],
+                        )
         except Exception as e:
             log.warning("failed to load model state", {"error": str(e)})
 
@@ -145,6 +176,14 @@ class ModelState:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._path, "w", encoding="utf-8") as f:
                 json.dump({
+                    "current": (
+                        {
+                            "provider_id": self._current.provider_id,
+                            "model_id": self._current.model_id,
+                        }
+                        if self._current
+                        else None
+                    ),
                     "recent": [
                         {"provider_id": m.provider_id, "model_id": m.model_id}
                         for m in self._recent
@@ -196,7 +235,7 @@ class ModelState:
             self._recent.insert(0, model)
             # Limit to 10
             self._recent = self._recent[:10]
-            self._save()
+        self._save()
 
         self._notify()
 
@@ -228,6 +267,7 @@ class ModelState:
             next_idx = (current_idx + direction) % len(self._recent)
             self._current = self._recent[next_idx]
 
+        self._save()
         self._notify()
 
     def toggle_favorite(self, model: ModelSelection) -> bool:
@@ -255,6 +295,23 @@ class ModelState:
             if m.provider_id == model.provider_id and m.model_id == model.model_id:
                 return True
         return False
+
+    def first_available(self) -> Optional[ModelSelection]:
+        """Return first available provider/model pair."""
+        for provider in self._providers:
+            provider_id = provider.get("id")
+            models = provider.get("models", {})
+            if not provider_id or not models:
+                continue
+            first_model_id = next(iter(models.keys()), None)
+            if not first_model_id:
+                continue
+            return ModelSelection(provider_id=provider_id, model_id=first_model_id)
+        return None
+
+    def is_available(self, model: ModelSelection) -> bool:
+        """Check whether a model exists in current provider list."""
+        return self._is_available(model)
 
     def _notify(self) -> None:
         """Notify listeners of change."""

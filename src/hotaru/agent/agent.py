@@ -4,11 +4,13 @@ Agents are configured AI personas with specific permissions and behaviors.
 """
 
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from ..core.config import ConfigManager
+from ..core.global_paths import GlobalPath
 from ..util.log import Log
 
 log = Log.create({"service": "agent"})
@@ -87,31 +89,52 @@ class Agent:
         log.info("initializing agents")
         config = await ConfigManager.get()
 
+        def parse_permissions(permission_config: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            rules: List[Dict[str, Any]] = []
+            if not permission_config:
+                return rules
+
+            for key, value in permission_config.items():
+                if isinstance(value, str):
+                    rules.append({
+                        "permission": key,
+                        "pattern": "*",
+                        "action": value,
+                    })
+                    continue
+
+                if isinstance(value, dict):
+                    for pattern, action in value.items():
+                        rules.append({
+                            "permission": key,
+                            "pattern": pattern,
+                            "action": action,
+                        })
+
+            return rules
+
+        tool_output_glob = str(Path(GlobalPath.data) / "tool-output" / "*")
+        strict_permissions = bool(config.strict_permissions)
+
         # Default permission rules
         default_permissions = [
             {"permission": "*", "pattern": "*", "action": "allow"},
             {"permission": "doom_loop", "pattern": "*", "action": "ask"},
             {"permission": "external_directory", "pattern": "*", "action": "ask"},
+            {"permission": "external_directory", "pattern": tool_output_glob, "action": "allow"},
+            {"permission": "read", "pattern": "*.env", "action": "ask"},
+            {"permission": "read", "pattern": "*.env.*", "action": "ask"},
+            {"permission": "read", "pattern": "*.env.example", "action": "allow"},
             {"permission": "question", "pattern": "*", "action": "deny"},
         ]
+        if strict_permissions:
+            default_permissions.extend([
+                {"permission": "edit", "pattern": "*", "action": "ask"},
+                {"permission": "bash", "pattern": "*", "action": "ask"},
+            ])
 
         # User permissions from config
-        user_permissions = []
-        if config.permission:
-            for key, value in config.permission.items():
-                if isinstance(value, str):
-                    user_permissions.append({
-                        "permission": key,
-                        "pattern": "*",
-                        "action": value
-                    })
-                elif isinstance(value, dict):
-                    for pattern, action in value.items():
-                        user_permissions.append({
-                            "permission": key,
-                            "pattern": pattern,
-                            "action": action
-                        })
+        user_permissions = parse_permissions(config.permission)
 
         def merge_permissions(*rulesets):
             """Merge permission rulesets."""
@@ -170,7 +193,7 @@ class Agent:
                         {"permission": "grep", "pattern": "*", "action": "allow"},
                         {"permission": "glob", "pattern": "*", "action": "allow"},
                         {"permission": "read", "pattern": "*", "action": "allow"},
-                        {"permission": "bash", "pattern": "*", "action": "allow"},
+                        {"permission": "bash", "pattern": "*", "action": "ask" if strict_permissions else "allow"},
                     ],
                     user_permissions
                 ),
@@ -247,6 +270,11 @@ class Agent:
                     agent.steps = agent_config.steps
                 if agent_config.options:
                     agent.options.update(agent_config.options)
+                if agent_config.permission:
+                    agent.permission = merge_permissions(
+                        agent.permission,
+                        parse_permissions(agent_config.permission),
+                    )
 
         cls._agents = agents
         return agents

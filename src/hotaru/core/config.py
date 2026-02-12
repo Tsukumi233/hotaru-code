@@ -188,6 +188,7 @@ class Config(BaseModel):
 
     # Permission settings
     permission: Optional[Dict[str, Any]] = None
+    strict_permissions: Optional[bool] = None
 
     # Server settings
     server: Optional[ServerConfig] = None

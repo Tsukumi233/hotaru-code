@@ -8,6 +8,7 @@ from typing import Generator, Optional
 from pydantic import BaseModel, Field
 
 from ..util.log import Log
+from .external_directory import assert_external_directory
 from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "edit"})
@@ -291,8 +292,11 @@ async def edit_execute(params: EditParams, ctx: ToolContext) -> ToolResult:
         raise ValueError("old_string and new_string must be different")
 
     filepath = Path(params.file_path)
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
     if not filepath.is_absolute():
-        filepath = Path.cwd() / filepath
+        filepath = cwd / filepath
+
+    await assert_external_directory(ctx, filepath)
 
     # Handle creating new file with empty old_string
     if params.old_string == "":

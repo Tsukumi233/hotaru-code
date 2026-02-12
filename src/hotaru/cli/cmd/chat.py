@@ -95,6 +95,7 @@ async def chat_command(
         provider_id=provider_id,
         agent=agent_name,
         cwd=cwd,
+        worktree=sandbox,
     )
 
     # Build system prompt

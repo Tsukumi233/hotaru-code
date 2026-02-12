@@ -11,6 +11,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from ..util.log import Log
+from .external_directory import assert_external_directory
 from .tool import Tool, ToolContext, ToolResult
 from .truncation import Truncate
 
@@ -66,13 +67,19 @@ def _get_shell() -> str:
 
 async def bash_execute(params: BashParams, ctx: ToolContext) -> ToolResult:
     """Execute the bash tool."""
-    cwd = params.workdir or str(Path.cwd())
+    base_cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    cwd_path = Path(params.workdir) if params.workdir else base_cwd
+    if not cwd_path.is_absolute():
+        cwd_path = base_cwd / cwd_path
+    cwd = str(cwd_path.resolve())
 
     if params.timeout is not None and params.timeout < 0:
         raise ValueError(f"Invalid timeout value: {params.timeout}. Timeout must be a positive number.")
 
     timeout_ms = params.timeout or DEFAULT_TIMEOUT
     timeout_sec = timeout_ms / 1000
+
+    await assert_external_directory(ctx, cwd_path, kind="directory")
 
     # Request permission
     await ctx.ask(

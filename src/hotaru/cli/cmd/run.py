@@ -180,6 +180,7 @@ async def run_command(
         provider_id=provider_id,
         agent=agent_name,
         cwd=cwd,
+        worktree=sandbox,
     )
 
     # Load prior conversation history when resuming

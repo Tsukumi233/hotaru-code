@@ -120,6 +120,7 @@ class SDKContext:
             provider_id=provider_id,
             agent=agent_name,
             cwd=self._cwd,
+            worktree=self._sandbox or self._cwd,
         )
 
         # Load prior conversation history for resumed sessions

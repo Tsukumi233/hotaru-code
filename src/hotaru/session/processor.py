@@ -62,6 +62,7 @@ class SessionProcessor:
         provider_id: str,
         agent: str,
         cwd: str,
+        worktree: Optional[str] = None,
         max_turns: int = 100,
     ):
         """Initialize the processor.
@@ -72,6 +73,7 @@ class SessionProcessor:
             provider_id: Provider ID
             agent: Agent name
             cwd: Current working directory
+            worktree: Project worktree/sandbox root
             max_turns: Maximum number of turns
         """
         self.session_id = session_id
@@ -79,10 +81,12 @@ class SessionProcessor:
         self.provider_id = provider_id
         self.agent = agent
         self.cwd = cwd
+        self.worktree = worktree or cwd
         self.max_turns = max_turns
         self.turn = 0
         self.messages: List[Dict[str, Any]] = []
         self.tool_calls: Dict[str, ToolCallState] = {}
+        self._recent_tool_signatures: List[str] = []
 
     async def load_history(self) -> None:
         """Load prior conversation history from persisted messages.
@@ -412,13 +416,15 @@ class SessionProcessor:
             log.warn("failed to load agent permissions", {"error": str(e)})
 
         try:
+            await self._check_doom_loop(tool_name, tool_input, agent_ruleset)
+
             # Create tool context with permission ruleset
             ctx = ToolContext(
                 session_id=self.session_id,
                 message_id=Identifier.ascending("message"),
                 agent=self.agent,
                 call_id=Identifier.ascending("call"),
-                extra={"cwd": self.cwd},
+                extra={"cwd": self.cwd, "worktree": self.worktree},
                 _ruleset=agent_ruleset,
             )
 
@@ -443,6 +449,38 @@ class SessionProcessor:
         except Exception as e:
             log.error("tool execution error", {"tool": tool_name, "error": str(e)})
             return {"error": str(e)}
+
+    async def _check_doom_loop(
+        self,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+        agent_ruleset: List[Dict[str, Any]],
+    ) -> None:
+        signature = f"{tool_name}:{json.dumps(tool_input, sort_keys=True, default=str)}"
+        self._recent_tool_signatures.append(signature)
+        if len(self._recent_tool_signatures) > 50:
+            self._recent_tool_signatures = self._recent_tool_signatures[-50:]
+
+        if len(self._recent_tool_signatures) < DOOM_LOOP_THRESHOLD:
+            return
+
+        recent = self._recent_tool_signatures[-DOOM_LOOP_THRESHOLD:]
+        if len(set(recent)) != 1:
+            return
+
+        from ..permission import Permission
+
+        await Permission.ask(
+            session_id=self.session_id,
+            permission="doom_loop",
+            patterns=[tool_name],
+            ruleset=Permission.from_config_list(agent_ruleset),
+            always=[tool_name],
+            metadata={
+                "tool": tool_name,
+                "input": tool_input,
+            },
+        )
 
     async def _call_callback(self, callback: callable, *args) -> None:
         """Call a callback, handling both sync and async."""
