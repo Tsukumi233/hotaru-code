@@ -28,6 +28,10 @@ def test_search_includes_disabled_commands() -> None:
 def test_transcript_commands_are_enabled() -> None:
     registry = _build_registry()
 
+    assert registry.get("session.undo").enabled is True
+    assert registry.get("session.redo").enabled is True
+    assert registry.get("session.undo").slash_name == "undo"
+    assert registry.get("session.redo").slash_name == "redo"
     assert registry.get("session.rename").enabled is True
     assert registry.get("session.copy").enabled is True
     assert registry.get("session.export").enabled is True

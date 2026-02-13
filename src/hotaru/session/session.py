@@ -328,6 +328,43 @@ class Session:
         return messages
 
     @classmethod
+    async def delete_messages(
+        cls,
+        session_id: str,
+        message_ids: List[str],
+    ) -> int:
+        """Delete specific messages from a session.
+
+        Args:
+            session_id: Session ID
+            message_ids: Message IDs to remove
+
+        Returns:
+            Number of requested message IDs processed
+        """
+        if not message_ids:
+            return 0
+
+        session = await cls.get(session_id)
+        if not session:
+            return 0
+
+        for message_id in message_ids:
+            await Storage.remove(cls._message_key(session_id, message_id))
+
+        try:
+            updated_data = await Storage.update(
+                cls._session_key(session.project_id, session_id),
+                lambda d: d["time"].__setitem__("updated", int(time.time() * 1000)),
+            )
+        except NotFoundError:
+            return 0
+        updated_session = SessionInfo.model_validate(updated_data)
+        await Bus.publish(SessionUpdated, SessionUpdatedProperties(session=updated_session))
+
+        return len(message_ids)
+
+    @classmethod
     async def fork(
         cls,
         session_id: str,

@@ -170,6 +170,8 @@ class SessionScreen(Screen):
         Binding("ctrl+x", "command_palette", "Commands"),
         Binding("ctrl+n", "new_session", "New"),
         Binding("ctrl+s", "session_list", "Sessions"),
+        Binding("ctrl+z", "undo", "Undo"),
+        Binding("ctrl+y", "redo", "Redo"),
         Binding("escape", "go_home", "Home"),
         Binding("pageup", "page_up", "Page Up", show=False),
         Binding("pagedown", "page_down", "Page Down", show=False),
@@ -411,6 +413,9 @@ class SessionScreen(Screen):
         content = content.strip()
         if not content:
             return
+
+        if self.session_id:
+            self.app.clear_session_redo(self.session_id)
 
         if content.startswith("!"):
             command = content[1:].strip()
@@ -738,6 +743,23 @@ class SessionScreen(Screen):
 
     def action_page_down(self) -> None:
         self.query_one("#messages-container", ScrollableContainer).scroll_page_down()
+
+    def action_undo(self) -> None:
+        self.app.execute_command("session.undo", source="keybind")
+
+    def action_redo(self) -> None:
+        self.app.execute_command("session.redo", source="keybind")
+
+    async def refresh_history(self) -> None:
+        """Refresh session messages from persisted storage."""
+        await self._load_session_history()
+
+    def set_prompt_text(self, text: str) -> None:
+        """Set prompt input value and keep focus on input."""
+        prompt = self.query_one("#prompt-input", PromptInput)
+        prompt.value = text
+        prompt.cursor_position = len(text)
+        prompt.focus()
 
     def action_quit(self) -> None:
         self.app.exit()

@@ -526,6 +526,8 @@ class HelpDialog(DialogBase):
   [cyan]Ctrl+X[/cyan]     Open command palette
   [cyan]Ctrl+N[/cyan]     New session
   [cyan]Ctrl+S[/cyan]     Switch session
+  [cyan]Ctrl+Z[/cyan]     Undo last turn
+  [cyan]Ctrl+Y[/cyan]     Redo undone turn
   [cyan]Ctrl+M[/cyan]     Switch model
   [cyan]Ctrl+A[/cyan]     Switch agent
   [cyan]Ctrl+T[/cyan]     Toggle theme
@@ -535,6 +537,8 @@ class HelpDialog(DialogBase):
 
   [cyan]/new[/cyan]       Start new session
   [cyan]/sessions[/cyan]  List sessions
+  [cyan]/undo[/cyan]      Undo last turn
+  [cyan]/redo[/cyan]      Redo undone turn
   [cyan]/rename[/cyan]    Rename current session (supports /rename <title>)
   [cyan]/models[/cyan]    List models
   [cyan]/connect[/cyan]   Connect provider

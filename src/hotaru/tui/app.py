@@ -8,10 +8,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer
 from textual.command import CommandPalette, Provider, Hit, Hits
+from copy import deepcopy
 from pathlib import Path
 import re
 from urllib.parse import urlparse
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import ValidationError
 
 from .screens import HomeScreen, SessionScreen
@@ -19,6 +20,7 @@ from .theme import ThemeManager
 from .commands import CommandRegistry, Command, create_default_commands
 from .transcript import TranscriptOptions, format_transcript
 from .input_parsing import parse_slash_command
+from .turns import extract_user_text_from_turn, split_messages_for_undo
 from .context import (
     RouteProvider, HomeRoute, SessionRoute,
     ArgsProvider, Args,
@@ -196,6 +198,7 @@ class TuiApp(App):
         # Initialize command registry
         self.command_registry = CommandRegistry()
         self._register_default_commands()
+        self._redo_turns: Dict[str, List[List[Dict[str, Any]]]] = {}
 
         # Load theme preference
         ThemeManager.load_preference()
@@ -291,6 +294,14 @@ class TuiApp(App):
             elif command.id == "session.share":
                 command.on_select = (
                     lambda source="palette", argument=None: self.action_session_share()
+                )
+            elif command.id == "session.undo":
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_undo()
+                )
+            elif command.id == "session.redo":
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_redo()
                 )
             elif command.id == "session.rename":
                 command.on_select = (
@@ -620,6 +631,20 @@ class TuiApp(App):
         """Rename the active session."""
         self.run_worker(self._rename_session(title), exclusive=False)
 
+    def action_session_undo(self) -> None:
+        """Undo the latest user turn in the active session."""
+        self.run_worker(self._undo_session_turn(), exclusive=False)
+
+    def action_session_redo(self) -> None:
+        """Redo the most recently undone user turn in the active session."""
+        self.run_worker(self._redo_session_turn(), exclusive=False)
+
+    def clear_session_redo(self, session_id: Optional[str]) -> None:
+        """Clear redo history for a session."""
+        if not session_id:
+            return
+        self._redo_turns.pop(session_id, None)
+
     async def _rename_session(self, title: Optional[str]) -> None:
         from ..session import Session
         from .dialogs import InputDialog
@@ -668,6 +693,102 @@ class TuiApp(App):
             }
         )
         self.notify(f"Renamed session to '{next_title}'.")
+
+    async def _undo_session_turn(self) -> None:
+        from ..session import Session
+
+        session_id = self._active_session_id()
+        if not session_id:
+            self.notify("Open a session first to undo.", severity="warning")
+            return
+
+        sync = self.sync_ctx
+        if not sync.is_session_synced(session_id):
+            await sync.sync_session(session_id)
+
+        messages = sync.get_messages(session_id)
+        _, removed = split_messages_for_undo(messages)
+        if not removed:
+            self.notify("No user turn available to undo.", severity="warning")
+            return
+
+        message_ids = [
+            str(message.get("id"))
+            for message in removed
+            if isinstance(message, dict) and message.get("id")
+        ]
+        if not message_ids:
+            self.notify("Failed to identify messages to undo.", severity="error")
+            return
+
+        deleted = await Session.delete_messages(session_id, message_ids)
+        if deleted <= 0:
+            self.notify("Undo failed: session messages were not updated.", severity="error")
+            return
+
+        self._redo_turns.setdefault(session_id, []).append(deepcopy(removed))
+        await sync.sync_session(session_id, force=True)
+        await self._refresh_active_session_screen(
+            session_id,
+            prompt_text=extract_user_text_from_turn(removed),
+        )
+        self.notify("Undid the last turn. Use /redo to restore it.")
+
+    async def _redo_session_turn(self) -> None:
+        from ..session import MessageInfo, Session
+
+        session_id = self._active_session_id()
+        if not session_id:
+            self.notify("Open a session first to redo.", severity="warning")
+            return
+
+        stack = self._redo_turns.get(session_id) or []
+        if not stack:
+            self.notify("Nothing to redo.", severity="warning")
+            return
+
+        turn = stack.pop()
+        if not stack:
+            self._redo_turns.pop(session_id, None)
+        else:
+            self._redo_turns[session_id] = stack
+
+        restored = 0
+        for message in turn:
+            try:
+                parsed = MessageInfo.model_validate(message)
+            except Exception:
+                continue
+            await Session.add_message(session_id, parsed)
+            restored += 1
+
+        if restored == 0:
+            self.notify("Redo failed: no messages could be restored.", severity="error")
+            return
+
+        await self.sync_ctx.sync_session(session_id, force=True)
+        await self._refresh_active_session_screen(session_id, prompt_text="")
+        self.notify("Redid one turn.")
+
+    async def _refresh_active_session_screen(
+        self,
+        session_id: str,
+        prompt_text: Optional[str] = None,
+    ) -> None:
+        """Refresh currently visible session screen after history mutations."""
+        try:
+            screen = self.screen
+        except Exception:
+            return
+
+        if not isinstance(screen, SessionScreen):
+            return
+        if screen.session_id != session_id:
+            return
+
+        await screen.refresh_history()
+        if prompt_text is not None:
+            screen.set_prompt_text(prompt_text)
 
     def _on_session_selected(self, result) -> None:
         """Handle session selection from dialog."""

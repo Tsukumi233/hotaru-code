@@ -267,6 +267,20 @@ def create_default_commands() -> List[Command]:
             slash_name="share",
         ),
         Command(
+            id="session.undo",
+            title="Undo previous turn",
+            category=CommandCategory.SESSION,
+            keybind="ctrl+z",
+            slash_name="undo",
+        ),
+        Command(
+            id="session.redo",
+            title="Redo undone turn",
+            category=CommandCategory.SESSION,
+            keybind="ctrl+y",
+            slash_name="redo",
+        ),
+        Command(
             id="session.rename",
             title="Rename session",
             category=CommandCategory.SESSION,
