@@ -535,6 +535,7 @@ class HelpDialog(DialogBase):
 
   [cyan]/new[/cyan]       Start new session
   [cyan]/sessions[/cyan]  List sessions
+  [cyan]/rename[/cyan]    Rename current session (supports /rename <title>)
   [cyan]/models[/cyan]    List models
   [cyan]/connect[/cyan]   Connect provider
   [cyan]/agents[/cyan]    List agents
@@ -551,6 +552,11 @@ class HelpDialog(DialogBase):
   [cyan]PageUp/Down[/cyan]   Scroll messages
   [cyan]Home/End[/cyan]      Jump to first/last message
   [cyan]Escape[/cyan]        Go back / Close dialog
+
+[bold]Prompt Input[/bold]
+
+  [cyan]@path[/cyan]         Attach UTF-8 file content to your prompt
+  [cyan]!command[/cyan]      Run a local shell command in-session
 """
 
     def compose(self) -> ComposeResult:

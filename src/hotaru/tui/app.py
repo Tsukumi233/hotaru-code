@@ -18,6 +18,7 @@ from .screens import HomeScreen, SessionScreen
 from .theme import ThemeManager
 from .commands import CommandRegistry, Command, create_default_commands
 from .transcript import TranscriptOptions, format_transcript
+from .input_parsing import parse_slash_command
 from .context import (
     RouteProvider, HomeRoute, SessionRoute,
     ArgsProvider, Args,
@@ -274,29 +275,57 @@ class TuiApp(App):
         for command in create_default_commands():
             # Bind command callbacks
             if command.id == "app.exit":
-                command.on_select = lambda source="palette": self.exit()
+                command.on_select = lambda source="palette", argument=None: self.exit()
             elif command.id in ("theme.toggle_mode", "theme.switch"):
-                command.on_select = lambda source="palette": self.action_toggle_theme()
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_toggle_theme()
+                )
             elif command.id == "session.new":
-                command.on_select = lambda source="palette": self.action_new_session()
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_new_session()
+                )
             elif command.id == "session.list":
-                command.on_select = lambda source="palette": self.action_session_list()
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_list()
+                )
             elif command.id == "session.share":
-                command.on_select = lambda source="palette": self.action_session_share()
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_share()
+                )
+            elif command.id == "session.rename":
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_rename(argument)
+                )
             elif command.id == "session.export":
-                command.on_select = lambda source="palette": self.action_session_export()
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_export()
+                )
             elif command.id == "session.copy":
-                command.on_select = lambda source="palette": self.action_session_copy()
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_copy()
+                )
             elif command.id == "provider.connect":
-                command.on_select = lambda source="palette": self.action_provider_connect()
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_provider_connect()
+                )
             elif command.id == "model.list":
-                command.on_select = lambda source="palette": self.action_model_list()
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_model_list(
+                        provider_filter=argument or None
+                    )
+                )
             elif command.id == "agent.list":
-                command.on_select = lambda source="palette": self.action_agent_list()
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_agent_list()
+                )
             elif command.id in ("mcp.list", "status.view"):
-                command.on_select = lambda source="palette": self.action_status_view()
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_status_view()
+                )
             elif command.id == "help.show":
-                command.on_select = lambda source="palette": self._show_help()
+                command.on_select = (
+                    lambda source="palette", argument=None: self._show_help()
+                )
 
             self.command_registry.register(command)
 
@@ -511,9 +540,18 @@ class TuiApp(App):
         # No sessions found, show home
         return HomeRoute()
 
-    def execute_command(self, command_id: str, source: str = "palette") -> None:
+    def execute_command(
+        self,
+        command_id: str,
+        source: str = "palette",
+        argument: Optional[str] = None,
+    ) -> None:
         """Execute a command and surface unavailable reasons to the user."""
-        executed, reason = self.command_registry.execute(command_id, source=source)
+        executed, reason = self.command_registry.execute(
+            command_id,
+            source=source,
+            argument=argument,
+        )
         if executed:
             return
 
@@ -521,6 +559,24 @@ class TuiApp(App):
             self.notify(reason, severity="warning")
             return
         self.notify("Command is not available right now.", severity="warning")
+
+    def execute_slash_command(self, raw_input: str, source: str = "slash") -> bool:
+        """Execute slash command text and return whether input was consumed."""
+        parsed = parse_slash_command(raw_input)
+        if not parsed:
+            return False
+
+        command = self.command_registry.get_by_slash(parsed.trigger)
+        if not command:
+            self.notify(f"Unknown command: /{parsed.trigger}", severity="warning")
+            return True
+
+        self.execute_command(
+            command.id,
+            source=source,
+            argument=parsed.args or None,
+        )
+        return True
 
     def action_toggle_theme(self) -> None:
         """Toggle between dark and light theme."""
@@ -559,6 +615,59 @@ class TuiApp(App):
             ),
             callback=self._on_session_selected
         )
+
+    def action_session_rename(self, title: Optional[str] = None) -> None:
+        """Rename the active session."""
+        self.run_worker(self._rename_session(title), exclusive=False)
+
+    async def _rename_session(self, title: Optional[str]) -> None:
+        from ..session import Session
+        from .dialogs import InputDialog
+
+        session_id = self._active_session_id()
+        if not session_id:
+            self.notify("Open a session first to rename it.", severity="warning")
+            return
+
+        next_title = (title or "").strip()
+        if not next_title:
+            current = self.sync_ctx.get_session(session_id) or {}
+            current_title = current.get("title", "Untitled")
+            result = await self.push_screen_wait(
+                InputDialog(
+                    title="Rename Session",
+                    placeholder="Session title",
+                    default_value=current_title,
+                    submit_label="Rename",
+                )
+            )
+            if result is None:
+                return
+            next_title = str(result).strip()
+
+        if not next_title:
+            self.notify("Session title cannot be empty.", severity="warning")
+            return
+
+        updated = await Session.update(session_id=session_id, title=next_title)
+        if not updated:
+            self.notify("Failed to rename session.", severity="error")
+            return
+
+        self.sync_ctx.update_session(
+            {
+                "id": updated.id,
+                "title": updated.title or "Untitled",
+                "agent": updated.agent,
+                "parentID": updated.parent_id,
+                "share": updated.share.model_dump() if updated.share else None,
+                "time": {
+                    "created": updated.time.created,
+                    "updated": updated.time.updated,
+                },
+            }
+        )
+        self.notify(f"Renamed session to '{next_title}'.")
 
     def _on_session_selected(self, result) -> None:
         """Handle session selection from dialog."""

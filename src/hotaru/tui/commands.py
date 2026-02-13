@@ -5,7 +5,7 @@ allowing users to execute commands via keyboard shortcuts or search.
 """
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional
 from enum import Enum
 
 
@@ -38,7 +38,7 @@ class Command:
     title: str
     category: CommandCategory = CommandCategory.SYSTEM
     keybind: Optional[str] = None
-    on_select: Optional[Union[Callable[[], None], Callable[[str], None]]] = None
+    on_select: Optional[Callable[..., None]] = None
     enabled: bool = True
     availability_reason: Optional[str] = None
     hidden: bool = False
@@ -134,12 +134,18 @@ class CommandRegistry:
             return self._commands.get(command_id)
         return None
 
-    def execute(self, command_id: str, source: str = "palette") -> tuple[bool, Optional[str]]:
+    def execute(
+        self,
+        command_id: str,
+        source: str = "palette",
+        argument: Optional[str] = None,
+    ) -> tuple[bool, Optional[str]]:
         """Execute a command by ID.
 
         Args:
             command_id: Command ID to execute
             source: Invocation source (palette, keybind, slash)
+            argument: Optional command argument text
 
         Returns:
             Tuple of (executed, unavailable reason)
@@ -155,9 +161,15 @@ class CommandRegistry:
             return False, "Command is not wired yet."
 
         try:
-            command.on_select(source)
+            command.on_select(source=source, argument=argument)
         except TypeError:
-            command.on_select()
+            try:
+                command.on_select(source, argument)
+            except TypeError:
+                try:
+                    command.on_select(source)
+                except TypeError:
+                    command.on_select()
         return True, None
 
     def list_commands(
@@ -259,8 +271,6 @@ def create_default_commands() -> List[Command]:
             title="Rename session",
             category=CommandCategory.SESSION,
             slash_name="rename",
-            enabled=False,
-            availability_reason="Session rename is not available in the Textual UI yet.",
         ),
         Command(
             id="session.compact",

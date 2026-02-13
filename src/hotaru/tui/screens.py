@@ -1,5 +1,6 @@
 """Screens for TUI application."""
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -13,6 +14,7 @@ from .commands import CommandRegistry, create_default_commands
 from .context import use_local, use_route, use_sdk, use_sync
 from .context.route import HomeRoute, PromptInfo, SessionRoute
 from .dialogs import PermissionDialog
+from .input_parsing import enrich_content_with_file_references
 from .widgets import (
     AssistantTextPart,
     Logo,
@@ -140,6 +142,8 @@ class HomeScreen(Screen):
             prompt.value = self.initial_prompt
 
     def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
+        if self.app.execute_slash_command(event.value, source="slash"):
+            return
         use_route().navigate(
             SessionRoute(initial_prompt=PromptInfo(input=event.value))
         )
@@ -394,6 +398,8 @@ class SessionScreen(Screen):
         status.refresh()
 
     def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
+        if self.app.execute_slash_command(event.value, source="slash"):
+            return
         self._send_message(event.value)
 
     def on_prompt_input_slash_command_selected(
@@ -404,6 +410,14 @@ class SessionScreen(Screen):
     def _send_message(self, content: str) -> None:
         content = content.strip()
         if not content:
+            return
+
+        if content.startswith("!"):
+            command = content[1:].strip()
+            if not command:
+                self.app.notify("Shell command cannot be empty.", severity="warning")
+                return
+            self._send_shell_command(raw_input=content, command=command)
             return
 
         container = self.query_one("#messages-container", ScrollableContainer)
@@ -426,6 +440,88 @@ class SessionScreen(Screen):
             self._send_message_async(content, container),
             exclusive=True,
         )
+
+    def _send_shell_command(self, raw_input: str, command: str) -> None:
+        """Execute a local shell command in session view."""
+        container = self.query_one("#messages-container", ScrollableContainer)
+        container.mount(
+            MessageBubble(
+                content=raw_input,
+                role="user",
+                classes="message user-message",
+            )
+        )
+        container.scroll_end()
+
+        self._loading_spinner = Spinner("Running shell command...")
+        container.mount(self._loading_spinner)
+
+        prompt = self.query_one("#prompt-input", PromptInput)
+        prompt.disabled = True
+
+        self.run_worker(
+            self._run_shell_command_async(command, container),
+            exclusive=True,
+        )
+
+    async def _run_shell_command_async(
+        self,
+        command: str,
+        container: ScrollableContainer,
+    ) -> None:
+        """Run a shell command and render output as assistant content."""
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                cwd=use_sdk().cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            output = (stdout or b"").decode("utf-8", errors="replace").strip()
+            err = (stderr or b"").decode("utf-8", errors="replace").strip()
+            combined = "\n".join(part for part in [output, err] if part)
+            exit_code = proc.returncode or 0
+
+            await self._remove_spinner()
+            await container.mount(
+                MessageBubble(
+                    content="",
+                    role="assistant",
+                    agent="shell",
+                    classes="message assistant-message",
+                )
+            )
+
+            rendered_output = combined if combined else "(no output)"
+            rendered = (
+                "```text\n"
+                f"$ {command}\n"
+                f"{rendered_output}\n"
+                f"[exit code: {exit_code}]\n"
+                "```"
+            )
+            await container.mount(
+                AssistantTextPart(
+                    content=rendered,
+                    part_id=f"shell-{hash(command)}",
+                    classes="message assistant-message",
+                )
+            )
+
+            if exit_code != 0:
+                self.app.notify(
+                    f"Shell command exited with code {exit_code}.",
+                    severity="warning",
+                )
+            container.scroll_end()
+        except Exception as exc:
+            self.app.notify(f"Shell command failed: {exc}", severity="error")
+            await self._remove_spinner()
+        finally:
+            prompt = self.query_one("#prompt-input", PromptInput)
+            prompt.disabled = False
+            prompt.focus()
 
     async def _remove_spinner(self) -> None:
         if not self._loading_spinner:
@@ -496,11 +592,27 @@ class SessionScreen(Screen):
                     route.data.session_id = self.session_id
                 self._refresh_header()
 
+            enriched_content, attached_paths, warnings = enrich_content_with_file_references(
+                content,
+                cwd=sdk.cwd,
+            )
+            for warning in warnings:
+                self.app.notify(warning, severity="warning")
+            if attached_paths:
+                attached_text = ", ".join(attached_paths[:3])
+                if len(attached_paths) > 3:
+                    attached_text += ", ..."
+                self.app.notify(
+                    f"Attached {len(attached_paths)} file(s): {attached_text}",
+                    severity="information",
+                )
+
             async for event in sdk.send_message(
                 session_id=self.session_id,
-                content=content,
+                content=enriched_content,
                 agent=agent,
                 model=model,
+                files=[{"path": path} for path in attached_paths] if attached_paths else None,
             ):
                 event_type = event.get("type")
                 if event_type == "message.created":
