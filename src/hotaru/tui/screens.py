@@ -750,6 +750,10 @@ class SessionScreen(Screen):
     def action_redo(self) -> None:
         self.app.execute_command("session.redo", source="keybind")
 
+    def submit_message(self, content: str) -> None:
+        """Submit a prompt programmatically."""
+        self._send_message(content)
+
     async def refresh_history(self) -> None:
         """Refresh session messages from persisted storage."""
         await self._load_session_history()

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 from .global_paths import GlobalPath
+from .config_markdown import parse_markdown_config
 from ..util.log import Log
 
 log = Log.create({"service": "config"})
@@ -49,6 +50,7 @@ McpConfig = Union[McpLocalConfig, McpRemoteConfig]
 
 class AgentConfig(BaseModel):
     """Agent configuration."""
+    name: Optional[str] = None
     model: Optional[str] = None
     variant: Optional[str] = None
     temperature: Optional[float] = None
@@ -59,12 +61,20 @@ class AgentConfig(BaseModel):
     mode: Optional[Literal["subagent", "primary", "all"]] = None
     hidden: Optional[bool] = None
     steps: Optional[int] = None
+    max_steps: Optional[int] = Field(None, alias="maxSteps")
     color: Optional[str] = None
+    tools: Optional[Dict[str, bool]] = None
     permission: Optional[Dict[str, Any]] = None
     options: Optional[Dict[str, Any]] = None
 
     class Config:
         extra = "allow"
+        populate_by_name = True
+
+    @property
+    def effective_steps(self) -> Optional[int]:
+        """Return steps, supporting legacy ``maxSteps``."""
+        return self.steps if self.steps is not None else self.max_steps
 
 
 class CommandConfig(BaseModel):
@@ -188,6 +198,7 @@ class Config(BaseModel):
 
     # Permission settings
     permission: Optional[Dict[str, Any]] = None
+    tools: Optional[Dict[str, bool]] = None
     strict_permissions: Optional[bool] = None
 
     # Server settings
@@ -304,6 +315,45 @@ def _load_json_file(filepath: str) -> Dict[str, Any]:
         return {}
 
 
+def _relative_without_ext(path: Path, base: Path) -> str:
+    """Get forward-slash relative path without suffix."""
+    rel = path.relative_to(base)
+    return rel.with_suffix("").as_posix()
+
+
+def _load_agent_markdown_dir(root: str) -> Dict[str, Any]:
+    """Load agent markdown files from ``agent/`` and ``agents/`` under root."""
+    result: Dict[str, Any] = {}
+    root_path = Path(root)
+
+    for subdir in ("agent", "agents"):
+        base = root_path / subdir
+        if not base.is_dir():
+            continue
+
+        for file in sorted(base.rglob("*.md")):
+            try:
+                parsed = parse_markdown_config(str(file))
+            except Exception as e:
+                log.error("failed to parse markdown agent", {"path": str(file), "error": str(e)})
+                continue
+
+            name = _relative_without_ext(file, base)
+            config: Dict[str, Any] = {"name": name, **parsed.data}
+            if parsed.content:
+                config["prompt"] = parsed.content
+
+            try:
+                validated = AgentConfig.model_validate(config)
+            except Exception as e:
+                log.error("invalid markdown agent config", {"path": str(file), "error": str(e)})
+                continue
+
+            result[name] = validated.model_dump(exclude_none=True, by_alias=True)
+
+    return result
+
+
 class ConfigError(Exception):
     """Configuration error."""
 
@@ -402,6 +452,46 @@ class ConfigManager:
                     result = _deep_merge(result, data)
                     log.info("loaded .hotaru config", {"path": filepath})
 
+        # 3.5. Markdown agent configs from supported roots
+        markdown_roots: List[str] = []
+
+        def add_markdown_root(root: str) -> None:
+            resolved = str(Path(root).resolve())
+            if resolved in markdown_roots:
+                return
+            if not Path(resolved).is_dir():
+                return
+            markdown_roots.append(resolved)
+            if resolved not in directories:
+                directories.append(resolved)
+
+        # Global roots
+        add_markdown_root(global_config_dir)
+        add_markdown_root(str(Path(GlobalPath.home()) / ".config" / "opencode"))
+        add_markdown_root(str(Path(GlobalPath.home()) / ".opencode"))
+        add_markdown_root(str(Path(GlobalPath.home()) / ".hotaru"))
+
+        # Project roots from repo root -> cwd
+        current = Path(directory).resolve()
+        ancestors: List[Path] = []
+        while True:
+            ancestors.append(current)
+            if current == current.parent:
+                break
+            current = current.parent
+
+        for ancestor in reversed(ancestors):
+            add_markdown_root(str(ancestor / ".opencode"))
+            add_markdown_root(str(ancestor / ".hotaru"))
+
+        for root in markdown_roots:
+            agent_data = _load_agent_markdown_dir(root)
+            if not agent_data:
+                continue
+            result.setdefault("agent", {})
+            result["agent"] = _deep_merge(result["agent"], agent_data)
+            log.info("loaded markdown agents", {"root": root, "count": len(agent_data)})
+
         # 4. Environment variable config
         env_config = os.environ.get("HOTARU_CONFIG_CONTENT")
         if env_config:
@@ -423,6 +513,16 @@ class ConfigManager:
                     log.info("loaded managed config", {"path": filepath})
 
         # Set defaults
+        if result.get("tools"):
+            perms: Dict[str, str] = {}
+            for tool_name, enabled in result["tools"].items():
+                action = "allow" if enabled else "deny"
+                if tool_name in {"write", "edit", "patch", "multiedit"}:
+                    perms["edit"] = action
+                else:
+                    perms[tool_name] = action
+            result["permission"] = _deep_merge(perms, result.get("permission") or {})
+
         if not result.get("username"):
             import getpass
             result["username"] = getpass.getuser()

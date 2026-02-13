@@ -31,6 +31,7 @@ from .bash import BashTool
 from .glob import GlobTool
 from .grep import GrepTool
 from .skill import SkillTool
+from .task import TaskTool
 from .registry import ToolRegistry
 
 __all__ = [
@@ -46,5 +47,6 @@ __all__ = [
     "GlobTool",
     "GrepTool",
     "SkillTool",
+    "TaskTool",
     "ToolRegistry",
 ]

@@ -4,12 +4,12 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..core.id import Identifier
 from ..permission import RejectedError, CorrectedError, DeniedError
-from ..provider import Provider
-from ..tool import ToolContext, ToolResult
+from ..tool import ToolContext
 from ..tool.registry import ToolRegistry
 from ..util.log import Log
 from .llm import LLM, StreamInput, StreamChunk
@@ -19,6 +19,9 @@ log = Log.create({"service": "session.processor"})
 
 # Maximum consecutive identical tool calls before triggering doom loop detection
 DOOM_LOOP_THRESHOLD = 3
+
+_MAX_STEPS_PROMPT_PATH = Path(__file__).parent / "prompt" / "max-steps.txt"
+_MAX_STEPS_PROMPT = _MAX_STEPS_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 @dataclass
@@ -175,6 +178,14 @@ class SessionProcessor:
         # Add user message to history
         self.messages.append({"role": "user", "content": user_message})
 
+        from ..agent import Agent
+
+        agent_info = await Agent.get(self.agent)
+        direct_subagent_result = await self._handle_direct_subagent_mention(user_message, agent_info)
+        if direct_subagent_result is not None:
+            self.messages.append({"role": "assistant", "content": direct_subagent_result})
+            return ProcessorResult(status="stop", text=direct_subagent_result)
+
         result = ProcessorResult(status="continue")
 
         while result.status == "continue" and self.turn < self.max_turns:
@@ -182,55 +193,71 @@ class SessionProcessor:
             log.info("processing turn", {"turn": self.turn, "session_id": self.session_id})
 
             # Get tool definitions
-            tool_definitions = await ToolRegistry.get_tool_definitions()
+            max_steps = agent_info.steps if agent_info else None
+            is_last_step = bool(max_steps is not None and self.turn >= max_steps)
+
+            tool_definitions: List[Dict[str, Any]] = []
+            if not is_last_step:
+                tool_definitions = await ToolRegistry.get_tool_definitions(caller_agent=self.agent)
 
             # Merge MCP tools
-            try:
-                from ..mcp import MCP
-                mcp_tools = await MCP.tools()
-                for tool_id, tool_info in mcp_tools.items():
-                    schema = dict(tool_info.get("input_schema") or {})
-                    schema.setdefault("type", "object")
-                    schema["additionalProperties"] = False
-                    tool_definitions.append({
-                        "type": "function",
-                        "function": {
-                            "name": tool_id,
-                            "description": tool_info.get("description", ""),
-                            "parameters": schema,
-                        },
-                    })
-            except Exception as e:
-                log.warn("failed to load MCP tools", {"error": str(e)})
+            if not is_last_step:
+                try:
+                    from ..mcp import MCP
+
+                    mcp_tools = await MCP.tools()
+                    for tool_id, tool_info in mcp_tools.items():
+                        schema = dict(tool_info.get("input_schema") or {})
+                        schema.setdefault("type", "object")
+                        schema["additionalProperties"] = False
+                        tool_definitions.append({
+                            "type": "function",
+                            "function": {
+                                "name": tool_id,
+                                "description": tool_info.get("description", ""),
+                                "parameters": schema,
+                            },
+                        })
+                except Exception as e:
+                    log.warn("failed to load MCP tools", {"error": str(e)})
 
             # Filter out disabled tools based on agent permission rules
-            try:
-                from ..agent import Agent
-                from ..permission import Permission
+            if not is_last_step:
+                try:
+                    from ..permission import Permission
 
-                agent_info = await Agent.get(self.agent)
-                if agent_info and agent_info.permission:
-                    ruleset = Permission.from_config_list(agent_info.permission)
-                    tool_names = [d["function"]["name"] for d in tool_definitions]
-                    disabled = Permission.disabled_tools(tool_names, ruleset)
-                    if disabled:
-                        log.info("filtering disabled tools", {"disabled": list(disabled)})
-                        tool_definitions = [
-                            d for d in tool_definitions
-                            if d["function"]["name"] not in disabled
-                        ]
-            except Exception as e:
-                log.warn("failed to filter disabled tools", {"error": str(e)})
+                    if agent_info and agent_info.permission:
+                        ruleset = Permission.from_config_list(agent_info.permission)
+                        tool_names = [d["function"]["name"] for d in tool_definitions]
+                        disabled = Permission.disabled_tools(tool_names, ruleset)
+                        if disabled:
+                            log.info("filtering disabled tools", {"disabled": list(disabled)})
+                            tool_definitions = [
+                                d for d in tool_definitions
+                                if d["function"]["name"] not in disabled
+                            ]
+                except Exception as e:
+                    log.warn("failed to filter disabled tools", {"error": str(e)})
+
+            messages_for_turn = self.messages.copy()
+            if is_last_step:
+                messages_for_turn.append({
+                    "role": "assistant",
+                    "content": _MAX_STEPS_PROMPT,
+                })
 
             # Create stream input
             stream_input = StreamInput(
                 session_id=self.session_id,
                 model_id=self.model_id,
                 provider_id=self.provider_id,
-                messages=self.messages.copy(),
+                messages=messages_for_turn,
                 system=system_prompt,
                 tools=tool_definitions if tool_definitions else None,
                 max_tokens=4096,
+                temperature=agent_info.temperature if agent_info else None,
+                top_p=agent_info.top_p if agent_info else None,
+                options=(agent_info.options or None) if agent_info else None,
             )
 
             # Process the stream
@@ -294,6 +321,64 @@ class SessionProcessor:
             result.error = f"Maximum turns ({self.max_turns}) exceeded"
 
         return result
+
+    async def _handle_direct_subagent_mention(
+        self,
+        user_message: str,
+        agent_info: Any,
+    ) -> Optional[str]:
+        """Handle direct ``@subagent ...`` user invocation."""
+        try:
+            from ..agent import Agent, AgentMode
+            from ..tool.task import TaskParams, extract_subagent_mention, short_description
+        except Exception:
+            return None
+
+        parsed = extract_subagent_mention(user_message)
+        if not parsed:
+            return None
+
+        subagent_name, prompt = parsed
+        subagent = await Agent.get(subagent_name)
+        if not subagent or subagent.mode != AgentMode.SUBAGENT:
+            return None
+
+        task_tool = ToolRegistry.get("task")
+        if not task_tool:
+            return None
+
+        params = TaskParams(
+            description=short_description(prompt),
+            prompt=prompt,
+            subagent_type=subagent_name,
+        )
+        ctx = ToolContext(
+            session_id=self.session_id,
+            message_id=Identifier.ascending("message"),
+            agent=self.agent,
+            call_id=Identifier.ascending("call"),
+            extra={
+                "cwd": self.cwd,
+                "worktree": self.worktree,
+                "provider_id": self.provider_id,
+                "model_id": self.model_id,
+                "bypass_agent_check": True,
+            },
+            _ruleset=(agent_info.permission if agent_info else []),
+        )
+
+        try:
+            result = await task_tool.execute(params, ctx)
+        except Exception as e:
+            return f"Failed to run @{subagent_name}: {e}"
+        content = result.output
+        start_tag = "<task_result>"
+        end_tag = "</task_result>"
+        if start_tag in content and end_tag in content:
+            inner = content.split(start_tag, 1)[1].split(end_tag, 1)[0].strip()
+            if inner:
+                return inner
+        return content
 
     async def _process_turn(
         self,
@@ -424,7 +509,12 @@ class SessionProcessor:
                 message_id=Identifier.ascending("message"),
                 agent=self.agent,
                 call_id=Identifier.ascending("call"),
-                extra={"cwd": self.cwd, "worktree": self.worktree},
+                extra={
+                    "cwd": self.cwd,
+                    "worktree": self.worktree,
+                    "provider_id": self.provider_id,
+                    "model_id": self.model_id,
+                },
                 _ruleset=agent_ruleset,
             )
 

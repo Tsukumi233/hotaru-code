@@ -16,6 +16,11 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from ...agent import Agent
+from ...command import (
+    expand_builtin_slash_command,
+    parse_builtin_slash_command,
+    publish_command_executed,
+)
 from ...core.bus import Bus
 from ...core.id import Identifier
 from ...permission import Permission, PermissionAsked, PermissionReply
@@ -87,6 +92,15 @@ async def run_command(
 
     # Initialize project context
     project, sandbox = await Project.from_directory(cwd)
+
+    init_arguments: Optional[str] = None
+    parsed_command = parse_builtin_slash_command(message)
+    if parsed_command and parsed_command[0] == "init":
+        init_arguments = parsed_command[1]
+
+    expanded = expand_builtin_slash_command(message, sandbox)
+    if expanded:
+        message = expanded
 
     log.info("starting run", {
         "project_id": project.id,
@@ -373,5 +387,14 @@ async def run_command(
         )
     Message.complete(assistant_message, int(time.time() * 1000))
     await Session.add_message(session.id, assistant_message)
+
+    if init_arguments is not None:
+        await publish_command_executed(
+            name="init",
+            project_id=project.id,
+            arguments=init_arguments,
+            session_id=session.id,
+            message_id=assistant_message.id,
+        )
 
     log.info("run completed", {"session_id": session.id})

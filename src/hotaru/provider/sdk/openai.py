@@ -70,6 +70,7 @@ class OpenAISDK:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         stop: Optional[List[str]] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a chat completion.
 
@@ -102,6 +103,22 @@ class OpenAISDK:
             params["top_p"] = top_p
         if stop:
             params["stop"] = stop
+        if options:
+            reserved = {
+                "model",
+                "messages",
+                "stream",
+                "stream_options",
+                "tools",
+                "max_tokens",
+                "temperature",
+                "top_p",
+                "stop",
+            }
+            for key, value in options.items():
+                if key in reserved:
+                    continue
+                params[key] = value
 
         log.info("streaming", {"model": model, "message_count": len(messages)})
 
@@ -194,6 +211,7 @@ class OpenAISDK:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         stop: Optional[List[str]] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> StreamResult:
         """Non-streaming chat completion.
 
@@ -219,6 +237,7 @@ class OpenAISDK:
             temperature=temperature,
             top_p=top_p,
             stop=stop,
+            options=options,
         ):
             if chunk.type == "text" and chunk.text:
                 result.text += chunk.text

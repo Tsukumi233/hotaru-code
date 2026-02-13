@@ -44,6 +44,7 @@ class StreamInput:
     max_tokens: int = 4096
     temperature: Optional[float] = None
     top_p: Optional[float] = None
+    options: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -118,6 +119,7 @@ class LLM:
                     max_tokens=input.max_tokens,
                     temperature=input.temperature,
                     top_p=input.top_p,
+                    options=input.options,
                 ):
                     yield chunk
             else:
@@ -132,6 +134,7 @@ class LLM:
                     max_tokens=input.max_tokens,
                     temperature=input.temperature,
                     top_p=input.top_p,
+                    options=input.options,
                 ):
                     yield chunk
         except Exception as e:
@@ -150,6 +153,7 @@ class LLM:
         max_tokens: int = 4096,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream from Anthropic API."""
         sdk = AnthropicSDK(api_key=api_key, base_url=base_url)
@@ -162,6 +166,7 @@ class LLM:
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
+            options=options,
         ):
             yield StreamChunk(
                 type=chunk.type,
@@ -186,6 +191,7 @@ class LLM:
         max_tokens: int = 4096,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream from OpenAI-compatible API."""
         sdk = OpenAISDK(api_key=api_key, base_url=base_url)
@@ -201,6 +207,7 @@ class LLM:
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
+            options=options,
         ):
             yield StreamChunk(
                 type=chunk.type,

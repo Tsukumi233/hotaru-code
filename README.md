@@ -10,6 +10,7 @@ Hotaru Code 用于在终端中提供 AI 编码助手能力。
   - `hotaru`：默认进入 TUI（Textual）
   - `hotaru chat`：交互式命令行聊天
   - `hotaru run "你的问题"`：一次性执行
+  - 支持内置命令 `/init`：自动生成/更新项目 `AGENTS.md`
 - Agentic 工具调用循环
   - LLM 输出可触发工具执行，结果会回注到上下文继续推理
 - 内置工具
@@ -109,6 +110,7 @@ hotaru config --path       # 展示配置目录
 hotaru run "修复 tests 失败" --model openai/gpt-4o-mini --agent build
 hotaru run "总结这段日志" --json
 hotaru run "重构这个函数" --yes
+hotaru run "/init 请补充 monorepo 规范"
 ```
 
 - `--model/-m`：指定 `provider/model`
@@ -223,5 +225,4 @@ uv build
 
 ## TODOs
 - [ ] LSP 支持
-
 

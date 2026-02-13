@@ -50,26 +50,32 @@ class AgentInfo(BaseModel):
         use_enum_values = True
 
 
-# Default prompts
-PROMPT_EXPLORE = """You are an expert code explorer. Your task is to efficiently search and analyze codebases.
+_PROMPT_DIR = Path(__file__).parent / "prompt"
 
-When given a search task:
-1. Use Glob to find files by pattern
-2. Use Grep to search file contents
-3. Use Read to examine specific files
-4. Summarize your findings clearly
 
-Be thorough but efficient. Report what you find accurately."""
+def _read_prompt(filename: str, fallback: str) -> str:
+    try:
+        return (_PROMPT_DIR / filename).read_text(encoding="utf-8").strip()
+    except Exception:
+        return fallback
 
-PROMPT_TITLE = """Generate a concise title (3-7 words) for this conversation based on the user's request.
-Return ONLY the title, no quotes or punctuation."""
 
-PROMPT_SUMMARY = """Summarize the key points of this conversation concisely.
-Focus on what was accomplished and any important decisions made."""
-
-PROMPT_COMPACTION = """You are compacting a conversation to save context space.
-Preserve essential information while removing redundancy.
-Keep tool results that are still relevant."""
+PROMPT_EXPLORE = _read_prompt(
+    "explore.txt",
+    "You are a file search specialist. Use Glob, Grep, and Read to explore codebases quickly and accurately.",
+)
+PROMPT_TITLE = _read_prompt(
+    "title.txt",
+    "Generate a concise title for this conversation. Output only the title.",
+)
+PROMPT_SUMMARY = _read_prompt(
+    "summary.txt",
+    "Summarize what was done in this conversation in 2-3 concise sentences.",
+)
+PROMPT_COMPACTION = _read_prompt(
+    "compaction.txt",
+    "Summarize this conversation for future continuation, preserving key decisions and next steps.",
+)
 
 
 class Agent:
@@ -89,10 +95,13 @@ class Agent:
         log.info("initializing agents")
         config = await ConfigManager.get()
 
-        def parse_permissions(permission_config: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        def parse_permissions(permission_config: Optional[Dict[str, Any] | str]) -> List[Dict[str, Any]]:
             rules: List[Dict[str, Any]] = []
             if not permission_config:
                 return rules
+
+            if isinstance(permission_config, str):
+                return [{"permission": "*", "pattern": "*", "action": permission_config}]
 
             for key, value in permission_config.items():
                 if isinstance(value, str):
@@ -113,8 +122,28 @@ class Agent:
 
             return rules
 
+        def parse_tools(tools_config: Optional[Dict[str, bool]]) -> List[Dict[str, Any]]:
+            if not tools_config:
+                return []
+            rules: List[Dict[str, Any]] = []
+            for tool_name, enabled in tools_config.items():
+                action = "allow" if enabled else "deny"
+                permission_name = "edit" if tool_name in {"write", "edit", "patch", "multiedit"} else tool_name
+                rules.append({
+                    "permission": permission_name,
+                    "pattern": "*",
+                    "action": action,
+                })
+            return rules
+
         tool_output_glob = str(Path(GlobalPath.data()) / "tool-output" / "*")
         strict_permissions = bool(config.strict_permissions)
+        try:
+            from ..skill.skill import Skill
+
+            skill_globs = [str(Path(directory) / "*") for directory in await Skill.directories()]
+        except Exception:
+            skill_globs = []
 
         # Default permission rules
         default_permissions = [
@@ -127,6 +156,8 @@ class Agent:
             {"permission": "read", "pattern": "*.env.example", "action": "allow"},
             {"permission": "question", "pattern": "*", "action": "deny"},
         ]
+        for glob in skill_globs:
+            default_permissions.append({"permission": "external_directory", "pattern": glob, "action": "allow"})
         if strict_permissions:
             default_permissions.extend([
                 {"permission": "edit", "pattern": "*", "action": "ask"},
@@ -158,14 +189,15 @@ class Agent:
             ),
             "plan": AgentInfo(
                 name="plan",
-                description="Plan mode. Disallows all edit tools.",
+                description="Plan mode. Analyze and plan without making unintended changes.",
                 mode=AgentMode.PRIMARY,
                 native=True,
                 permission=merge_permissions(
                     default_permissions,
                     [
                         {"permission": "question", "pattern": "*", "action": "allow"},
-                        {"permission": "edit", "pattern": "*", "action": "deny"},
+                        {"permission": "edit", "pattern": "*", "action": "ask"},
+                        {"permission": "bash", "pattern": "*", "action": "ask"},
                     ],
                     user_permissions
                 ),
@@ -175,7 +207,14 @@ class Agent:
                 description="General-purpose agent for researching complex questions and executing multi-step tasks.",
                 mode=AgentMode.SUBAGENT,
                 native=True,
-                permission=merge_permissions(default_permissions, user_permissions),
+                permission=merge_permissions(
+                    default_permissions,
+                    [
+                        {"permission": "todowrite", "pattern": "*", "action": "deny"},
+                        {"permission": "todoread", "pattern": "*", "action": "deny"},
+                    ],
+                    user_permissions,
+                ),
             ),
             "explore": AgentInfo(
                 name="explore",
@@ -256,6 +295,8 @@ class Agent:
                     agent.prompt = agent_config.prompt
                 if agent_config.description:
                     agent.description = agent_config.description
+                if agent_config.name:
+                    agent.name = agent_config.name
                 if agent_config.temperature is not None:
                     agent.temperature = agent_config.temperature
                 if agent_config.top_p is not None:
@@ -266,10 +307,40 @@ class Agent:
                     agent.color = agent_config.color
                 if agent_config.hidden is not None:
                     agent.hidden = agent_config.hidden
-                if agent_config.steps is not None:
-                    agent.steps = agent_config.steps
+                if agent_config.effective_steps is not None:
+                    agent.steps = agent_config.effective_steps
                 if agent_config.options:
                     agent.options.update(agent_config.options)
+                if agent_config.model_extra:
+                    extra_options = {
+                        key: value for key, value in agent_config.model_extra.items()
+                        if key not in {
+                            "name",
+                            "model",
+                            "variant",
+                            "temperature",
+                            "top_p",
+                            "prompt",
+                            "disable",
+                            "description",
+                            "mode",
+                            "hidden",
+                            "steps",
+                            "maxSteps",
+                            "max_steps",
+                            "color",
+                            "tools",
+                            "permission",
+                            "options",
+                        }
+                    }
+                    if extra_options:
+                        agent.options.update(extra_options)
+                if agent_config.tools:
+                    agent.permission = merge_permissions(
+                        agent.permission,
+                        parse_tools(agent_config.tools),
+                    )
                 if agent_config.permission:
                     agent.permission = merge_permissions(
                         agent.permission,

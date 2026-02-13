@@ -81,6 +81,7 @@ class AnthropicSDK:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         stop_sequences: Optional[List[str]] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a chat completion.
 
@@ -113,6 +114,21 @@ class AnthropicSDK:
             params["top_p"] = top_p
         if stop_sequences:
             params["stop_sequences"] = stop_sequences
+        if options:
+            reserved = {
+                "model",
+                "messages",
+                "max_tokens",
+                "system",
+                "tools",
+                "temperature",
+                "top_p",
+                "stop_sequences",
+            }
+            for key, value in options.items():
+                if key in reserved:
+                    continue
+                params[key] = value
 
         log.info("streaming", {"model": model, "message_count": len(messages)})
 
@@ -192,6 +208,7 @@ class AnthropicSDK:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         stop_sequences: Optional[List[str]] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> StreamResult:
         """Non-streaming chat completion.
 
@@ -219,6 +236,7 @@ class AnthropicSDK:
             temperature=temperature,
             top_p=top_p,
             stop_sequences=stop_sequences,
+            options=options,
         ):
             if chunk.type == "text" and chunk.text:
                 result.text += chunk.text

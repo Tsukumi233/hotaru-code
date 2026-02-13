@@ -27,6 +27,7 @@ from .bash import BashTool
 from .glob import GlobTool
 from .grep import GrepTool
 from .skill import SkillTool
+from .task import TaskTool, build_task_description
 from ..util.log import Log
 
 log = Log.create({"service": "tool.registry"})
@@ -60,6 +61,7 @@ class ToolRegistry:
             GlobTool,
             GrepTool,
             SkillTool,
+            TaskTool,
         ]
 
         for tool in builtin_tools:
@@ -115,7 +117,7 @@ class ToolRegistry:
         log.info("registered custom tool", {"tool_id": tool.id})
 
     @classmethod
-    async def get_tool_definitions(cls) -> List[Dict[str, Any]]:
+    async def get_tool_definitions(cls, caller_agent: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get tool definitions for the LLM.
 
         Returns:
@@ -139,6 +141,11 @@ class ToolRegistry:
                     description = await build_skill_description()
                 except Exception:
                     pass  # fall back to static description
+            elif tool.id == "task":
+                try:
+                    description = await build_task_description(caller_agent=caller_agent)
+                except Exception:
+                    pass
 
             definitions.append({
                 "type": "function",

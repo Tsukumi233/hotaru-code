@@ -4,8 +4,8 @@ Detects project boundaries from git repositories and manages project metadata.
 """
 
 import asyncio
-import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
@@ -13,6 +13,7 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel
 
 from ..core.bus import Bus, BusEvent
+from ..storage import NotFoundError, Storage
 from ..util.log import Log
 
 log = Log.create({"service": "project"})
@@ -106,6 +107,35 @@ class Project:
     tracking across worktrees and directory moves.
     """
 
+    _initialized_projects: Dict[str, int] = {}
+    _command_event_subscription_started: bool = False
+
+    @staticmethod
+    def _project_key(project_id: str) -> List[str]:
+        return ["project", project_id]
+
+    @classmethod
+    def ensure_command_event_subscription(cls) -> None:
+        """Subscribe once to command-executed events."""
+        if cls._command_event_subscription_started:
+            return
+
+        from ..command import CommandEvent
+
+        async def _on_command_executed(payload) -> None:
+            name = payload.properties.get("name")
+            project_id = payload.properties.get("project_id")
+
+            if name != "init":
+                return
+            if not isinstance(project_id, str) or not project_id:
+                return
+
+            await cls.set_initialized(project_id)
+
+        Bus.subscribe(CommandEvent.Executed, _on_command_executed)
+        cls._command_event_subscription_started = True
+
     @staticmethod
     async def from_directory(directory: str) -> tuple["ProjectInfo", str]:
         """Detect project from a directory.
@@ -117,6 +147,7 @@ class Project:
             Tuple of (ProjectInfo, sandbox_directory)
         """
         log.info("from_directory", {"directory": directory})
+        Project.ensure_command_event_subscription()
 
         git_dir = _find_git_dir(directory)
 
@@ -182,20 +213,30 @@ class Project:
             sandbox = "/"
             vcs = None
 
-        # Create or load project info
-        # Note: Storage integration will be added in later phases
-        now = int(asyncio.get_event_loop().time() * 1000)
+        now = int(time.time() * 1000)
 
-        project = ProjectInfo(
-            id=project_id,
-            worktree=worktree,
-            vcs=vcs,
-            sandboxes=[],
-            time=ProjectTime(
-                created=now,
-                updated=now
+        # Load persisted project info if present
+        project: ProjectInfo
+        try:
+            stored = await Storage.read(Project._project_key(project_id))
+            project = ProjectInfo.model_validate(stored)
+        except NotFoundError:
+            project = ProjectInfo(
+                id=project_id,
+                worktree=worktree,
+                vcs=vcs,
+                sandboxes=[],
+                time=ProjectTime(
+                    created=now,
+                    updated=now,
+                    initialized=Project._initialized_projects.get(project_id),
+                ),
             )
-        )
+
+        # Apply runtime detection updates
+        project.worktree = worktree
+        project.vcs = vcs
+        project.time.updated = now
 
         # Add sandbox if different from worktree
         if sandbox != worktree and sandbox not in project.sandboxes:
@@ -203,6 +244,8 @@ class Project:
 
         # Filter existing sandboxes
         project.sandboxes = [s for s in project.sandboxes if Path(s).exists()]
+
+        await Storage.write(Project._project_key(project_id), project.model_dump())
 
         # Publish update event
         await Bus.publish(ProjectUpdated, project)
@@ -216,8 +259,27 @@ class Project:
         Returns:
             List of project info objects
         """
-        # Storage integration will be added in later phases
-        return []
+        keys = await Storage.list(["project"])
+        projects: List[ProjectInfo] = []
+
+        for key in keys:
+            try:
+                data = await Storage.read(key)
+            except NotFoundError:
+                continue
+            except Exception:
+                continue
+
+            try:
+                project = ProjectInfo.model_validate(data)
+            except Exception:
+                continue
+
+            project.sandboxes = [s for s in project.sandboxes if Path(s).exists()]
+            projects.append(project)
+
+        projects.sort(key=lambda p: p.time.updated, reverse=True)
+        return projects
 
     @staticmethod
     async def set_initialized(project_id: str) -> None:
@@ -226,8 +288,49 @@ class Project:
         Args:
             project_id: Project ID to update
         """
-        # Storage integration will be added in later phases
-        pass
+        now = int(time.time() * 1000)
+        Project._initialized_projects[project_id] = now
+        log.info("project marked initialized", {"project_id": project_id, "initialized": now})
+
+        try:
+            def _mark_initialized(draft: dict) -> None:
+                draft.setdefault("time", {})
+                draft["time"]["updated"] = now
+                draft["time"]["initialized"] = now
+
+            updated = await Storage.update(
+                Project._project_key(project_id),
+                _mark_initialized,
+            )
+            await Bus.publish(ProjectUpdated, ProjectInfo.model_validate(updated))
+            return
+        except NotFoundError:
+            pass
+
+        # If project record does not exist yet, create a minimal one.
+        project = ProjectInfo(
+            id=project_id,
+            worktree="/",
+            sandboxes=[],
+            time=ProjectTime(
+                created=now,
+                updated=now,
+                initialized=now,
+            ),
+        )
+        await Storage.write(Project._project_key(project_id), project.model_dump())
+        await Bus.publish(ProjectUpdated, project)
+
+    @staticmethod
+    def initialized_at(project_id: str) -> Optional[int]:
+        """Get in-memory initialized timestamp for a project."""
+        return Project._initialized_projects.get(project_id)
+
+    @staticmethod
+    def reset_runtime_state() -> None:
+        """Reset runtime-only state used for subscriptions/tests."""
+        Project._initialized_projects.clear()
+        Project._command_event_subscription_started = False
 
     @staticmethod
     async def add_sandbox(project_id: str, directory: str) -> Optional[ProjectInfo]:
@@ -240,8 +343,26 @@ class Project:
         Returns:
             Updated project info or None
         """
-        # Storage integration will be added in later phases
-        return None
+        try:
+            def _add_sandbox(draft: dict) -> None:
+                draft.setdefault("sandboxes", [])
+                if directory not in draft["sandboxes"]:
+                    draft["sandboxes"].append(directory)
+                draft.setdefault("time", {})
+                draft["time"]["updated"] = int(time.time() * 1000)
+
+            updated = await Storage.update(
+                Project._project_key(project_id),
+                _add_sandbox,
+            )
+        except NotFoundError:
+            return None
+
+        project = ProjectInfo.model_validate(updated)
+        project.sandboxes = [s for s in project.sandboxes if Path(s).exists()]
+        await Storage.write(Project._project_key(project_id), project.model_dump())
+        await Bus.publish(ProjectUpdated, project)
+        return project
 
     @staticmethod
     async def remove_sandbox(project_id: str, directory: str) -> Optional[ProjectInfo]:
@@ -254,5 +375,22 @@ class Project:
         Returns:
             Updated project info or None
         """
-        # Storage integration will be added in later phases
-        return None
+        try:
+            def _remove_sandbox(draft: dict) -> None:
+                draft.setdefault("sandboxes", [])
+                draft["sandboxes"] = [s for s in draft["sandboxes"] if s != directory]
+                draft.setdefault("time", {})
+                draft["time"]["updated"] = int(time.time() * 1000)
+
+            updated = await Storage.update(
+                Project._project_key(project_id),
+                _remove_sandbox,
+            )
+        except NotFoundError:
+            return None
+
+        project = ProjectInfo.model_validate(updated)
+        project.sandboxes = [s for s in project.sandboxes if Path(s).exists()]
+        await Storage.write(Project._project_key(project_id), project.model_dump())
+        await Bus.publish(ProjectUpdated, project)
+        return project

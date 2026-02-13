@@ -1,0 +1,50 @@
+import pytest
+
+from hotaru.agent.agent import Agent
+from hotaru.core.config import Config, ConfigManager
+from hotaru.permission import Permission, PermissionAction
+
+
+def _patch_config(monkeypatch: pytest.MonkeyPatch, config_data: dict) -> None:
+    config = Config.model_validate(config_data)
+
+    async def fake_get(cls):
+        return config
+
+    monkeypatch.setattr(ConfigManager, "get", classmethod(fake_get))
+
+
+@pytest.mark.anyio
+async def test_agent_tools_and_legacy_maxsteps_are_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+    Agent.reset()
+    _patch_config(
+        monkeypatch,
+        {
+            "agent": {
+                "review": {
+                    "description": "Review-only subagent",
+                    "mode": "subagent",
+                    "tools": {
+                        "bash": False,
+                        "write": False,
+                    },
+                    "maxSteps": 4,
+                    "reasoningEffort": "high",
+                }
+            }
+        },
+    )
+
+    review = await Agent.get("review")
+    assert review is not None
+    ruleset = Permission.from_config_list(review.permission)
+
+    bash_rule = Permission.evaluate("bash", "git status", ruleset)
+    edit_rule = Permission.evaluate("edit", "src/main.py", ruleset)
+
+    assert bash_rule.action == PermissionAction.DENY
+    assert edit_rule.action == PermissionAction.DENY
+    assert review.steps == 4
+    assert review.options.get("reasoningEffort") == "high"
+
+    Agent.reset()

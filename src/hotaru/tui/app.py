@@ -30,6 +30,7 @@ from .context import (
 )
 from .context.route import PromptInfo
 from ..util.log import Log
+from ..command import render_init_prompt, publish_command_executed
 
 log = Log.create({"service": "tui.app"})
 
@@ -286,6 +287,10 @@ class TuiApp(App):
             elif command.id == "session.new":
                 command.on_select = (
                     lambda source="palette", argument=None: self.action_new_session()
+                )
+            elif command.id == "project.init":
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_project_init(argument)
                 )
             elif command.id == "session.list":
                 command.on_select = (
@@ -602,6 +607,39 @@ class TuiApp(App):
     def action_new_session(self) -> None:
         """Start a new session."""
         self.route_ctx.navigate(HomeRoute())
+
+    def action_project_init(self, argument: Optional[str] = None) -> None:
+        """Execute the built-in /init command template."""
+        self.run_worker(self._run_init_command(argument), exclusive=False)
+
+    async def _run_init_command(self, argument: Optional[str]) -> None:
+        from ..project import Project
+
+        project, sandbox = await Project.from_directory(self.sdk_ctx.cwd)
+        prompt = render_init_prompt(worktree=sandbox, arguments=argument or "")
+        self.notify("Running /init command...")
+        await publish_command_executed(
+            name="init",
+            project_id=project.id,
+            arguments=argument or "",
+            session_id=self._active_session_id(),
+        )
+        self._dispatch_command_prompt(prompt)
+
+    def _dispatch_command_prompt(self, prompt: str) -> None:
+        """Dispatch a generated prompt into the active flow."""
+        try:
+            current_screen = self.screen
+        except Exception:
+            current_screen = None
+
+        if isinstance(current_screen, SessionScreen):
+            current_screen.submit_message(prompt)
+            return
+
+        self.route_ctx.navigate(
+            SessionRoute(initial_prompt=PromptInfo(input=prompt))
+        )
 
     def action_session_list(self) -> None:
         """Show session list dialog."""

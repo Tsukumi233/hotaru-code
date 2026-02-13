@@ -1,0 +1,14 @@
+Launch a subagent to handle a complex multi-step task autonomously.
+
+Available subagents:
+{agents}
+
+When to use this tool:
+- Delegate focused investigation or implementation work to a specialized subagent.
+- Run independent work items in parallel by making multiple task tool calls.
+
+Usage notes:
+1. Always set `subagent_type` to the target subagent name.
+2. Give the subagent a detailed `prompt` that includes expected output.
+3. Reuse `task_id` to continue an existing subagent session.
+4. After completion, summarize subagent results back to the user in your own response.

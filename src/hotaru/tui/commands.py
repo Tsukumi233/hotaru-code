@@ -261,6 +261,13 @@ def create_default_commands() -> List[Command]:
             slash_aliases=["clear"],
         ),
         Command(
+            id="project.init",
+            title="Initialize AGENTS.md",
+            category=CommandCategory.SESSION,
+            slash_name="init",
+            suggested=True,
+        ),
+        Command(
             id="session.share",
             title="Share session",
             category=CommandCategory.SESSION,

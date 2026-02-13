@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 
 from .. import __version__
+from .cmd.agent import app as agent_app
 
 app = typer.Typer(
     name="hotaru",
@@ -22,6 +23,7 @@ app = typer.Typer(
     add_completion=False,
     invoke_without_command=True,  # Allow callback to run without subcommand
 )
+app.add_typer(agent_app, name="agent", help="Manage agents")
 
 console = Console()
 

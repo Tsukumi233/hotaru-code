@@ -536,6 +536,7 @@ class HelpDialog(DialogBase):
 [bold]Slash Commands[/bold]
 
   [cyan]/new[/cyan]       Start new session
+  [cyan]/init[/cyan]      Generate/update AGENTS.md
   [cyan]/sessions[/cyan]  List sessions
   [cyan]/undo[/cyan]      Undo last turn
   [cyan]/redo[/cyan]      Redo undone turn

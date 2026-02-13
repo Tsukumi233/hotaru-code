@@ -14,6 +14,11 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from ...agent import Agent
+from ...command import (
+    expand_builtin_slash_command,
+    parse_builtin_slash_command,
+    publish_command_executed,
+)
 from ...core.bus import Bus
 from ...core.id import Identifier
 from ...permission import Permission, PermissionAsked, PermissionReply
@@ -137,12 +142,23 @@ async def chat_command(
                 console.print("  /exit, /quit, /q - Exit chat")
                 console.print("  /help - Show this help")
                 console.print("  /clear - Clear screen")
+                console.print("  /init [extra instructions] - Generate/update AGENTS.md")
                 console.print()
                 continue
 
             if user_input.strip().lower() == "/clear":
                 console.clear()
                 continue
+
+            init_arguments: Optional[str] = None
+            parsed_command = parse_builtin_slash_command(user_input)
+            if parsed_command and parsed_command[0] == "init":
+                init_arguments = parsed_command[1]
+
+            expanded = expand_builtin_slash_command(user_input, sandbox)
+            if expanded:
+                console.print("[dim]Running /init command...[/dim]")
+                user_input = expanded
 
             # Create user message record
             now = int(time.time() * 1000)
@@ -271,6 +287,15 @@ async def chat_command(
                 )
             Message.complete(assistant_message, int(time.time() * 1000))
             await Session.add_message(session.id, assistant_message)
+
+            if init_arguments is not None:
+                await publish_command_executed(
+                    name="init",
+                    project_id=project.id,
+                    arguments=init_arguments,
+                    session_id=session.id,
+                    message_id=assistant_message.id,
+                )
 
             console.print()
 
