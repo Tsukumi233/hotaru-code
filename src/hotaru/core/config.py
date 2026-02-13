@@ -339,7 +339,7 @@ class ConfigManager:
         directories: List[str] = []
 
         # 1. Global config
-        global_config_dir = GlobalPath.config
+        global_config_dir = GlobalPath.config()
         directories.append(global_config_dir)
 
         for filename in ["config.json", "hotaru.json", "hotaru.jsonc"]:
@@ -448,7 +448,7 @@ class ConfigManager:
         Returns:
             Updated configuration
         """
-        filepath = os.path.join(GlobalPath.config, "hotaru.json")
+        filepath = os.path.join(GlobalPath.config(), "hotaru.json")
 
         existing = _load_json_file(filepath)
         merged = _deep_merge(existing, updates)

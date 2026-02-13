@@ -62,8 +62,8 @@ class Instance:
             )
 
         # Inside the context:
-        print(Instance.directory)  # Current working directory
-        print(Instance.project.id)  # Project ID
+        print(Instance.directory())  # Current working directory
+        print(Instance.project().id)  # Project ID
     """
 
     @classmethod
@@ -108,19 +108,16 @@ class Instance:
         return await _context.provide(ctx, fn)
 
     @classmethod
-    @property
     def directory(cls) -> str:
         """Get current instance directory."""
         return _context.use().directory
 
     @classmethod
-    @property
     def worktree(cls) -> str:
         """Get current instance worktree."""
         return _context.use().worktree
 
     @classmethod
-    @property
     def project(cls) -> ProjectInfo:
         """Get current instance project."""
         return _context.use().project
@@ -129,7 +126,7 @@ class Instance:
     def contains_path(cls, filepath: str) -> bool:
         """Check if a path is within the project boundary.
 
-        Returns True if path is inside Instance.directory OR Instance.worktree.
+        Returns True if path is inside Instance.directory() OR Instance.worktree().
         Paths within the worktree but outside the working directory should not
         trigger external_directory permission.
 
@@ -139,15 +136,15 @@ class Instance:
         Returns:
             True if path is within project boundary
         """
-        if _contains_path(cls.directory, filepath):
+        if _contains_path(cls.directory(), filepath):
             return True
 
         # Non-git projects set worktree to "/" which would match ANY absolute path.
         # Skip worktree check in this case to preserve external_directory permissions.
-        if cls.worktree == "/":
+        if cls.worktree() == "/":
             return False
 
-        return _contains_path(cls.worktree, filepath)
+        return _contains_path(cls.worktree(), filepath)
 
     @classmethod
     def state(
@@ -164,12 +161,12 @@ class Instance:
         Returns:
             Accessor function for the state
         """
-        return State.create(lambda: cls.directory, init, dispose)
+        return State.create(lambda: cls.directory(), init, dispose)
 
     @classmethod
     async def dispose(cls) -> None:
         """Dispose the current instance."""
-        directory = cls.directory
+        directory = cls.directory()
         log.info("disposing instance", {"directory": directory})
 
         await State.dispose(directory)

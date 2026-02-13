@@ -24,7 +24,11 @@ def _providers():
 
 
 def test_model_state_persists_current_selection(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(local_module.GlobalPath, "state", str(tmp_path), raising=False)
+    monkeypatch.setattr(
+        local_module.GlobalPath,
+        "state",
+        classmethod(lambda cls: str(tmp_path)),
+    )
 
     state = ModelState(_providers())
     state.set(ModelSelection(provider_id="provider-a", model_id="model-2"), add_to_recent=True)
@@ -37,7 +41,11 @@ def test_model_state_persists_current_selection(tmp_path: Path, monkeypatch) -> 
 
 
 def test_model_state_bootstraps_from_recent_when_current_missing(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(local_module.GlobalPath, "state", str(tmp_path), raising=False)
+    monkeypatch.setattr(
+        local_module.GlobalPath,
+        "state",
+        classmethod(lambda cls: str(tmp_path)),
+    )
 
     model_file = tmp_path / "model.json"
     model_file.write_text(
@@ -57,7 +65,11 @@ def test_model_state_bootstraps_from_recent_when_current_missing(tmp_path: Path,
 
 
 def test_model_state_first_available_returns_fallback_model(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(local_module.GlobalPath, "state", str(tmp_path), raising=False)
+    monkeypatch.setattr(
+        local_module.GlobalPath,
+        "state",
+        classmethod(lambda cls: str(tmp_path)),
+    )
 
     state = ModelState(_providers())
     fallback = state.first_available()

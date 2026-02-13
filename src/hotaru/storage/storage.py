@@ -39,7 +39,7 @@ class Storage:
     @classmethod
     def _get_dir(cls) -> str:
         if cls._dir is None:
-            cls._dir = str(Path(GlobalPath.data) / "storage")
+            cls._dir = str(Path(GlobalPath.data()) / "storage")
             Path(cls._dir).mkdir(parents=True, exist_ok=True)
         return cls._dir
 

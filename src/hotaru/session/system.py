@@ -55,7 +55,7 @@ class SystemPrompt:
 
         Args:
             model: Model information
-            directory: Working directory (defaults to Instance.directory)
+            directory: Working directory (defaults to Instance.directory())
             is_git: Whether the directory is a git repository
 
         Returns:

@@ -44,7 +44,7 @@ class TruncateOptions(TypedDict, total=False):
 
 def _get_output_dir() -> Path:
     """Get the directory for storing truncated outputs."""
-    output_dir = Path(GlobalPath.data) / "tool-output"
+    output_dir = Path(GlobalPath.data()) / "tool-output"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 

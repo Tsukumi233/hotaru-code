@@ -120,7 +120,7 @@ class ModelsDev:
     def _get_cache_path(cls) -> Path:
         """Get the cache file path."""
         if cls._cache_path is None:
-            cls._cache_path = Path(GlobalPath.cache) / "models.json"
+            cls._cache_path = Path(GlobalPath.cache()) / "models.json"
         return cls._cache_path
 
     @classmethod

@@ -38,7 +38,7 @@ class State:
 
         # Create state accessor
         get_connection = State.create(
-            lambda: Instance.directory,
+            lambda: Instance.directory(),
             create_connection,
             lambda conn: conn.close()
         )
@@ -59,7 +59,7 @@ class State:
         """Create a state accessor function.
 
         Args:
-            root: Function returning the state key (typically Instance.directory)
+            root: Function returning the state key (typically Instance.directory())
             init: Factory function to create the state
             dispose: Optional async function to clean up the state
 
@@ -90,7 +90,7 @@ class State:
         """Dispose all state for a given key.
 
         Args:
-            key: The state key (typically Instance.directory)
+            key: The state key (typically Instance.directory())
         """
         entries = cls._records_by_key.get(key)
         if not entries:

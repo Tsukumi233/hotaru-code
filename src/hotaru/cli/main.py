@@ -251,7 +251,7 @@ def config(
     from ..core.global_paths import GlobalPath
 
     if path:
-        console.print(GlobalPath.config)
+        console.print(GlobalPath.config())
         return
 
     if show:

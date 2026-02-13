@@ -507,7 +507,7 @@ class MCP:
 
         try:
             # Get working directory
-            cwd = Instance.directory
+            cwd = Instance.directory()
 
             # Prepare environment
             env = os.environ.copy()

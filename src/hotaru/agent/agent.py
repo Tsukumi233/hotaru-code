@@ -113,7 +113,7 @@ class Agent:
 
             return rules
 
-        tool_output_glob = str(Path(GlobalPath.data) / "tool-output" / "*")
+        tool_output_glob = str(Path(GlobalPath.data()) / "tool-output" / "*")
         strict_permissions = bool(config.strict_permissions)
 
         # Default permission rules

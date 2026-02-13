@@ -117,7 +117,7 @@ class ModelState:
         self._favorite: List[ModelSelection] = []
         self._per_agent: Dict[str, ModelSelection] = {}
         self._listeners: List[Callable[[Optional[ModelSelection]], None]] = []
-        self._path = Path(GlobalPath.state) / "model.json"
+        self._path = Path(GlobalPath.state()) / "model.json"
         self._load()
         self._ensure_current()
 

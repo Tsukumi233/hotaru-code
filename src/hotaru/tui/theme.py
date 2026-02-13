@@ -280,7 +280,7 @@ class ThemeManager:
     @classmethod
     def _get_prefs_path(cls) -> Path:
         """Get path to theme preferences file."""
-        return Path(GlobalPath.config) / "theme.json"
+        return Path(GlobalPath.config()) / "theme.json"
 
     @classmethod
     def _save_preference(cls) -> None:

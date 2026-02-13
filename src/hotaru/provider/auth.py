@@ -13,7 +13,7 @@ class ProviderAuth:
 
     @classmethod
     def _filepath(cls) -> Path:
-        return Path(GlobalPath.data) / "provider-auth.json"
+        return Path(GlobalPath.data()) / "provider-auth.json"
 
     @classmethod
     def all(cls) -> Dict[str, Dict[str, str]]:

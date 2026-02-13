@@ -28,7 +28,7 @@ class KVContext:
         """Initialize KV context."""
         self._data: Dict[str, Any] = {}
         self._listeners: Dict[str, List[Callable[[Any], None]]] = {}
-        self._path = Path(GlobalPath.state) / "tui_preferences.json"
+        self._path = Path(GlobalPath.state()) / "tui_preferences.json"
         self._load()
 
     def _load(self) -> None:

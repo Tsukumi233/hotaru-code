@@ -211,14 +211,14 @@ class Log:
             _config.level = level
 
         # Cleanup old log files
-        cls._cleanup_logs(GlobalPath.log)
+        cls._cleanup_logs(GlobalPath.log())
 
         if print_to_stderr:
             _config.print_to_stderr = True
             return
 
         # Create log file
-        log_dir = Path(GlobalPath.log)
+        log_dir = Path(GlobalPath.log())
         if dev:
             log_path = log_dir / "dev.log"
         else:
