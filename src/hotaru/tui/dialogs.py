@@ -529,7 +529,7 @@ class HelpDialog(DialogBase):
   [cyan]Ctrl+M[/cyan]     Switch model
   [cyan]Ctrl+A[/cyan]     Switch agent
   [cyan]Ctrl+T[/cyan]     Toggle theme
-  [cyan]Ctrl+D[/cyan]     Quit
+  [cyan]Ctrl+C[/cyan]     Quit
 
 [bold]Slash Commands[/bold]
 

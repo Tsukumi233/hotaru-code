@@ -72,7 +72,7 @@ class HomeScreen(Screen):
     BINDINGS = [
         Binding("ctrl+x", "command_palette", "Commands"),
         Binding("ctrl+s", "session_list", "Sessions"),
-        Binding("ctrl+d", "quit", "Quit"),
+        Binding("ctrl+c", "quit", "Quit", priority=True),
     ]
 
     CSS = """
@@ -169,7 +169,7 @@ class SessionScreen(Screen):
         Binding("escape", "go_home", "Home"),
         Binding("pageup", "page_up", "Page Up", show=False),
         Binding("pagedown", "page_down", "Page Down", show=False),
-        Binding("ctrl+d", "quit", "Quit"),
+        Binding("ctrl+c", "quit", "Quit", priority=True),
     ]
 
     CSS = """
