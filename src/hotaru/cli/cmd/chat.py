@@ -99,9 +99,10 @@ async def chat_command(
     )
 
     # Build system prompt
-    system_prompt = SystemPrompt.build_full_prompt(
+    system_prompt = await SystemPrompt.build_full_prompt(
         model=model_info,
         directory=cwd,
+        worktree=sandbox,
         is_git=project.vcs == "git",
     )
 

@@ -15,6 +15,7 @@ from .session import Session, SessionInfo
 from .llm import LLM, StreamInput, StreamChunk, StreamResult
 from .processor import SessionProcessor, ProcessorResult
 from .system import SystemPrompt
+from .instruction import InstructionPrompt
 
 __all__ = [
     "Message",
@@ -35,4 +36,5 @@ __all__ = [
     "SessionProcessor",
     "ProcessorResult",
     "SystemPrompt",
+    "InstructionPrompt",
 ]

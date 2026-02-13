@@ -230,7 +230,17 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     result = base.copy()
 
     for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+        if (
+            key in {"plugin", "instructions"}
+            and isinstance(result.get(key), list)
+            and isinstance(value, list)
+        ):
+            merged = []
+            for item in [*result[key], *value]:
+                if item not in merged:
+                    merged.append(item)
+            result[key] = merged
+        elif key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = _deep_merge(result[key], value)
         else:
             result[key] = value

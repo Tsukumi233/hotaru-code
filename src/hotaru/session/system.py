@@ -8,9 +8,9 @@ from datetime import date
 from pathlib import Path
 from typing import List, Optional
 
-from ..project import Instance
 from ..provider.provider import ProcessedModelInfo
 from ..util.log import Log
+from .instruction import InstructionPrompt
 
 log = Log.create({"service": "session.system"})
 
@@ -80,10 +80,11 @@ class SystemPrompt:
         return "\n".join(lines)
 
     @classmethod
-    def build_full_prompt(
+    async def build_full_prompt(
         cls,
         model: ProcessedModelInfo,
         directory: Optional[str] = None,
+        worktree: Optional[str] = None,
         is_git: bool = False,
         additional_instructions: Optional[List[str]] = None,
     ) -> str:
@@ -92,6 +93,7 @@ class SystemPrompt:
         Args:
             model: Model information
             directory: Working directory
+            worktree: Project boundary/worktree root
             is_git: Whether the directory is a git repository
             additional_instructions: Additional instructions to append
 
@@ -105,6 +107,12 @@ class SystemPrompt:
 
         # Add environment info
         parts.append(cls.environment(model, directory, is_git))
+
+        # Load project/global custom instructions (AGENTS.md, config.instructions, etc.)
+        try:
+            parts.extend(await InstructionPrompt.system(directory=directory, worktree=worktree))
+        except Exception as e:
+            log.warn("failed to load instruction prompts", {"error": str(e)})
 
         # Add additional instructions
         if additional_instructions:

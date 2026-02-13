@@ -137,9 +137,10 @@ class SDKContext:
         await Session.add_message(session_id, user_msg)
 
         # Build system prompt
-        system_prompt = SystemPrompt.build_full_prompt(
+        system_prompt = await SystemPrompt.build_full_prompt(
             model=model_info,
             directory=self._cwd,
+            worktree=self._sandbox or self._cwd,
             is_git=self._project.vcs == "git" if self._project else False,
         )
 

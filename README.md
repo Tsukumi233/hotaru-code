@@ -221,4 +221,7 @@ uv build
 - 包名：`hotaru-code`
 - 命令行入口：`hotaru`
 
+## TODOs
+- [ ] LSP 支持
+
 
