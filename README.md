@@ -29,12 +29,32 @@ Hotaru Code 用于在终端中提供 AI 编码助手能力。
 - 会话持久化
   - 会话与消息写入本地 JSON 存储，可继续/切换历史会话
 
-## 快速开始
+## 安装与启动
 
-### 1. 安装依赖
+### 1. 用户安装
 
 ```bash
-uv sync
+# 安装已发布版本
+uv tool install hotaru-code
+
+# 确保可执行目录已加入 PATH（首次安装建议执行）
+uv tool update-shell
+```
+
+安装后可直接运行：
+
+```bash
+hotaru
+```
+
+可选方式：
+
+```bash
+# 免安装临时运行
+uvx --from hotaru-code hotaru
+
+# 使用 pipx 安装
+pipx install hotaru-code
 ```
 
 ### 2. 配置 API Key
@@ -53,13 +73,22 @@ $env:ANTHROPIC_API_KEY = "your-key"
 
 ```bash
 # 默认进入 TUI
-uv run hotaru
+hotaru
 
 # 交互式 chat
-uv run hotaru chat
+hotaru chat
 
 # 一次性执行
-uv run hotaru run "请分析这个仓库的结构"
+hotaru run "请分析这个仓库的结构"
+```
+
+### 4. 本地开发安装（贡献者）
+
+如果你在本仓库内开发：
+
+```bash
+uv sync
+uv run hotaru
 ```
 
 ## 常用命令
@@ -191,4 +220,5 @@ uv build
 - Python 版本要求：`>=3.12`
 - 包名：`hotaru-code`
 - 命令行入口：`hotaru`
+
 
