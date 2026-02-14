@@ -52,7 +52,6 @@ class PromptInput(Input):
     BINDINGS = [
         Binding("up", "popover_up", "Up", show=False),
         Binding("down", "popover_down", "Down", show=False),
-        Binding("tab", "popover_select", "Select", show=False),
         Binding("escape", "popover_close", "Close", show=False),
     ]
 
@@ -866,7 +865,7 @@ class Spinner(Static):
 
 
 class StatusBar(Static):
-    """Status bar widget showing current state."""
+    """Legacy status bar widget (kept for compatibility)."""
 
     def __init__(
         self,
@@ -875,34 +874,224 @@ class StatusBar(Static):
         session_id: Optional[str] = None,
         **kwargs
     ) -> None:
-        """Initialize status bar.
-
-        Args:
-            model: Current model name
-            agent: Current agent name
-            session_id: Current session ID
-        """
         super().__init__(**kwargs)
         self.model = model
         self.agent = agent
         self.session_id = session_id
 
     def render(self) -> Text:
-        """Render the status bar."""
         theme = ThemeManager.get_theme()
         text = Text()
-
         if self.agent:
             text.append(f"▣ {self.agent}", style=f"bold {theme.primary}")
             text.append(" · ", style=theme.text_muted)
-
         if self.model:
             text.append(self.model, style=theme.text_muted)
-
         if self.session_id:
             text.append(" · ", style=theme.text_muted)
             text.append(self.session_id[:8], style=theme.text_muted)
+        return text
 
+
+class AppFooter(Static):
+    """Footer bar matching OpenCode layout.
+
+    Shows directory path on the left, MCP/LSP status indicators and
+    version on the right.
+    """
+
+    DEFAULT_CSS = """
+    AppFooter {
+        height: 1;
+        dock: bottom;
+        padding: 0 2;
+    }
+    """
+
+    def __init__(
+        self,
+        directory: str = "",
+        mcp_connected: int = 0,
+        mcp_error: bool = False,
+        lsp_count: int = 0,
+        version: str = "",
+        show_lsp: bool = False,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.directory = directory
+        self.mcp_connected = mcp_connected
+        self.mcp_error = mcp_error
+        self.lsp_count = lsp_count
+        self.version = version
+        self.show_lsp = show_lsp
+
+    def render(self) -> Text:
+        theme = ThemeManager.get_theme()
+        text = Text(no_wrap=True, overflow="ellipsis")
+
+        # Left: directory path
+        text.append(self.directory, style=theme.text_muted)
+
+        # Build right-side items
+        right_parts: List[Text] = []
+
+        if self.show_lsp:
+            lsp = Text()
+            dot_color = theme.success if self.lsp_count > 0 else theme.text_muted
+            lsp.append("•", style=dot_color)
+            lsp.append(f" {self.lsp_count} LSP", style=theme.text)
+            right_parts.append(lsp)
+
+        if self.mcp_connected > 0 or self.mcp_error:
+            mcp = Text()
+            icon_color = theme.error if self.mcp_error else theme.success
+            mcp.append("⊙", style=icon_color)
+            mcp.append(f" {self.mcp_connected} MCP", style=theme.text)
+            right_parts.append(mcp)
+
+            status_hint = Text("/status", style=theme.text_muted)
+            right_parts.append(status_hint)
+
+        if self.version:
+            right_parts.append(Text(self.version, style=theme.text_muted))
+
+        if right_parts:
+            # Calculate padding to right-align
+            right_text = Text("  ").join(right_parts)
+            available = self.size.width - len(self.directory) - 4  # padding
+            if available > len(right_text):
+                text.append(" " * (available - len(right_text)))
+            else:
+                text.append("  ")
+            text.append_text(right_text)
+
+        return text
+
+
+class SessionHeaderBar(Static):
+    """Session header bar matching OpenCode layout.
+
+    Shows session title on the left, token count + cost on the right.
+    """
+
+    DEFAULT_CSS = """
+    SessionHeaderBar {
+        height: auto;
+        min-height: 3;
+        padding: 1 2;
+        background: $surface;
+    }
+    """
+
+    def __init__(
+        self,
+        title: str = "Session",
+        context_info: str = "",
+        cost: str = "",
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.title = title
+        self.context_info = context_info
+        self.cost = cost
+
+    def render(self) -> Text:
+        theme = ThemeManager.get_theme()
+        text = Text(no_wrap=True, overflow="ellipsis")
+
+        # Left: # Title
+        text.append("# ", style=f"bold {theme.text}")
+        text.append(self.title, style=f"bold {theme.text}")
+
+        # Right: context info (tokens + cost)
+        if self.context_info:
+            right = Text()
+            right.append(self.context_info, style=theme.text_muted)
+            if self.cost:
+                right.append(f" ({self.cost})", style=theme.text_muted)
+
+            available = self.size.width - len(self.title) - 6  # "# " + padding
+            if available > len(right):
+                text.append(" " * (available - len(right)))
+            else:
+                text.append("  ")
+            text.append_text(right)
+
+        return text
+
+
+class PromptMeta(Static):
+    """Agent name + model info displayed below the prompt input.
+
+    Mirrors the OpenCode prompt footer showing:
+      AgentName  model-name  provider
+    """
+
+    DEFAULT_CSS = """
+    PromptMeta {
+        height: 1;
+        padding: 0 2;
+    }
+    """
+
+    def __init__(
+        self,
+        agent: str = "",
+        model: str = "",
+        provider: str = "",
+        agent_color: str = "",
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.agent = agent
+        self.model_name = model
+        self.provider = provider
+        self.agent_color = agent_color
+
+    def render(self) -> Text:
+        theme = ThemeManager.get_theme()
+        text = Text()
+        color = self.agent_color or theme.accent
+        if self.agent:
+            text.append(self.agent.capitalize(), style=f"bold {color}")
+        if self.model_name:
+            text.append("  ", style=theme.text_muted)
+            text.append(self.model_name, style=theme.text)
+        if self.provider:
+            text.append("  ", style=theme.text_muted)
+            text.append(self.provider, style=theme.text_muted)
+        return text
+
+
+class PromptHints(Static):
+    """Keyboard hint bar displayed below the prompt meta line.
+
+    Shows hints like: tab agents  ctrl+p commands
+    """
+
+    DEFAULT_CSS = """
+    PromptHints {
+        height: 1;
+        padding: 0 2;
+    }
+    """
+
+    def __init__(self, hints: Optional[List[tuple]] = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.hints = hints or [
+            ("tab", "agents"),
+            ("ctrl+p", "commands"),
+        ]
+
+    def render(self) -> Text:
+        theme = ThemeManager.get_theme()
+        text = Text()
+        for i, (key, label) in enumerate(self.hints):
+            if i > 0:
+                text.append("  ", style=theme.text_muted)
+            text.append(key, style=theme.text)
+            text.append(f" {label}", style=theme.text_muted)
         return text
 
 

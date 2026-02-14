@@ -16,10 +16,14 @@ from .context.route import HomeRoute, PromptInfo, SessionRoute
 from .dialogs import InputDialog, PermissionDialog, SelectDialog
 from .input_parsing import enrich_content_with_file_references
 from .widgets import (
+    AppFooter,
     AssistantTextPart,
     Logo,
     MessageBubble,
+    PromptHints,
     PromptInput,
+    PromptMeta,
+    SessionHeaderBar,
     SlashCommandItem,
     Spinner,
     StatusBar,
@@ -72,17 +76,23 @@ class HomeScreen(Screen):
     """Home screen with logo and prompt."""
 
     BINDINGS = [
-        Binding("ctrl+x", "command_palette", "Commands"),
+        Binding("ctrl+p", "command_palette", "Commands"),
         Binding("ctrl+s", "session_list", "Sessions"),
+        Binding("tab", "cycle_agent", "Agents", show=False),
         Binding("ctrl+c", "quit", "Quit", priority=True),
     ]
 
     CSS = """
     HomeScreen {
-        align: center middle;
+        layout: vertical;
     }
 
-    #home-container {
+    #home-body {
+        align: center middle;
+        height: 1fr;
+    }
+
+    #home-center {
         width: 80;
         height: auto;
         align: center middle;
@@ -92,19 +102,19 @@ class HomeScreen(Screen):
         width: 100%;
         height: auto;
         align: center middle;
-        padding: 2;
+        padding: 2 0;
     }
 
     #prompt-container {
         width: 100%;
         height: auto;
-        padding: 1 2;
+        padding: 1 0;
     }
 
-    #status-container {
+    #prompt-footer {
         width: 100%;
-        height: 1;
-        padding: 0 2;
+        height: auto;
+        padding: 0;
     }
 
     PromptInput {
@@ -120,19 +130,45 @@ class HomeScreen(Screen):
             self._command_registry.register(cmd)
 
     def compose(self) -> ComposeResult:
+        from .. import __version__
+
         slash_commands = _build_slash_commands(self._command_registry)
+
+        # Main body (centered)
         yield Container(
-            Container(Logo(), id="logo-container"),
             Container(
-                PromptInput(
-                    placeholder="What would you like to do?",
-                    commands=slash_commands,
-                    id="prompt-input",
+                Container(Logo(), id="logo-container"),
+                Container(
+                    PromptInput(
+                        placeholder="What would you like to do?",
+                        commands=slash_commands,
+                        id="prompt-input",
+                    ),
+                    id="prompt-container",
                 ),
-                id="prompt-container",
+                Container(
+                    PromptMeta(id="prompt-meta"),
+                    PromptHints(id="prompt-hints"),
+                    id="prompt-footer",
+                ),
+                id="home-center",
             ),
-            Container(StatusBar(id="status-bar"), id="status-container"),
-            id="home-container",
+            id="home-body",
+        )
+
+        # Footer bar
+        sdk = use_sdk()
+        sync = use_sync()
+        mcp_data = sync.data.mcp
+        mcp_connected = sum(1 for v in mcp_data.values() if v.get("status") == "connected")
+        mcp_error = any(v.get("status") == "failed" for v in mcp_data.values())
+
+        yield AppFooter(
+            directory=sdk.cwd,
+            mcp_connected=mcp_connected,
+            mcp_error=mcp_error,
+            version=__version__,
+            id="home-footer",
         )
 
     def on_mount(self) -> None:
@@ -140,6 +176,22 @@ class HomeScreen(Screen):
         prompt.focus()
         if self.initial_prompt:
             prompt.value = self.initial_prompt
+        self._refresh_prompt_meta()
+
+    def _refresh_prompt_meta(self) -> None:
+        local = use_local()
+        meta = self.query_one("#prompt-meta", PromptMeta)
+        agent_info = local.agent.current()
+        meta.agent = agent_info.get("name", "build")
+
+        model_selection = local.model.current()
+        if model_selection:
+            meta.model_name = model_selection.model_id
+            meta.provider = model_selection.provider_id
+        else:
+            meta.model_name = ""
+            meta.provider = ""
+        meta.refresh()
 
     def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
         if self.app.execute_slash_command(event.value, source="slash"):
@@ -159,6 +211,11 @@ class HomeScreen(Screen):
     def action_session_list(self) -> None:
         self.app.action_session_list()
 
+    def action_cycle_agent(self) -> None:
+        local = use_local()
+        local.agent.move(1)
+        self._refresh_prompt_meta()
+
     def action_quit(self) -> None:
         self.app.exit()
 
@@ -167,11 +224,12 @@ class SessionScreen(Screen):
     """Session screen with message history and prompt input."""
 
     BINDINGS = [
-        Binding("ctrl+x", "command_palette", "Commands"),
+        Binding("ctrl+p", "command_palette", "Commands"),
         Binding("ctrl+n", "new_session", "New"),
         Binding("ctrl+s", "session_list", "Sessions"),
         Binding("ctrl+z", "undo", "Undo"),
         Binding("ctrl+y", "redo", "Redo"),
+        Binding("tab", "cycle_agent", "Agents", show=False),
         Binding("escape", "go_home", "Home"),
         Binding("pageup", "page_up", "Page Up", show=False),
         Binding("pagedown", "page_down", "Page Down", show=False),
@@ -184,8 +242,9 @@ class SessionScreen(Screen):
     }
 
     #session-header {
-        height: 3;
-        padding: 0 2;
+        height: auto;
+        min-height: 3;
+        padding: 1 2;
         background: $surface;
     }
 
@@ -199,6 +258,11 @@ class SessionScreen(Screen):
         min-height: 3;
         padding: 1 2;
         background: $surface;
+    }
+
+    #prompt-footer {
+        height: auto;
+        padding: 0;
     }
 
     .message {
@@ -240,13 +304,17 @@ class SessionScreen(Screen):
             self._command_registry.register(cmd)
 
     def compose(self) -> ComposeResult:
+        from .. import __version__
+
         slash_commands = _build_slash_commands(self._command_registry)
-        yield Container(
-            Static("Session", id="session-title"),
-            StatusBar(id="session-status"),
-            id="session-header",
-        )
+
+        # Session header
+        yield SessionHeaderBar(id="session-header")
+
+        # Messages
         yield ScrollableContainer(id="messages-container")
+
+        # Prompt area
         yield Container(
             PromptInput(
                 placeholder="Type your message...",
@@ -254,6 +322,31 @@ class SessionScreen(Screen):
                 id="prompt-input",
             ),
             id="prompt-container",
+        )
+
+        # Agent/model info + hints
+        yield Container(
+            PromptMeta(id="prompt-meta"),
+            PromptHints(id="prompt-hints"),
+            id="prompt-footer",
+        )
+
+        # Footer bar
+        sdk = use_sdk()
+        sync = use_sync()
+        mcp_data = sync.data.mcp
+        mcp_connected = sum(1 for v in mcp_data.values() if v.get("status") == "connected")
+        mcp_error = any(v.get("status") == "failed" for v in mcp_data.values())
+        lsp_count = len(sync.data.lsp)
+
+        yield AppFooter(
+            directory=sdk.cwd,
+            mcp_connected=mcp_connected,
+            mcp_error=mcp_error,
+            lsp_count=lsp_count,
+            show_lsp=True,
+            version=__version__,
+            id="session-footer",
         )
 
     def on_mount(self) -> None:
@@ -380,24 +473,65 @@ class SessionScreen(Screen):
         return str(output)
 
     def _refresh_header(self) -> None:
-        """Refresh session title and status line."""
-        title = self.query_one("#session-title", Static)
-        if self.session_id:
-            title.update(f"Session {self.session_id[:8]}")
-        else:
-            title.update("Session")
+        """Refresh session title and context info."""
+        header = self.query_one("#session-header", SessionHeaderBar)
 
+        # Title
+        if self.session_id:
+            sync = use_sync()
+            session = sync.get_session(self.session_id)
+            if session:
+                header.title = session.get("title", "Untitled")
+            else:
+                header.title = f"Session {self.session_id[:8]}"
+        else:
+            header.title = "New Session"
+
+        # Context info (token count + cost) from messages
+        if self.session_id:
+            sync = use_sync()
+            messages = sync.get_messages(self.session_id)
+            total_tokens = 0
+            total_cost = 0.0
+            for msg in messages:
+                if msg.get("role") == "assistant":
+                    metadata = msg.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        usage = metadata.get("usage", {})
+                        if isinstance(usage, dict):
+                            total_tokens += usage.get("input_tokens", 0)
+                            total_tokens += usage.get("output_tokens", 0)
+                        total_cost += metadata.get("cost", 0.0)
+            if total_tokens > 0:
+                header.context_info = f"{total_tokens:,}"
+            else:
+                header.context_info = ""
+            if total_cost > 0:
+                header.cost = f"${total_cost:.4f}"
+            else:
+                header.cost = ""
+        else:
+            header.context_info = ""
+            header.cost = ""
+
+        header.refresh()
+        self._refresh_prompt_meta()
+
+    def _refresh_prompt_meta(self) -> None:
+        """Refresh agent/model info below the prompt."""
         local = use_local()
-        status = self.query_one("#session-status", StatusBar)
+        meta = self.query_one("#prompt-meta", PromptMeta)
+        agent_info = local.agent.current()
+        meta.agent = agent_info.get("name", "build")
+
         model_selection = local.model.current()
-        status.model = (
-            f"{model_selection.provider_id}/{model_selection.model_id}"
-            if model_selection
-            else None
-        )
-        status.agent = local.agent.current().get("name", "build")
-        status.session_id = self.session_id
-        status.refresh()
+        if model_selection:
+            meta.model_name = model_selection.model_id
+            meta.provider = model_selection.provider_id
+        else:
+            meta.model_name = ""
+            meta.provider = ""
+        meta.refresh()
 
     def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
         if self.app.execute_slash_command(event.value, source="slash"):
@@ -811,6 +945,11 @@ class SessionScreen(Screen):
 
     def action_page_down(self) -> None:
         self.query_one("#messages-container", ScrollableContainer).scroll_page_down()
+
+    def action_cycle_agent(self) -> None:
+        local = use_local()
+        local.agent.move(1)
+        self._refresh_prompt_meta()
 
     def action_undo(self) -> None:
         self.app.execute_command("session.undo", source="keybind")

@@ -523,7 +523,7 @@ class HelpDialog(DialogBase):
     HELP_CONTENT = """
 [bold]Keyboard Shortcuts[/bold]
 
-  [cyan]Ctrl+X[/cyan]     Open command palette
+  [cyan]Ctrl+P[/cyan]     Open command palette
   [cyan]Ctrl+N[/cyan]     New session
   [cyan]Ctrl+S[/cyan]     Switch session
   [cyan]Ctrl+Z[/cyan]     Undo last turn
