@@ -153,6 +153,7 @@ class ServerConfig(BaseModel):
 class SkillsConfig(BaseModel):
     """Skills configuration."""
     paths: Optional[List[str]] = None
+    urls: Optional[List[str]] = None
 
 
 class CompactionConfig(BaseModel):

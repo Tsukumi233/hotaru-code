@@ -13,7 +13,6 @@ providing the AI with specialized knowledge for particular tasks.
 
 from pathlib import Path
 from typing import List, Optional
-from urllib.parse import urljoin
 from urllib.request import pathname2url
 
 from pydantic import BaseModel, Field
@@ -82,13 +81,39 @@ def _list_skill_files(directory: str, limit: int = MAX_SKILL_FILES) -> List[str]
     return results
 
 
-async def build_skill_description() -> str:
+async def _filter_accessible_skills(skills: List[SkillInfo], caller_agent: Optional[str]) -> List[SkillInfo]:
+    """Filter skills based on caller agent's skill permission rules."""
+    if not caller_agent:
+        return skills
+
+    try:
+        from ..agent import Agent
+        from ..permission import Permission, PermissionAction
+
+        agent = await Agent.get(caller_agent)
+        if not agent:
+            return skills
+
+        ruleset = Permission.from_config_list(agent.permission)
+        filtered: List[SkillInfo] = []
+        for skill in skills:
+            rule = Permission.evaluate("skill", skill.name, ruleset)
+            if rule.action != PermissionAction.DENY:
+                filtered.append(skill)
+        return filtered
+    except Exception as e:
+        log.warn("failed to filter skills by agent permissions", {"agent": caller_agent, "error": str(e)})
+        return skills
+
+
+async def build_skill_description(caller_agent: Optional[str] = None) -> str:
     """Build the tool description with available skills.
 
     Returns:
         Tool description string
     """
     skills = await Skill.list()
+    skills = await _filter_accessible_skills(skills, caller_agent)
 
     if not skills:
         return (
@@ -196,6 +221,7 @@ async def skill_execute(params: SkillParams, ctx: ToolContext) -> ToolResult:
         output="\n".join(output_parts),
         metadata={
             "name": skill.name,
+            "dir": skill_dir,
             "directory": skill_dir,
         },
     )
