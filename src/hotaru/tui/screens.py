@@ -13,7 +13,7 @@ from textual.widgets import Static
 from .commands import CommandRegistry, create_default_commands
 from .context import use_local, use_route, use_sdk, use_sync
 from .context.route import HomeRoute, PromptInfo, SessionRoute
-from .dialogs import PermissionDialog
+from .dialogs import InputDialog, PermissionDialog, SelectDialog
 from .input_parsing import enrich_content_with_file_references
 from .widgets import (
     AssistantTextPart,
@@ -555,6 +555,7 @@ class SessionScreen(Screen):
         """Send a message and stream assistant output."""
         from ..core.bus import Bus
         from ..permission import Permission, PermissionAsked, PermissionReply
+        from ..question import Question, QuestionAsked
 
         async def on_permission_asked(payload: Any) -> None:
             request_data = payload.properties
@@ -576,7 +577,73 @@ class SessionScreen(Screen):
             finally:
                 prompt.disabled = False
 
+        async def on_question_asked(payload: Any) -> None:
+            request_data = payload.properties
+            prompt = self.query_one("#prompt-input", PromptInput)
+            prompt.disabled = True
+            try:
+                answers: List[List[str]] = []
+                for question in request_data.get("questions", []):
+                    title = question.get("header", "Question")
+                    text = question.get("question", "Please choose")
+                    options = question.get("options", []) or []
+                    multiple = bool(question.get("multiple"))
+                    allow_custom = question.get("custom", True)
+
+                    if not options:
+                        value = await self.app.push_screen_wait(
+                            InputDialog(title=title, placeholder=text, submit_label="Submit")
+                        )
+                        answers.append([value] if value else [])
+                        continue
+
+                    if multiple:
+                        lines = [f"{idx + 1}. {opt.get('label', f'Option {idx + 1}')}" for idx, opt in enumerate(options)]
+                        prompt_text = f"{text}\n\n" + "\n".join(lines) + "\n\nEnter comma-separated option numbers."
+                        raw = await self.app.push_screen_wait(
+                            InputDialog(title=title, placeholder=prompt_text, submit_label="Submit")
+                        )
+                        selected: List[str] = []
+                        if isinstance(raw, str):
+                            for item in [piece.strip() for piece in raw.split(",") if piece.strip()]:
+                                if item.isdigit():
+                                    idx = int(item)
+                                    if 1 <= idx <= len(options):
+                                        selected.append(options[idx - 1].get("label", f"Option {idx}"))
+                        if allow_custom and not selected:
+                            custom = await self.app.push_screen_wait(
+                                InputDialog(title=title, placeholder="Custom answer", submit_label="Submit")
+                            )
+                            if custom:
+                                selected.append(custom)
+                        answers.append(selected)
+                        continue
+
+                    dialog_options = [
+                        (f"{opt.get('label', f'Option {idx + 1}')}: {opt.get('description', '')}", opt.get("label", ""))
+                        for idx, opt in enumerate(options)
+                    ]
+                    selected = await self.app.push_screen_wait(
+                        SelectDialog(title=f"{title}: {text}", options=dialog_options)
+                    )
+                    if selected is None and allow_custom:
+                        custom = await self.app.push_screen_wait(
+                            InputDialog(title=title, placeholder="Custom answer", submit_label="Submit")
+                        )
+                        answers.append([custom] if custom else [])
+                    elif selected is None:
+                        answers.append([])
+                    else:
+                        answers.append([selected])
+
+                await Question.reply(request_data["id"], answers)
+            except Exception:
+                await Question.reject(request_data["id"])
+            finally:
+                prompt.disabled = False
+
         unsub = Bus.subscribe(PermissionAsked, on_permission_asked)
+        unsub_question = Bus.subscribe(QuestionAsked, on_question_asked)
         try:
             sdk = use_sdk()
             sync = use_sync()
@@ -643,6 +710,7 @@ class SessionScreen(Screen):
             await self._remove_spinner()
         finally:
             unsub()
+            unsub_question()
             await self._remove_spinner()
             self._active_turn = None
             prompt = self.query_one("#prompt-input", PromptInput)

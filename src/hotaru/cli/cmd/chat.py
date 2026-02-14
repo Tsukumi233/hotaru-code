@@ -22,6 +22,7 @@ from ...command import (
 from ...core.bus import Bus
 from ...core.id import Identifier
 from ...permission import Permission, PermissionAsked, PermissionReply
+from ...question import Question, QuestionAsked
 from ...project import Project
 from ...provider import Provider
 from ...session import Message, Session, SessionProcessor, SystemPrompt
@@ -186,7 +187,14 @@ async def chat_command(
             def on_tool_start(tool_name: str, tool_id: str):
                 console.print(f"\n[dim]> {tool_name}[/dim]", end="")
 
-            def on_tool_end(tool_name: str, tool_id: str, output: Optional[str], error: Optional[str]):
+            def on_tool_end(
+                tool_name: str,
+                tool_id: str,
+                output: Optional[str],
+                error: Optional[str],
+                title: str = "",
+                metadata: Optional[dict] = None,
+            ):
                 if error:
                     console.print(f" [red]error[/red]")
                 else:
@@ -237,7 +245,86 @@ async def chat_command(
                         )
                         live.start()
 
+                    async def on_question_asked(payload):
+                        req = payload.properties
+                        loop = asyncio.get_event_loop()
+                        try:
+                            answers: list[list[str]] = []
+
+                            live.stop()
+                            console.print()
+                            console.print("[cyan]Question from assistant:[/cyan]")
+
+                            for q in req.get("questions", []):
+                                prompt = q.get("question", "Question")
+                                header = q.get("header", "Question")
+                                options = q.get("options", []) or []
+                                multiple = bool(q.get("multiple"))
+                                allow_custom = q.get("custom", True)
+
+                                console.print(f"[bold]{header}[/bold]: {prompt}")
+                                for idx, option in enumerate(options, start=1):
+                                    label = option.get("label", f"Option {idx}")
+                                    description = option.get("description", "")
+                                    console.print(f"  {idx}. {label} - {description}")
+
+                                if not options:
+                                    value = await loop.run_in_executor(
+                                        None, lambda: Prompt.ask("[bold]Answer[/bold]", default="")
+                                    )
+                                    answers.append([value] if value else [])
+                                    continue
+
+                                if multiple:
+                                    raw = await loop.run_in_executor(
+                                        None,
+                                        lambda: Prompt.ask(
+                                            "[bold]Select options[/bold] [dim](comma-separated indices)[/dim]",
+                                            default="1",
+                                        ),
+                                    )
+                                    selected: list[str] = []
+                                    for piece in [p.strip() for p in raw.split(",") if p.strip()]:
+                                        if piece.isdigit():
+                                            idx = int(piece)
+                                            if 1 <= idx <= len(options):
+                                                selected.append(options[idx - 1].get("label", f"Option {idx}"))
+                                    if allow_custom and not selected:
+                                        custom = await loop.run_in_executor(
+                                            None, lambda: Prompt.ask("[bold]Custom answer[/bold]", default="")
+                                        )
+                                        if custom:
+                                            selected.append(custom)
+                                    answers.append(selected)
+                                else:
+                                    choices = [str(i) for i in range(1, len(options) + 1)]
+                                    if allow_custom:
+                                        choices.append("c")
+                                    selected = await loop.run_in_executor(
+                                        None,
+                                        lambda: Prompt.ask(
+                                            "[bold]Select[/bold]",
+                                            choices=choices,
+                                            default="1",
+                                        ),
+                                    )
+                                    if selected == "c":
+                                        custom = await loop.run_in_executor(
+                                            None, lambda: Prompt.ask("[bold]Custom answer[/bold]", default="")
+                                        )
+                                        answers.append([custom] if custom else [])
+                                    else:
+                                        idx = int(selected)
+                                        answers.append([options[idx - 1].get("label", f"Option {idx}")])
+
+                            await Question.reply(req["id"], answers)
+                        except Exception:
+                            await Question.reject(req["id"])
+                        finally:
+                            live.start()
+
                     unsub = Bus.subscribe(PermissionAsked, on_permission_asked)
+                    unsub_question = Bus.subscribe(QuestionAsked, on_question_asked)
                     try:
                         result = await processor.process(
                             user_message=user_input,
@@ -248,6 +335,7 @@ async def chat_command(
                         )
                     finally:
                         unsub()
+                        unsub_question()
 
                 # Print final response
                 if response_text:
@@ -285,6 +373,17 @@ async def chat_command(
                     args=tc.input,
                     result=tc.output if tc.status == "completed" else (tc.error or ""),
                 )
+                for attachment in tc.attachments:
+                    mime = attachment.get("mime") or attachment.get("media_type")
+                    url = attachment.get("url")
+                    if not mime or not url:
+                        continue
+                    Message.add_file(
+                        assistant_message,
+                        media_type=str(mime),
+                        filename=attachment.get("filename"),
+                        url=str(url),
+                    )
             Message.complete(assistant_message, int(time.time() * 1000))
             await Session.add_message(session.id, assistant_message)
 

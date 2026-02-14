@@ -15,8 +15,15 @@ log = Log.create({"service": "write"})
 
 class WriteParams(BaseModel):
     """Parameters for the Write tool."""
-    file_path: str = Field(..., description="The absolute path to the file to write (must be absolute, not relative)")
+    file_path: str = Field(
+        ...,
+        alias="filePath",
+        description="The absolute path to the file to write (must be absolute, not relative)",
+    )
     content: str = Field(..., description="The content to write to the file")
+
+    class Config:
+        populate_by_name = True
 
 
 DESCRIPTION = """Writes content to a file, creating it if it doesn't exist or overwriting if it does.

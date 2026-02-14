@@ -327,6 +327,17 @@ class SDKContext:
                     args=tc.input,
                     result=tc.output if tc.status == "completed" else (tc.error or ""),
                 )
+                for attachment in tc.attachments:
+                    mime = attachment.get("mime") or attachment.get("media_type")
+                    url = attachment.get("url")
+                    if not mime or not url:
+                        continue
+                    Message.add_file(
+                        assistant_msg,
+                        media_type=str(mime),
+                        filename=attachment.get("filename"),
+                        url=str(url),
+                    )
             Message.complete(assistant_msg, int(time.time() * 1000))
             await Session.add_message(session_id, assistant_msg)
 

@@ -16,6 +16,7 @@ from .llm import LLM, StreamInput, StreamChunk, StreamResult
 from .processor import SessionProcessor, ProcessorResult
 from .system import SystemPrompt
 from .instruction import InstructionPrompt
+from .todo import Todo, TodoInfo, TodoUpdated, TodoUpdatedProperties
 
 __all__ = [
     "Message",
@@ -37,4 +38,8 @@ __all__ = [
     "ProcessorResult",
     "SystemPrompt",
     "InstructionPrompt",
+    "Todo",
+    "TodoInfo",
+    "TodoUpdated",
+    "TodoUpdatedProperties",
 ]

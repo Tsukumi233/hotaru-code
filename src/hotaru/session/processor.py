@@ -34,6 +34,7 @@ class ToolCallState:
     status: str = "pending"  # pending, running, completed, error
     output: Optional[str] = None
     error: Optional[str] = None
+    attachments: List[Dict[str, Any]] = field(default_factory=list)
     start_time: Optional[int] = None
     end_time: Optional[int] = None
 
@@ -222,7 +223,11 @@ class SessionProcessor:
 
             tool_definitions: List[Dict[str, Any]] = []
             if not is_last_step:
-                tool_definitions = await ToolRegistry.get_tool_definitions(caller_agent=self.agent)
+                tool_definitions = await ToolRegistry.get_tool_definitions(
+                    caller_agent=self.agent,
+                    provider_id=self.provider_id,
+                    model_id=self.model_id,
+                )
 
             # Merge MCP tools
             if not is_last_step:
@@ -468,13 +473,17 @@ class SessionProcessor:
                         else:
                             tc.status = "completed"
                             tc.output = tool_result.get("output", "")
+                            tc.attachments = tool_result.get("attachments", [])
 
                         result.tool_calls.append(tc)
                         if on_tool_end:
+                            callback_metadata = dict(tool_result.get("metadata", {}))
+                            if tc.attachments:
+                                callback_metadata["attachments"] = tc.attachments
                             await self._call_callback(
                                 on_tool_end, tc.name, tc.id, tc.output, tc.error,
                                 tool_result.get("title", ""),
-                                tool_result.get("metadata", {}),
+                                callback_metadata,
                             )
 
                 elif chunk.type == "message_delta" and chunk.usage:
@@ -539,6 +548,7 @@ class SessionProcessor:
                     "provider_id": self.provider_id,
                     "model_id": self.model_id,
                 },
+                messages=list(self.messages),
                 _ruleset=agent_ruleset,
             )
 
@@ -555,6 +565,7 @@ class SessionProcessor:
                 "output": result.output,
                 "title": result.title,
                 "metadata": result.metadata,
+                "attachments": result.attachments,
             }
 
         except (RejectedError, CorrectedError, DeniedError) as e:
