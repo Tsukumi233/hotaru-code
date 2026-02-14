@@ -6,7 +6,6 @@ connections and accessing their features.
 
 import asyncio
 import os
-from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Set
 from pydantic import BaseModel
 
@@ -133,11 +132,40 @@ class LSP:
             log.info("all LSPs are disabled")
             return
 
-        # Add built-in servers
+        # Add built-in servers (copy objects so config overrides are instance-local)
         for server_id, server in ALL_SERVERS.items():
-            state.servers[server_id] = server
+            state.servers[server_id] = server.configured()
 
-        # Process custom LSP configuration
+        def deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+            result = dict(base)
+            for key, value in override.items():
+                if isinstance(result.get(key), dict) and isinstance(value, dict):
+                    result[key] = deep_merge_dict(result[key], value)
+                else:
+                    result[key] = value
+            return result
+
+        def parse_string_dict(value: Any) -> Dict[str, str]:
+            if not isinstance(value, dict):
+                return {}
+            result: Dict[str, str] = {}
+            for key, item in value.items():
+                if isinstance(key, str) and isinstance(item, str):
+                    result[key] = item
+            return result
+
+        def parse_dict(value: Any) -> Dict[str, Any]:
+            if not isinstance(value, dict):
+                return {}
+            return dict(value)
+
+        def parse_extensions(value: Any, fallback: List[str]) -> List[str]:
+            if not isinstance(value, list):
+                return list(fallback)
+            result = [item for item in value if isinstance(item, str)]
+            return result or list(fallback)
+
+        # Process LSP configuration overrides/custom servers.
         lsp_config = config.lsp if isinstance(config.lsp, dict) else {}
 
         for name, item in lsp_config.items():
@@ -150,37 +178,80 @@ class LSP:
                     del state.servers[name]
                 continue
 
-            # Custom server configuration
             existing = state.servers.get(name)
-            command = item.get("command", [])
-            extensions = item.get("extensions", existing.extensions if existing else [])
-            env = item.get("env", {})
-            initialization = item.get("initialization", {})
+            raw_command = item.get("command")
+            command = [part for part in raw_command if isinstance(part, str)] if isinstance(raw_command, list) else []
+            base_extensions = existing.extensions if existing else []
+            extensions = parse_extensions(item.get("extensions"), base_extensions)
+            env = parse_string_dict(item.get("env"))
+            initialization = parse_dict(item.get("initialization"))
+
+            base_env = existing.env if existing else {}
+            base_init = existing.initialization if existing else {}
+            merged_env = {**base_env, **env}
+            merged_init = deep_merge_dict(base_init, initialization)
 
             if command:
                 import subprocess
+                from .server import LSPServerHandle
+
+                if not existing and not extensions:
+                    log.warn(
+                        "skipping custom LSP server without extensions",
+                        {"server_id": name},
+                    )
+                    continue
 
                 async def custom_root(file: str) -> Optional[str]:
                     return Instance.directory()
 
-                async def custom_spawn(root: str) -> Optional[Any]:
-                    from .server import LSPServerHandle
+                cmd = list(command)
+
+                async def custom_spawn(
+                    root: str,
+                    spawn_env: Dict[str, str],
+                    spawn_initialization: Dict[str, Any],
+                ) -> Optional[Any]:
                     process = subprocess.Popen(
-                        command,
+                        cmd,
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         cwd=root,
-                        env={**os.environ, **env},
+                        env={**os.environ, **spawn_env},
                     )
-                    return LSPServerHandle(process, initialization)
+                    return LSPServerHandle(process, spawn_initialization)
 
                 state.servers[name] = LSPServerInfo(
                     server_id=name,
                     extensions=extensions,
                     root=existing.root if existing else custom_root,
                     spawn=custom_spawn,
+                    env=merged_env,
+                    initialization=merged_init,
                 )
+                continue
+
+            # Built-in server override without command (env/init/extensions only).
+            if existing:
+                state.servers[name] = existing.configured(
+                    extensions=extensions,
+                    env=merged_env,
+                    initialization=merged_init,
+                )
+                continue
+
+            # Custom server must define command and extensions.
+            if not extensions:
+                log.warn(
+                    "skipping custom LSP server without extensions",
+                    {"server_id": name},
+                )
+                continue
+            log.warn(
+                "skipping custom LSP server without command",
+                {"server_id": name},
+            )
 
         log.info("enabled LSP servers", {
             "server_ids": ", ".join(state.servers.keys())

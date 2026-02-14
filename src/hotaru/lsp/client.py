@@ -7,6 +7,7 @@ using the JSON-RPC protocol over stdio.
 import asyncio
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import quote
