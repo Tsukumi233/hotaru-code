@@ -24,6 +24,7 @@ class ToolContext:
     agent: str
     call_id: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
+    messages: List[Dict[str, Any]] = field(default_factory=list)
     _metadata: Dict[str, Any] = field(default_factory=dict)
     _aborted: bool = False
     _ruleset: List[Dict[str, Any]] = field(default_factory=list)

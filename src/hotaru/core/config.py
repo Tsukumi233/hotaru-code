@@ -167,6 +167,19 @@ class TuiConfig(BaseModel):
     diff_style: Optional[Literal["auto", "stacked"]] = None
 
 
+class ExperimentalConfig(BaseModel):
+    """Experimental feature toggles."""
+
+    batch_tool: Optional[bool] = None
+    plan_mode: Optional[bool] = None
+    enable_exa: Optional[bool] = None
+    lsp_tool: Optional[bool] = None
+    primary_tools: Optional[List[str]] = None
+
+    class Config:
+        extra = "allow"
+
+
 class Config(BaseModel):
     """Main configuration schema."""
     schema_: Optional[str] = Field(None, alias="$schema")
@@ -200,6 +213,7 @@ class Config(BaseModel):
     permission: Optional[Union[str, Dict[str, Any]]] = None
     tools: Optional[Dict[str, bool]] = None
     strict_permissions: Optional[bool] = None
+    experimental: Optional[ExperimentalConfig] = None
 
     # Server settings
     server: Optional[ServerConfig] = None

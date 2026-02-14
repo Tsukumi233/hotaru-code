@@ -285,6 +285,22 @@ class Message:
         ))
 
     @staticmethod
+    def add_file(
+        message: MessageInfo,
+        media_type: str,
+        url: str,
+        filename: Optional[str] = None,
+    ) -> None:
+        """Add a file attachment part."""
+        message.parts.append(
+            FilePart(
+                media_type=media_type,
+                filename=filename,
+                url=url,
+            )
+        )
+
+    @staticmethod
     def complete(message: MessageInfo, completed: int) -> None:
         """Mark a message as completed."""
         message.metadata.time.completed = completed

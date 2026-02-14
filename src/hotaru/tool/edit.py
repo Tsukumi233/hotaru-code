@@ -17,10 +17,21 @@ log = Log.create({"service": "edit"})
 
 class EditParams(BaseModel):
     """Parameters for the Edit tool."""
-    file_path: str = Field(..., description="The absolute path to the file to modify")
-    old_string: str = Field(..., description="The text to replace")
-    new_string: str = Field(..., description="The text to replace it with (must be different from old_string)")
-    replace_all: Optional[bool] = Field(False, description="Replace all occurrences of old_string (default false)")
+    file_path: str = Field(..., alias="filePath", description="The absolute path to the file to modify")
+    old_string: str = Field(..., alias="oldString", description="The text to replace")
+    new_string: str = Field(
+        ...,
+        alias="newString",
+        description="The text to replace it with (must be different from old_string)",
+    )
+    replace_all: Optional[bool] = Field(
+        False,
+        alias="replaceAll",
+        description="Replace all occurrences of old_string (default false)",
+    )
+
+    class Config:
+        populate_by_name = True
 
 
 DESCRIPTION = """Performs exact string replacements in files.

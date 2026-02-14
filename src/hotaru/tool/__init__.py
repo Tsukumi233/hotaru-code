@@ -34,6 +34,17 @@ from .grep import GrepTool
 from .list import ListTool
 from .skill import SkillTool
 from .task import TaskTool
+from .question import QuestionTool
+from .todo import TodoWriteTool, TodoReadTool
+from .webfetch import WebFetchTool
+from .websearch import WebSearchTool
+from .codesearch import CodeSearchTool
+from .apply_patch import ApplyPatchTool
+from .multiedit import MultiEditTool
+from .batch import BatchTool
+from .invalid import InvalidTool
+from .plan import PlanEnterTool, PlanExitTool
+from .lsp import LspTool
 from .registry import ToolRegistry
 
 __all__ = [
@@ -51,5 +62,18 @@ __all__ = [
     "ListTool",
     "SkillTool",
     "TaskTool",
+    "QuestionTool",
+    "TodoWriteTool",
+    "TodoReadTool",
+    "WebFetchTool",
+    "WebSearchTool",
+    "CodeSearchTool",
+    "ApplyPatchTool",
+    "MultiEditTool",
+    "BatchTool",
+    "InvalidTool",
+    "PlanEnterTool",
+    "PlanExitTool",
+    "LspTool",
     "ToolRegistry",
 ]

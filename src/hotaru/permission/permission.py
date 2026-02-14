@@ -437,7 +437,7 @@ class Permission:
         Returns:
             Set of disabled tool names
         """
-        edit_tools = {"edit", "write", "patch", "multiedit"}
+        edit_tools = {"edit", "write", "patch", "apply_patch", "multiedit"}
         result = set()
 
         for tool in tools:

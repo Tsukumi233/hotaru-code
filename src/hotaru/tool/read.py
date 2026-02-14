@@ -30,9 +30,12 @@ BINARY_EXTENSIONS = {
 
 class ReadParams(BaseModel):
     """Parameters for the Read tool."""
-    file_path: str = Field(..., description="The absolute path to the file to read")
-    offset: Optional[int] = Field(None, description="The line number to start reading from (0-based)")
+    file_path: str = Field(..., alias="filePath", description="The absolute path to the file or directory to read")
+    offset: Optional[int] = Field(None, description="The line number to start reading from (1-based)")
     limit: Optional[int] = Field(None, description="The number of lines to read (defaults to 2000)")
+
+    class Config:
+        populate_by_name = True
 
 
 DESCRIPTION = """Reads a file from the local filesystem.
@@ -85,7 +88,11 @@ async def read_execute(params: ReadParams, ctx: ToolContext) -> ToolResult:
     if not filepath.is_absolute():
         filepath = cwd / filepath
 
-    title = filepath.name
+    worktree = Path(str(ctx.extra.get("worktree") or cwd))
+    try:
+        title = str(filepath.relative_to(worktree))
+    except ValueError:
+        title = filepath.name
 
     await assert_external_directory(ctx, filepath)
 
@@ -116,6 +123,44 @@ async def read_execute(params: ReadParams, ctx: ToolContext) -> ToolResult:
                 f"Did you mean one of these?\n" + "\n".join(suggestions)
             )
         raise FileNotFoundError(f"File not found: {filepath}")
+
+    # Directory listing mode
+    if filepath.is_dir():
+        offset = params.offset or 1
+        if offset < 1:
+            raise ValueError("offset must be greater than or equal to 1")
+        limit = params.limit or DEFAULT_READ_LIMIT
+
+        entries = []
+        for child in sorted(filepath.iterdir(), key=lambda p: p.name.lower()):
+            display = child.name + ("/" if child.is_dir() else "")
+            entries.append(display)
+
+        start = offset - 1
+        sliced = entries[start : start + limit]
+        truncated = start + len(sliced) < len(entries)
+        output = "\n".join(
+            [
+                f"<path>{filepath}</path>",
+                "<type>directory</type>",
+                "<entries>",
+                *sliced,
+                (
+                    f"(Showing {len(sliced)} of {len(entries)} entries. Use 'offset' parameter to read beyond entry {offset + len(sliced)})"
+                    if truncated
+                    else f"({len(entries)} entries)"
+                ),
+                "</entries>",
+            ]
+        )
+        return ToolResult(
+            title=title,
+            output=output,
+            metadata={
+                "preview": "\n".join(sliced[:20]),
+                "truncated": truncated,
+            },
+        )
 
     # Check for image or PDF
     mime_type, _ = mimetypes.guess_type(str(filepath))
@@ -151,17 +196,22 @@ async def read_execute(params: ReadParams, ctx: ToolContext) -> ToolResult:
 
     # Read text file
     limit = params.limit or DEFAULT_READ_LIMIT
-    offset = params.offset or 0
+    offset = params.offset or 1
+    if offset < 1:
+        raise ValueError("offset must be greater than or equal to 1")
+    start = offset - 1
 
     text = filepath.read_text(encoding="utf-8", errors="replace")
     lines = text.split("\n")
+    if start >= len(lines):
+        raise ValueError(f"Offset {offset} is out of range for this file ({len(lines)} lines)")
 
     # Read lines with limits
     raw: list[str] = []
     current_bytes = 0
     truncated_by_bytes = False
 
-    for i in range(offset, min(len(lines), offset + limit)):
+    for i in range(start, min(len(lines), start + limit)):
         line = lines[i]
         if len(line) > MAX_LINE_LENGTH:
             line = line[:MAX_LINE_LENGTH] + "..."
@@ -176,16 +226,16 @@ async def read_execute(params: ReadParams, ctx: ToolContext) -> ToolResult:
 
     # Format output with line numbers
     content_lines = [
-        f"{str(i + offset + 1).zfill(5)}| {line}"
+        f"{i + offset}: {line}"
         for i, line in enumerate(raw)
     ]
     preview = "\n".join(raw[:20])
 
-    output = "<file>\n"
+    output = f"<path>{filepath}</path>\n<type>file</type>\n<content>\n"
     output += "\n".join(content_lines)
 
     total_lines = len(lines)
-    last_read_line = offset + len(raw)
+    last_read_line = offset + len(raw) - 1
     has_more_lines = total_lines > last_read_line
     truncated = has_more_lines or truncated_by_bytes
 
@@ -196,7 +246,7 @@ async def read_execute(params: ReadParams, ctx: ToolContext) -> ToolResult:
     else:
         output += f"\n\n(End of file - total {total_lines} lines)"
 
-    output += "\n</file>"
+    output += "\n</content>"
 
     return ToolResult(
         title=title,

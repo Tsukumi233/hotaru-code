@@ -201,6 +201,17 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
             args=tool_call.input,
             result=tool_call.output if tool_call.status == "completed" else (tool_call.error or ""),
         )
+        for attachment in tool_call.attachments:
+            mime = attachment.get("mime") or attachment.get("media_type")
+            url = attachment.get("url")
+            if not mime or not url:
+                continue
+            Message.add_file(
+                assistant_message,
+                media_type=str(mime),
+                filename=attachment.get("filename"),
+                url=str(url),
+            )
     Message.complete(assistant_message, int(time.time() * 1000))
     await Session.add_message(session.id, assistant_message)
 

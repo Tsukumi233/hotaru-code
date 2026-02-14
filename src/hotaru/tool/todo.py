@@ -1,0 +1,75 @@
+"""Todo read/write tools."""
+
+from __future__ import annotations
+
+import json
+from typing import List
+
+from pydantic import BaseModel, Field
+
+from ..session.todo import Todo, TodoInfo
+from .tool import Tool, ToolContext, ToolResult
+
+
+class TodoWriteParams(BaseModel):
+    """Parameters for todowrite."""
+
+    todos: List[TodoInfo] = Field(..., description="Updated todo list")
+
+
+class TodoReadParams(BaseModel):
+    """Parameters for todoread."""
+
+    # Empty object schema
+    pass
+
+
+async def todo_write_execute(params: TodoWriteParams, ctx: ToolContext) -> ToolResult:
+    await ctx.ask(
+        permission="todowrite",
+        patterns=["*"],
+        always=["*"],
+        metadata={},
+    )
+    await Todo.update(session_id=ctx.session_id, todos=params.todos)
+    remaining = len([todo for todo in params.todos if todo.status != "completed"])
+    return ToolResult(
+        title=f"{remaining} todos",
+        output=json.dumps([todo.model_dump() for todo in params.todos], indent=2),
+        metadata={"todos": [todo.model_dump() for todo in params.todos]},
+    )
+
+
+async def todo_read_execute(_params: TodoReadParams, ctx: ToolContext) -> ToolResult:
+    await ctx.ask(
+        permission="todoread",
+        patterns=["*"],
+        always=["*"],
+        metadata={},
+    )
+    todos = await Todo.get(ctx.session_id)
+    remaining = len([todo for todo in todos if todo.status != "completed"])
+    payload = [todo.model_dump() for todo in todos]
+    return ToolResult(
+        title=f"{remaining} todos",
+        output=json.dumps(payload, indent=2),
+        metadata={"todos": payload},
+    )
+
+
+TodoWriteTool = Tool.define(
+    tool_id="todowrite",
+    description="Write/update your todo list.",
+    parameters_type=TodoWriteParams,
+    execute_fn=todo_write_execute,
+    auto_truncate=False,
+)
+
+TodoReadTool = Tool.define(
+    tool_id="todoread",
+    description="Read your todo list.",
+    parameters_type=TodoReadParams,
+    execute_fn=todo_read_execute,
+    auto_truncate=False,
+)
+

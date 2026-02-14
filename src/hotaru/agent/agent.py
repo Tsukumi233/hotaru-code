@@ -140,7 +140,11 @@ class Agent:
             rules: List[Dict[str, Any]] = []
             for tool_name, enabled in tools_config.items():
                 action = "allow" if enabled else "deny"
-                permission_name = "edit" if tool_name in {"write", "edit", "patch", "multiedit"} else tool_name
+                permission_name = (
+                    "edit"
+                    if tool_name in {"write", "edit", "patch", "apply_patch", "multiedit"}
+                    else tool_name
+                )
                 rules.append({
                     "permission": permission_name,
                     "pattern": "*",
