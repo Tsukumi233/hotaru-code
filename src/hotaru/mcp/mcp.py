@@ -351,7 +351,6 @@ class MCP:
         config = await ConfigManager.get()
         mcp_config = config.mcp or {}
 
-        tasks = []
         for name, mcp in mcp_config.items():
             cfg_dict = _get_mcp_config_dict(mcp)
             if cfg_dict is None:
@@ -362,10 +361,9 @@ class MCP:
                 state.status[name] = MCPStatusDisabled()
                 continue
 
-            tasks.append(cls._init_single_client(name, cfg_dict))
-
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # Streamable HTTP transport cleanup must run in the same task as setup.
+            # Initialize sequentially to keep client lifecycle task-affine.
+            await cls._init_single_client(name, cfg_dict)
 
     @classmethod
     async def _init_single_client(cls, name: str, cfg_dict: Dict[str, Any]) -> None:

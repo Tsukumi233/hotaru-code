@@ -378,6 +378,20 @@ class TuiApp(App):
         self.route_ctx._route = initial_route
         self.push_screen(self._build_screen_for_route(initial_route))
 
+    async def on_unmount(self) -> None:
+        """Release runtime resources before the app exits."""
+        try:
+            from ..mcp import MCP
+            await MCP.shutdown()
+        except Exception as e:
+            log.warning("failed to shutdown MCP", {"error": str(e)})
+
+        try:
+            from ..lsp import LSP
+            await LSP.shutdown()
+        except Exception as e:
+            log.warning("failed to shutdown LSP", {"error": str(e)})
+
     async def _bootstrap(self) -> None:
         """Load persisted data into contexts before showing the first screen."""
         try:
