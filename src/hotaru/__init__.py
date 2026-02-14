@@ -4,7 +4,7 @@ A Python translation of OpenCode, providing AI agent capabilities
 for software development tasks.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # Lazy imports to avoid circular dependencies
 def __getattr__(name: str):
