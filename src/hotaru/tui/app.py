@@ -156,7 +156,7 @@ class TuiApp(App):
     """
 
     BINDINGS = [
-        Binding("ctrl+x", "command_palette", "Commands", show=True),
+        Binding("ctrl+p", "command_palette", "Commands", show=True),
         Binding("ctrl+n", "new_session", "New", show=False),
         Binding("ctrl+s", "session_list", "Sessions", show=False),
         Binding("ctrl+m", "model_list", "Models", show=False),
