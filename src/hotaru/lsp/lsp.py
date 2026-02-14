@@ -422,29 +422,41 @@ class LSP:
         cls,
         file: str,
         wait_for_diagnostics: bool = False
-    ) -> None:
+    ) -> int:
         """Notify LSP servers that a file was modified.
 
         Args:
             file: File path
             wait_for_diagnostics: Whether to wait for diagnostics
+
+        Returns:
+            Number of connected clients that were notified.
         """
         log.info("touching file", {"file": file})
         clients = await cls._get_clients(file)
 
         async def process_client(client: LSPClient) -> None:
+            wait_task: Optional[asyncio.Task] = None
             if wait_for_diagnostics:
-                wait_task = client.wait_for_diagnostics(file)
-            else:
-                wait_task = asyncio.sleep(0)
+                wait_task = asyncio.create_task(client.wait_for_diagnostics(file))
 
-            await client.open_file(file)
-            await wait_task
+            try:
+                await client.open_file(file)
+                if wait_task:
+                    await wait_task
+            finally:
+                if wait_task and not wait_task.done():
+                    wait_task.cancel()
+                    try:
+                        await wait_task
+                    except asyncio.CancelledError:
+                        pass
 
         try:
             await asyncio.gather(*[process_client(c) for c in clients])
         except Exception as e:
             log.error("failed to touch file", {"file": file, "error": str(e)})
+        return len(clients)
 
     @classmethod
     async def diagnostics(cls) -> Dict[str, List[LSPDiagnostic]]:

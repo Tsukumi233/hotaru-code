@@ -145,6 +145,10 @@ class Logger:
         if self._should_log(LogLevel.WARN):
             self._write("WARN  " + self._build_message(LogLevel.WARN, message, extra))
 
+    def warning(self, message: Any = None, extra: Optional[Dict[str, Any]] = None) -> None:
+        """Compatibility alias for warn()."""
+        self.warn(message, extra)
+
     def error(self, message: Any = None, extra: Optional[Dict[str, Any]] = None) -> None:
         """Log error message."""
         if self._should_log(LogLevel.ERROR):

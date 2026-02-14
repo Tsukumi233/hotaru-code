@@ -5,13 +5,12 @@ using the JSON-RPC protocol over stdio.
 """
 
 import asyncio
-import json
 import os
 import subprocess
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 from pydantic import BaseModel
+from pylsp_jsonrpc.streams import JsonRpcStreamReader, JsonRpcStreamWriter
 
 from ..core.bus import Bus, BusEvent
 from ..project.instance import Instance
@@ -80,6 +79,9 @@ class LSPClient:
         self._request_id = 0
         self._pending_requests: Dict[int, asyncio.Future] = {}
         self._reader_task: Optional[asyncio.Task] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._stream_reader: Optional[JsonRpcStreamReader] = None
+        self._stream_writer: Optional[JsonRpcStreamWriter] = None
         self._initialized = False
 
     async def initialize(self) -> bool:
@@ -91,6 +93,17 @@ class LSPClient:
         if self._initialized:
             return True
 
+        self._loop = asyncio.get_running_loop()
+
+        stdout = self.server.process.stdout
+        stdin = self.server.process.stdin
+        if not stdout or not stdin:
+            log.error("LSP server stdio not available", {"server_id": self.server_id})
+            return False
+
+        self._stream_reader = JsonRpcStreamReader(stdout)
+        self._stream_writer = JsonRpcStreamWriter(stdin)
+
         # Start reader task
         self._reader_task = asyncio.create_task(self._read_messages())
 
@@ -98,7 +111,7 @@ class LSPClient:
         root_uri = self._path_to_uri(self.root)
 
         try:
-            result = await asyncio.wait_for(
+            await asyncio.wait_for(
                 self._send_request("initialize", {
                     "rootUri": root_uri,
                     "processId": self.server.process.pid,
@@ -146,62 +159,41 @@ class LSPClient:
 
     async def _read_messages(self) -> None:
         """Read messages from the server."""
-        stdout = self.server.process.stdout
-        if not stdout:
+        if not self._stream_reader:
             return
 
-        buffer = b""
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                None,
+                self._stream_reader.listen,
+                self._consume_message_from_reader_thread,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.error("Error reading LSP messages", {"error": str(e)})
 
-        while True:
+    def _consume_message_from_reader_thread(self, message: Dict[str, Any]) -> None:
+        """Bridge reader-thread messages into the asyncio event loop."""
+        if not self._loop or self._loop.is_closed():
+            return
+
+        future = asyncio.run_coroutine_threadsafe(
+            self._handle_message(message),
+            self._loop,
+        )
+
+        def on_done(done_future) -> None:
             try:
-                # Read data
-                chunk = await asyncio.get_event_loop().run_in_executor(
-                    None, stdout.read, 4096
-                )
-                if not chunk:
-                    break
-
-                buffer += chunk
-
-                # Parse messages from buffer
-                while True:
-                    # Find header end
-                    header_end = buffer.find(b"\r\n\r\n")
-                    if header_end == -1:
-                        break
-
-                    # Parse headers
-                    header_data = buffer[:header_end].decode("utf-8")
-                    content_length = 0
-
-                    for line in header_data.split("\r\n"):
-                        if line.lower().startswith("content-length:"):
-                            content_length = int(line.split(":")[1].strip())
-
-                    if content_length == 0:
-                        buffer = buffer[header_end + 4:]
-                        continue
-
-                    # Check if we have full message
-                    message_start = header_end + 4
-                    message_end = message_start + content_length
-
-                    if len(buffer) < message_end:
-                        break
-
-                    # Parse message
-                    message_data = buffer[message_start:message_end].decode("utf-8")
-                    buffer = buffer[message_end:]
-
-                    try:
-                        message = json.loads(message_data)
-                        await self._handle_message(message)
-                    except json.JSONDecodeError:
-                        log.error("Invalid JSON from LSP server")
-
+                done_future.result()
             except Exception as e:
-                log.error("Error reading LSP messages", {"error": str(e)})
-                break
+                log.error("Error handling LSP message", {
+                    "server_id": self.server_id,
+                    "error": str(e),
+                })
+
+        future.add_done_callback(on_done)
 
     async def _handle_message(self, message: Dict[str, Any]) -> None:
         """Handle an incoming message from the server.
@@ -335,7 +327,7 @@ class LSPClient:
 
     async def _send_response(
         self,
-        request_id: int,
+        request_id: Any,
         result: Any
     ) -> None:
         """Send a response to a server request.
@@ -357,21 +349,11 @@ class LSPClient:
         Args:
             message: Message to send
         """
-        stdin = self.server.process.stdin
-        if not stdin:
+        if not self._stream_writer:
             return
 
-        content = json.dumps(message)
-        content_bytes = content.encode("utf-8")
-
-        header = f"Content-Length: {len(content_bytes)}\r\n\r\n"
-        data = header.encode("utf-8") + content_bytes
-
         await asyncio.get_event_loop().run_in_executor(
-            None, stdin.write, data
-        )
-        await asyncio.get_event_loop().run_in_executor(
-            None, stdin.flush
+            None, self._stream_writer.write, message
         )
 
     def _path_to_uri(self, path: str) -> str:
@@ -519,10 +501,21 @@ class LSPClient:
         log.info("shutting down", {"server_id": self.server_id})
 
         if self._reader_task:
+            if self._stream_reader:
+                try:
+                    self._stream_reader.close()
+                except Exception:
+                    pass
             self._reader_task.cancel()
             try:
-                await self._reader_task
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self._reader_task, timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+
+        if self._stream_writer:
+            try:
+                self._stream_writer.close()
+            except Exception:
                 pass
 
         # Kill the server process

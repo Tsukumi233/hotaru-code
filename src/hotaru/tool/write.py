@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from ..util.log import Log
 from .external_directory import assert_external_directory
+from .lsp_feedback import append_lsp_error_feedback
 from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "write"})
@@ -88,11 +89,17 @@ async def write_execute(params: WriteParams, ctx: ToolContext) -> ToolResult:
     filepath.write_text(params.content, encoding="utf-8")
 
     output = "Wrote file successfully."
+    output, diagnostics = await append_lsp_error_feedback(
+        output=output,
+        file_path=str(filepath),
+        include_project_files=True,
+    )
 
     return ToolResult(
         title=title,
         output=output,
         metadata={
+            "diagnostics": diagnostics,
             "filepath": str(filepath),
             "exists": exists,
             "truncated": False,

@@ -22,6 +22,7 @@ dependencies = [
     "uvicorn>=0.27",
     "textual>=0.50",
     "mcp>=1.0",
+    "python-lsp-jsonrpc>=1.1.2",
 ]
 
 [project.scripts]

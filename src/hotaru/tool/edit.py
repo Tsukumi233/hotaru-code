@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from ..util.log import Log
 from .external_directory import assert_external_directory
+from .lsp_feedback import append_lsp_error_feedback
 from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "edit"})
@@ -298,6 +299,8 @@ async def edit_execute(params: EditParams, ctx: ToolContext) -> ToolResult:
 
     await assert_external_directory(ctx, filepath)
 
+    diff = ""
+
     # Handle creating new file with empty old_string
     if params.old_string == "":
         existed = filepath.exists()
@@ -314,46 +317,44 @@ async def edit_execute(params: EditParams, ctx: ToolContext) -> ToolResult:
 
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(params.new_string, encoding="utf-8")
+    else:
+        # Read existing file
+        if not filepath.exists():
+            raise FileNotFoundError(f"File {filepath} not found")
 
-        return ToolResult(
-            title=filepath.name,
-            output="Edit applied successfully.",
-            metadata={
-                "diff": diff,
-                "truncated": False,
-            }
+        if filepath.is_dir():
+            raise ValueError(f"Path is a directory, not a file: {filepath}")
+
+        content_old = filepath.read_text(encoding="utf-8", errors="replace")
+        content_new = replace(
+            content_old,
+            params.old_string,
+            params.new_string,
+            params.replace_all or False
         )
 
-    # Read existing file
-    if not filepath.exists():
-        raise FileNotFoundError(f"File {filepath} not found")
+        diff = _create_diff(content_old, content_new, str(filepath))
 
-    if filepath.is_dir():
-        raise ValueError(f"Path is a directory, not a file: {filepath}")
+        await ctx.ask(
+            permission="edit",
+            patterns=[str(filepath)],
+            always=["*"],
+            metadata={"filepath": str(filepath), "diff": diff}
+        )
 
-    content_old = filepath.read_text(encoding="utf-8", errors="replace")
-    content_new = replace(
-        content_old,
-        params.old_string,
-        params.new_string,
-        params.replace_all or False
+        filepath.write_text(content_new, encoding="utf-8")
+
+    output = "Edit applied successfully."
+    output, diagnostics = await append_lsp_error_feedback(
+        output=output,
+        file_path=str(filepath),
     )
-
-    diff = _create_diff(content_old, content_new, str(filepath))
-
-    await ctx.ask(
-        permission="edit",
-        patterns=[str(filepath)],
-        always=["*"],
-        metadata={"filepath": str(filepath), "diff": diff}
-    )
-
-    filepath.write_text(content_new, encoding="utf-8")
 
     return ToolResult(
         title=filepath.name,
-        output="Edit applied successfully.",
+        output=output,
         metadata={
+            "diagnostics": diagnostics,
             "diff": diff,
             "truncated": False,
         }

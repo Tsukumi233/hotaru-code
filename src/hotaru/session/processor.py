@@ -175,6 +175,30 @@ class SessionProcessor:
         Returns:
             ProcessorResult with final state
         """
+        from ..core.context import ContextNotFoundError
+        from ..project import Instance
+
+        current_instance_dir: Optional[str]
+        try:
+            current_instance_dir = Instance.directory()
+        except ContextNotFoundError:
+            current_instance_dir = None
+
+        if (
+            current_instance_dir is None
+            or Path(current_instance_dir).resolve() != Path(self.cwd).resolve()
+        ):
+            return await Instance.provide(
+                directory=self.cwd,
+                fn=lambda: self.process(
+                    user_message=user_message,
+                    system_prompt=system_prompt,
+                    on_text=on_text,
+                    on_tool_start=on_tool_start,
+                    on_tool_end=on_tool_end,
+                ),
+            )
+
         # Add user message to history
         self.messages.append({"role": "user", "content": user_message})
 
