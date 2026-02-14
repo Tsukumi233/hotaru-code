@@ -84,3 +84,46 @@ async def test_user_permission_can_override_strict_defaults(monkeypatch: pytest.
     assert edit_rule.action == PermissionAction.ASK
 
     Agent.reset()
+
+
+@pytest.mark.anyio
+async def test_global_permission_string_is_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    Agent.reset()
+    _patch_config(
+        monkeypatch,
+        {
+            "permission": "ask",
+        },
+    )
+
+    agent = await Agent.get("build")
+    assert agent is not None
+
+    ruleset = Permission.from_config_list(agent.permission)
+    bash_rule = Permission.evaluate("bash", "git status", ruleset)
+    read_rule = Permission.evaluate("read", "/tmp/file.txt", ruleset)
+
+    assert bash_rule.action == PermissionAction.ASK
+    assert read_rule.action == PermissionAction.ASK
+
+    Agent.reset()
+
+
+@pytest.mark.anyio
+async def test_default_read_env_rules_deny_sensitive_env_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    Agent.reset()
+    _patch_config(monkeypatch, {})
+
+    agent = await Agent.get("build")
+    assert agent is not None
+
+    ruleset = Permission.from_config_list(agent.permission)
+    env_rule = Permission.evaluate("read", "/tmp/.env", ruleset)
+    nested_env_rule = Permission.evaluate("read", "/tmp/.env.local", ruleset)
+    env_example_rule = Permission.evaluate("read", "/tmp/.env.example", ruleset)
+
+    assert env_rule.action == PermissionAction.DENY
+    assert nested_env_rule.action == PermissionAction.DENY
+    assert env_example_rule.action == PermissionAction.ALLOW
+
+    Agent.reset()

@@ -64,7 +64,7 @@ class AgentConfig(BaseModel):
     max_steps: Optional[int] = Field(None, alias="maxSteps")
     color: Optional[str] = None
     tools: Optional[Dict[str, bool]] = None
-    permission: Optional[Dict[str, Any]] = None
+    permission: Optional[Union[str, Dict[str, Any]]] = None
     options: Optional[Dict[str, Any]] = None
 
     class Config:
@@ -197,7 +197,7 @@ class Config(BaseModel):
     mcp: Optional[Dict[str, McpConfig]] = None
 
     # Permission settings
-    permission: Optional[Dict[str, Any]] = None
+    permission: Optional[Union[str, Dict[str, Any]]] = None
     tools: Optional[Dict[str, bool]] = None
     strict_permissions: Optional[bool] = None
 
@@ -521,7 +521,10 @@ class ConfigManager:
                     perms["edit"] = action
                 else:
                     perms[tool_name] = action
-            result["permission"] = _deep_merge(perms, result.get("permission") or {})
+            permission = result.get("permission")
+            if isinstance(permission, str):
+                permission = {"*": permission}
+            result["permission"] = _deep_merge(perms, permission or {})
 
         if not result.get("username"):
             import getpass

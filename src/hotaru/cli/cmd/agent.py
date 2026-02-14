@@ -27,6 +27,7 @@ AVAILABLE_TOOLS = [
     "edit",
     "glob",
     "grep",
+    "list",
     "task",
     "skill",
 ]

@@ -100,6 +100,18 @@ class Agent:
             if not permission_config:
                 return rules
 
+            def expand_pattern(pattern: str) -> str:
+                home = str(Path.home())
+                if pattern.startswith("~/"):
+                    return home + pattern[1:]
+                if pattern == "~":
+                    return home
+                if pattern.startswith("$HOME/"):
+                    return home + pattern[5:]
+                if pattern.startswith("$HOME"):
+                    return home + pattern[5:]
+                return pattern
+
             if isinstance(permission_config, str):
                 return [{"permission": "*", "pattern": "*", "action": permission_config}]
 
@@ -116,7 +128,7 @@ class Agent:
                     for pattern, action in value.items():
                         rules.append({
                             "permission": key,
-                            "pattern": pattern,
+                            "pattern": expand_pattern(pattern),
                             "action": action,
                         })
 
@@ -151,8 +163,8 @@ class Agent:
             {"permission": "doom_loop", "pattern": "*", "action": "ask"},
             {"permission": "external_directory", "pattern": "*", "action": "ask"},
             {"permission": "external_directory", "pattern": tool_output_glob, "action": "allow"},
-            {"permission": "read", "pattern": "*.env", "action": "ask"},
-            {"permission": "read", "pattern": "*.env.*", "action": "ask"},
+            {"permission": "read", "pattern": "*.env", "action": "deny"},
+            {"permission": "read", "pattern": "*.env.*", "action": "deny"},
             {"permission": "read", "pattern": "*.env.example", "action": "allow"},
             {"permission": "question", "pattern": "*", "action": "deny"},
         ]
@@ -231,6 +243,7 @@ class Agent:
                         {"permission": "*", "pattern": "*", "action": "deny"},
                         {"permission": "grep", "pattern": "*", "action": "allow"},
                         {"permission": "glob", "pattern": "*", "action": "allow"},
+                        {"permission": "list", "pattern": "*", "action": "allow"},
                         {"permission": "read", "pattern": "*", "action": "allow"},
                         {"permission": "bash", "pattern": "*", "action": "ask" if strict_permissions else "allow"},
                     ],

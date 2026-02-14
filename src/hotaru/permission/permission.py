@@ -144,7 +144,7 @@ class Permission:
     _approved: Dict[str, List[PermissionRule]] = {}
 
     @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> List[PermissionRule]:
+    def from_config(cls, config: Dict[str, Any] | str) -> List[PermissionRule]:
         """Convert config permission dict to ruleset.
 
         Args:
@@ -154,6 +154,15 @@ class Permission:
             List of permission rules
         """
         ruleset: List[PermissionRule] = []
+
+        if isinstance(config, str):
+            return [
+                PermissionRule(
+                    permission="*",
+                    action=PermissionAction(config),
+                    pattern="*",
+                )
+            ]
 
         for key, value in config.items():
             if isinstance(value, str):
@@ -241,7 +250,7 @@ class Permission:
         return [
             PermissionRule(
                 permission=r["permission"],
-                pattern=r.get("pattern", "*"),
+                pattern=_expand_pattern(r.get("pattern", "*")),
                 action=PermissionAction(r["action"]),
             )
             for r in rules

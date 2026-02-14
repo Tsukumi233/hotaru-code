@@ -10,6 +10,7 @@ Built-in tools:
 - bash: Execute shell commands
 - glob: Find files by pattern
 - grep: Search file contents
+- list: List files in a directory tree
 - skill: Load domain-specific skills
 
 Custom tools can be registered using ToolRegistry.register().
@@ -26,6 +27,7 @@ from .edit import EditTool
 from .bash import BashTool
 from .glob import GlobTool
 from .grep import GrepTool
+from .list import ListTool
 from .skill import SkillTool
 from .task import TaskTool, build_task_description
 from ..util.log import Log
@@ -60,6 +62,7 @@ class ToolRegistry:
             BashTool,
             GlobTool,
             GrepTool,
+            ListTool,
             SkillTool,
             TaskTool,
         ]

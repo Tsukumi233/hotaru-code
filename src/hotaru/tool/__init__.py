@@ -10,6 +10,7 @@ Built-in tools:
 - BashTool: Execute shell commands
 - GlobTool: Find files by pattern
 - GrepTool: Search file contents
+- ListTool: List files as a tree
 - SkillTool: Load domain-specific skills
 
 Example:
@@ -30,6 +31,7 @@ from .edit import EditTool
 from .bash import BashTool
 from .glob import GlobTool
 from .grep import GrepTool
+from .list import ListTool
 from .skill import SkillTool
 from .task import TaskTool
 from .registry import ToolRegistry
@@ -46,6 +48,7 @@ __all__ = [
     "BashTool",
     "GlobTool",
     "GrepTool",
+    "ListTool",
     "SkillTool",
     "TaskTool",
     "ToolRegistry",

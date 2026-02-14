@@ -2,14 +2,15 @@
 
 import asyncio
 import os
+import shlex
 import shutil
-import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Set
 
 from pydantic import BaseModel, Field
 
+from ..permission.arity import BashArity
 from ..util.log import Log
 from .external_directory import assert_external_directory
 from .tool import Tool, ToolContext, ToolResult
@@ -48,6 +49,9 @@ Examples:
 """
 
 
+PATH_COMMANDS = {"cd", "rm", "cp", "mv", "mkdir", "touch", "chmod", "chown", "cat"}
+
+
 def _get_shell() -> str:
     """Get the appropriate shell for the current platform."""
     if sys.platform == "win32":
@@ -63,6 +67,110 @@ def _get_shell() -> str:
         if shutil.which(shell):
             return shell
         return "/bin/sh"
+
+
+def _split_commands(command: str) -> list[str]:
+    """Split shell command into top-level segments by control operators."""
+    segments: list[str] = []
+    current: list[str] = []
+    in_single = False
+    in_double = False
+    escaped = False
+    i = 0
+
+    while i < len(command):
+        ch = command[i]
+
+        if escaped:
+            current.append(ch)
+            escaped = False
+            i += 1
+            continue
+
+        if ch == "\\":
+            escaped = True
+            current.append(ch)
+            i += 1
+            continue
+
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            current.append(ch)
+            i += 1
+            continue
+
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            current.append(ch)
+            i += 1
+            continue
+
+        if not in_single and not in_double:
+            two = command[i : i + 2]
+            if two in {"&&", "||"}:
+                segment = "".join(current).strip()
+                if segment:
+                    segments.append(segment)
+                current = []
+                i += 2
+                continue
+            if ch in {"|", ";", "\n"}:
+                segment = "".join(current).strip()
+                if segment:
+                    segments.append(segment)
+                current = []
+                i += 1
+                continue
+
+        current.append(ch)
+        i += 1
+
+    segment = "".join(current).strip()
+    if segment:
+        segments.append(segment)
+    return segments
+
+
+def _contains_path(base: Path, target: Path) -> bool:
+    try:
+        target.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def _in_project_boundary(target: Path, cwd: Path, worktree: Optional[Path]) -> bool:
+    if _contains_path(cwd, target):
+        return True
+    if worktree and str(worktree) != "/" and _contains_path(worktree, target):
+        return True
+    return False
+
+
+def _resolve_path_argument(arg: str, cwd: Path) -> Optional[Path]:
+    value = arg.strip()
+    if not value:
+        return None
+    if value.startswith("-"):
+        return None
+    if any(token in value for token in ("*", "?", "[", "]", "{", "}", "$", "`", "://")):
+        return None
+
+    candidate = Path(os.path.expanduser(value))
+    if not candidate.is_absolute():
+        candidate = cwd / candidate
+
+    try:
+        return candidate.resolve(strict=False)
+    except OSError:
+        return candidate
+
+
+def _parse_tokens(segment: str) -> list[str]:
+    try:
+        return shlex.split(segment, posix=True)
+    except ValueError:
+        return []
 
 
 async def bash_execute(params: BashParams, ctx: ToolContext) -> ToolResult:
@@ -81,13 +189,66 @@ async def bash_execute(params: BashParams, ctx: ToolContext) -> ToolResult:
 
     await assert_external_directory(ctx, cwd_path, kind="directory")
 
-    # Request permission
-    await ctx.ask(
-        permission="bash",
-        patterns=[params.command],
-        always=["*"],
-        metadata={}
-    )
+    segments = _split_commands(params.command)
+    if not segments:
+        segments = [params.command.strip()]
+
+    command_patterns: list[str] = []
+    always_patterns: list[str] = []
+    external_globs: Set[str] = set()
+
+    worktree_value = str(ctx.extra.get("worktree") or "")
+    worktree_path = Path(worktree_value).resolve() if worktree_value else None
+
+    for segment in segments:
+        tokens = _parse_tokens(segment)
+        if not tokens:
+            command_patterns.append(segment)
+            continue
+
+        command_name = tokens[0]
+
+        if command_name in PATH_COMMANDS:
+            for arg in tokens[1:]:
+                if command_name == "chmod" and arg.startswith("+"):
+                    continue
+                resolved = _resolve_path_argument(arg, cwd_path)
+                if not resolved:
+                    continue
+                if _in_project_boundary(resolved, base_cwd.resolve(), worktree_path):
+                    continue
+                parent_dir = resolved if resolved.is_dir() else resolved.parent
+                external_globs.add(str(parent_dir / "*"))
+
+        if command_name == "cd":
+            continue
+
+        command_patterns.append(segment)
+        prefix = BashArity.prefix(tokens)
+        if prefix:
+            always_patterns.append(" ".join(prefix) + " *")
+
+    if external_globs:
+        globs = sorted(external_globs)
+        await ctx.ask(
+            permission="external_directory",
+            patterns=globs,
+            always=globs,
+            metadata={"command": params.command},
+        )
+
+    if command_patterns:
+        unique_patterns = sorted(set(command_patterns))
+        unique_always = sorted(set(always_patterns))
+        await ctx.ask(
+            permission="bash",
+            patterns=unique_patterns,
+            always=unique_always,
+            metadata={
+                "command": params.command,
+                "description": params.description,
+            },
+        )
 
     shell = _get_shell()
     log.info("executing command", {"shell": shell, "command": params.command})
