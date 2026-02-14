@@ -1,51 +1,51 @@
-"""Tool system modules.
+"""Tool system modules with lazy exports to avoid import cycles."""
 
-This module provides the tool framework for AI agent capabilities.
-Tools are functions that the AI can invoke to interact with the system.
+from __future__ import annotations
 
-Built-in tools:
-- ReadTool: Read file contents
-- WriteTool: Write file contents
-- EditTool: Edit files with search/replace
-- BashTool: Execute shell commands
-- GlobTool: Find files by pattern
-- GrepTool: Search file contents
-- ListTool: List files as a tree
-- SkillTool: Load domain-specific skills
-
-Example:
-    from hotaru.tool import ToolRegistry
-
-    # Get all available tools
-    tools = ToolRegistry.list()
-
-    # Get tool definitions for LLM (async)
-    definitions = await ToolRegistry.get_tool_definitions()
-"""
+from importlib import import_module
+from typing import Dict, Tuple
 
 from .tool import Tool, ToolContext, ToolResult, ToolInfo
 from .truncation import Truncate
-from .read import ReadTool
-from .write import WriteTool
-from .edit import EditTool
-from .bash import BashTool
-from .glob import GlobTool
-from .grep import GrepTool
-from .list import ListTool
-from .skill import SkillTool
-from .task import TaskTool
-from .question import QuestionTool
-from .todo import TodoWriteTool, TodoReadTool
-from .webfetch import WebFetchTool
-from .websearch import WebSearchTool
-from .codesearch import CodeSearchTool
-from .apply_patch import ApplyPatchTool
-from .multiedit import MultiEditTool
-from .batch import BatchTool
-from .invalid import InvalidTool
-from .plan import PlanEnterTool, PlanExitTool
-from .lsp import LspTool
-from .registry import ToolRegistry
+
+_EXPORTS: Dict[str, Tuple[str, str]] = {
+    "ReadTool": (".read", "ReadTool"),
+    "WriteTool": (".write", "WriteTool"),
+    "EditTool": (".edit", "EditTool"),
+    "BashTool": (".bash", "BashTool"),
+    "GlobTool": (".glob", "GlobTool"),
+    "GrepTool": (".grep", "GrepTool"),
+    "ListTool": (".list", "ListTool"),
+    "SkillTool": (".skill", "SkillTool"),
+    "TaskTool": (".task", "TaskTool"),
+    "QuestionTool": (".question", "QuestionTool"),
+    "TodoWriteTool": (".todo", "TodoWriteTool"),
+    "TodoReadTool": (".todo", "TodoReadTool"),
+    "WebFetchTool": (".webfetch", "WebFetchTool"),
+    "WebSearchTool": (".websearch", "WebSearchTool"),
+    "CodeSearchTool": (".codesearch", "CodeSearchTool"),
+    "ApplyPatchTool": (".apply_patch", "ApplyPatchTool"),
+    "MultiEditTool": (".multiedit", "MultiEditTool"),
+    "BatchTool": (".batch", "BatchTool"),
+    "InvalidTool": (".invalid", "InvalidTool"),
+    "PlanEnterTool": (".plan", "PlanEnterTool"),
+    "PlanExitTool": (".plan", "PlanExitTool"),
+    "LspTool": (".lsp", "LspTool"),
+    "ToolRegistry": (".registry", "ToolRegistry"),
+}
+
+
+def __getattr__(name: str):
+    target = _EXPORTS.get(name)
+    if not target:
+        raise AttributeError(name)
+
+    module_name, attr_name = target
+    module = import_module(module_name, __name__)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "Tool",
@@ -53,27 +53,5 @@ __all__ = [
     "ToolResult",
     "ToolInfo",
     "Truncate",
-    "ReadTool",
-    "WriteTool",
-    "EditTool",
-    "BashTool",
-    "GlobTool",
-    "GrepTool",
-    "ListTool",
-    "SkillTool",
-    "TaskTool",
-    "QuestionTool",
-    "TodoWriteTool",
-    "TodoReadTool",
-    "WebFetchTool",
-    "WebSearchTool",
-    "CodeSearchTool",
-    "ApplyPatchTool",
-    "MultiEditTool",
-    "BatchTool",
-    "InvalidTool",
-    "PlanEnterTool",
-    "PlanExitTool",
-    "LspTool",
-    "ToolRegistry",
+    *_EXPORTS.keys(),
 ]

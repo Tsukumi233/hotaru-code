@@ -33,10 +33,12 @@ from .skill import (
     SkillNotFoundError,
     SkillParseError,
 )
+from .discovery import Discovery
 
 __all__ = [
     "Skill",
     "SkillInfo",
     "SkillNotFoundError",
     "SkillParseError",
+    "Discovery",
 ]

@@ -243,7 +243,7 @@ class ToolRegistry:
             description = tool.description
             if tool.id == "skill":
                 try:
-                    description = await build_skill_description()
+                    description = await build_skill_description(caller_agent)
                 except Exception:
                     pass
             elif tool.id == "task":

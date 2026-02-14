@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from ..question import Question, QuestionInfo, QuestionOption, RejectedError as QuestionRejectedError
-from ..session import Session
+from ..session.session import Session
 from .tool import Tool, ToolContext, ToolResult
 
 
@@ -94,4 +94,3 @@ PlanExitTool = Tool.define(
     execute_fn=plan_exit_execute,
     auto_truncate=False,
 )
-
