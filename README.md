@@ -2,14 +2,13 @@
 
 Hotaru Code 是一个运行在终端里的 AI 编码助手。
 
-它提供 TUI、交互式 Chat、一次性 Run 三种模式，并支持工具调用、权限控制、会话持久化、MCP 扩展、Skill 与 Agent 配置。
+它提供 TUI 与一次性 Run 两种模式，并支持工具调用、权限控制、会话持久化、MCP 扩展、Skill 与 Agent 配置。
 
 ## 功能介绍
 
 ### 1. 多种交互模式
 
 - `hotaru`：默认进入 TUI（Textual）
-- `hotaru chat`：交互式终端聊天
 - `hotaru run "你的需求"`：一次性执行
 - 支持内置 `/init` 命令：自动生成/更新 `AGENTS.md`
 
@@ -107,20 +106,7 @@ hotaru --directory ../another-repo --prompt "先阅读项目结构并总结"
 hotaru tui --continue
 ```
 
-### 2. Chat 模式
-
-```bash
-hotaru chat --model openai/gpt-5 --agent build
-```
-
-Chat 常用命令：
-
-- `/help`
-- `/clear`
-- `/exit`（或 `/quit`、`/q`）
-- `/init [额外要求]`
-
-### 3. Run 模式（一次性）
+### 2. Run 模式（一次性）
 
 ```bash
 # 基础
@@ -142,7 +128,7 @@ hotaru run "/init 请补充 monorepo 规范"
 cat error.log | hotaru run "总结错误并给修复建议"
 ```
 
-### 4. 会话与配置管理
+### 3. 会话与配置管理
 
 ```bash
 hotaru providers            # 列出已可用 provider/model

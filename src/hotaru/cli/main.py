@@ -216,27 +216,6 @@ def run(
 
 
 @app.command()
-def chat(
-    model: Optional[str] = typer.Option(
-        None,
-        "--model",
-        "-m",
-        help="Model to use in format provider/model",
-    ),
-    agent: Optional[str] = typer.Option(
-        None,
-        "--agent",
-        "-a",
-        help="Agent to use",
-    ),
-):
-    """Start an interactive chat session."""
-    from .cmd.chat import chat_command
-
-    asyncio.run(chat_command(model=model, agent=agent))
-
-
-@app.command()
 def config(
     show: bool = typer.Option(
         False,
