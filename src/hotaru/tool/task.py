@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import re
-import time
 from pathlib import Path
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
 from ..agent import Agent, AgentMode
-from ..core.id import Identifier
 from ..permission import Permission, PermissionAction
 from ..util.log import Log
 from .tool import Tool, ToolContext, ToolResult
@@ -100,8 +98,7 @@ async def _resolve_task_model(
 async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult:
     from ..project import Project
     from ..provider import Provider
-    from ..session.message import Message
-    from ..session.processor import SessionProcessor
+    from ..session.prompting import SessionPrompt
     from ..session.session import Session
     from ..session.system import SystemPrompt
 
@@ -148,18 +145,6 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
         )
         await Session.update(session.id, project_id=session.project_id, title=f"{params.description} (@{agent.name} subagent)")
 
-    processor = SessionProcessor(
-        session_id=session.id,
-        model_id=model_id,
-        provider_id=provider_id,
-        agent=agent.name,
-        cwd=cwd,
-        worktree=worktree,
-    )
-
-    if params.task_id:
-        await processor.load_history()
-
     project, _ = await Project.from_directory(cwd)
     system_prompt = await SystemPrompt.build_full_prompt(
         model=model_info,
@@ -168,54 +153,18 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
         is_git=project.vcs == "git",
     )
 
-    now = int(time.time() * 1000)
-    user_message = Message.create_user(
-        message_id=Identifier.ascending("message"),
+    prompt_result = await SessionPrompt.prompt(
         session_id=session.id,
-        text=params.prompt,
-        created=now,
-        agent=agent.name,
-    )
-    await Session.add_message(session.id, user_message)
-
-    result = await processor.process(
-        user_message=params.prompt,
-        system_prompt=system_prompt,
-    )
-
-    assistant_message = Message.create_assistant(
-        message_id=Identifier.ascending("message"),
-        session_id=session.id,
-        model_id=model_id,
+        content=params.prompt,
         provider_id=provider_id,
+        model_id=model_id,
+        agent=agent.name,
         cwd=cwd,
-        root=worktree,
-        created=now,
-        agent=processor.last_assistant_agent(),
+        worktree=worktree,
+        system_prompt=system_prompt,
+        resume_history=bool(params.task_id),
     )
-    if result.text:
-        Message.add_text(assistant_message, result.text)
-    for tool_call in result.tool_calls:
-        Message.add_tool_result(
-            assistant_message,
-            tool_call_id=tool_call.id,
-            tool_name=tool_call.name,
-            args=tool_call.input,
-            result=tool_call.output if tool_call.status == "completed" else (tool_call.error or ""),
-        )
-        for attachment in tool_call.attachments:
-            mime = attachment.get("mime") or attachment.get("media_type")
-            url = attachment.get("url")
-            if not mime or not url:
-                continue
-            Message.add_file(
-                assistant_message,
-                media_type=str(mime),
-                filename=attachment.get("filename"),
-                url=str(url),
-            )
-    Message.complete(assistant_message, int(time.time() * 1000))
-    await Session.add_message(session.id, assistant_message)
+    result = prompt_result.result
 
     if result.error:
         raise RuntimeError(result.error)

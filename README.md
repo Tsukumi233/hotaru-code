@@ -251,13 +251,20 @@ You are a reviewer agent. Focus on correctness, regression risk, and test gaps.
 
 - `src/hotaru/cli/`：CLI 入口与子命令
 - `src/hotaru/tui/`：Textual TUI
-- `src/hotaru/session/`：会话、消息、处理循环
+- `src/hotaru/session/`：会话、消息与执行循环（`SessionPrompt.loop + SessionProcessor`）
 - `src/hotaru/tool/`：内置工具与注册中心
 - `src/hotaru/provider/`：Provider 与模型抽象
 - `src/hotaru/mcp/`：MCP 客户端与认证
 - `src/hotaru/permission/`：权限规则与交互
 - `src/hotaru/skill/`：Skill 发现与加载
 - `src/hotaru/lsp/`：LSP 客户端与服务管理
+
+## 会话架构（当前）
+
+- 外层编排：`SessionPrompt.prompt()/loop()` 负责多轮循环、compaction、structured output、工具解析与策略注入
+- 单轮执行：`SessionProcessor.process_step()` 只处理一次流式响应与工具执行
+- 主消息模型：`session/message_store.py`（message + part 分离存储）
+- Provider 语义对齐：`provider/transform.py` 统一消息归一化、tool-call id、provider 选项映射与缓存提示注入
 
 ## 开发
 

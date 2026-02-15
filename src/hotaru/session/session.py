@@ -15,7 +15,10 @@ from ..core.id import Identifier
 from ..core.global_paths import GlobalPath
 from ..storage import Storage, NotFoundError
 from ..util.log import Log
-from .message import MessageInfo
+from .message_store import MessageInfo as StoredMessageInfo
+from .message_store import Part as StoredMessagePart
+from .message_store import WithParts as StoredMessageWithParts
+from .message_store import parse_part
 
 log = Log.create({"service": "session"})
 
@@ -95,8 +98,26 @@ class Session:
         return ["session", project_id, session_id]
 
     @staticmethod
-    def _message_key(session_id: str, message_id: str) -> List[str]:
-        return ["message", session_id, message_id]
+    def _message_store_key(session_id: str, message_id: str) -> List[str]:
+        return ["message_store", session_id, message_id]
+
+    @staticmethod
+    def _part_key(session_id: str, part_id: str) -> List[str]:
+        return ["part", session_id, part_id]
+
+    @classmethod
+    async def _touch_session(cls, session_id: str) -> None:
+        """Update session.updated timestamp."""
+        session = await cls.get(session_id)
+        if not session:
+            return
+        try:
+            await Storage.update(
+                cls._session_key(session.project_id, session_id),
+                lambda d: d["time"].__setitem__("updated", int(time.time() * 1000)),
+            )
+        except NotFoundError:
+            return
 
     @classmethod
     async def create(
@@ -309,8 +330,11 @@ class Session:
                 await cls.delete(s.id, project_id=session.project_id)
 
         # Delete all messages for this session
-        msg_keys = await Storage.list(["message", session_id])
-        for key in msg_keys:
+        stored_msg_keys = await Storage.list(["message_store", session_id])
+        for key in stored_msg_keys:
+            await Storage.remove(key)
+        part_keys = await Storage.list(["part", session_id])
+        for key in part_keys:
             await Storage.remove(key)
 
         # Delete the session itself
@@ -321,50 +345,105 @@ class Session:
         return True
 
     @classmethod
-    async def add_message(cls, session_id: str, message: MessageInfo) -> None:
-        """Add a message to a session (persisted to disk).
-
-        Args:
-            session_id: Session ID
-            message: Message to add
-        """
+    async def update_message(cls, message: StoredMessageInfo) -> StoredMessageInfo:
+        """Upsert a structured message info record."""
         await Storage.write(
-            cls._message_key(session_id, message.id),
+            cls._message_store_key(message.session_id, message.id),
             message.model_dump(),
         )
-
-        # Touch session timestamp
-        session = await cls.get(session_id)
-        if session:
-            try:
-                await Storage.update(
-                    cls._session_key(session.project_id, session_id),
-                    lambda d: d["time"].__setitem__("updated", int(time.time() * 1000)),
-                )
-            except NotFoundError:
-                pass
+        await cls._touch_session(message.session_id)
+        return message
 
     @classmethod
-    async def get_messages(cls, session_id: str) -> List[MessageInfo]:
-        """Get messages for a session (loaded from disk).
+    async def get_message(cls, session_id: str, message_id: str) -> Optional[StoredMessageInfo]:
+        """Get one structured message info record by id."""
+        try:
+            data = await Storage.read(cls._message_store_key(session_id, message_id))
+        except NotFoundError:
+            return None
+        try:
+            return StoredMessageInfo.model_validate(data)
+        except Exception:
+            return None
 
-        Args:
-            session_id: Session ID
+    @classmethod
+    async def update_part(cls, part: StoredMessagePart) -> StoredMessagePart:
+        """Upsert a structured message part record."""
+        await Storage.write(
+            cls._part_key(part.session_id, part.id),
+            part.model_dump(),
+        )
+        await cls._touch_session(part.session_id)
+        return part
 
-        Returns:
-            List of messages, oldest first
-        """
-        keys = await Storage.list(["message", session_id])
-        messages: List[MessageInfo] = []
+    @classmethod
+    async def update_part_delta(
+        cls,
+        *,
+        session_id: str,
+        message_id: str,
+        part_id: str,
+        field: str,
+        delta: str,
+    ) -> Optional[StoredMessagePart]:
+        """Append string delta to a part field (e.g. text/reasoning)."""
+        key = cls._part_key(session_id, part_id)
+        try:
+            raw = await Storage.update(
+                key,
+                lambda d: d.__setitem__(field, str(d.get(field, "")) + delta),
+            )
+        except NotFoundError:
+            return None
+        part = parse_part(raw)
+        if getattr(part, "message_id", None) != message_id:
+            return None
+        await cls._touch_session(session_id)
+        return part
+
+    @classmethod
+    async def parts(cls, session_id: str, message_id: str) -> List[StoredMessagePart]:
+        """List structured message parts for a message, ordered by part id."""
+        keys = await Storage.list(["part", session_id])
+        result: List[StoredMessagePart] = []
         for key in keys:
             try:
                 data = await Storage.read(key)
-                messages.append(MessageInfo.model_validate(data))
-            except (NotFoundError, Exception):
+                part = parse_part(data)
+            except Exception:
                 continue
-        # Sort by message ID (ascending = chronological)
-        messages.sort(key=lambda m: m.id)
-        return messages
+            if part.message_id == message_id:
+                result.append(part)
+        result.sort(key=lambda p: p.id)
+        return result
+
+    @classmethod
+    async def messages(cls, *, session_id: str) -> List[StoredMessageWithParts]:
+        """List structured messages with all their parts."""
+        message_keys = await Storage.list(["message_store", session_id])
+        infos: List[StoredMessageInfo] = []
+        for key in message_keys:
+            try:
+                data = await Storage.read(key)
+                info = StoredMessageInfo.model_validate(data)
+            except Exception:
+                continue
+            infos.append(info)
+        infos.sort(key=lambda i: i.id)
+
+        part_keys = await Storage.list(["part", session_id])
+        by_message: Dict[str, List[StoredMessagePart]] = {}
+        for key in part_keys:
+            try:
+                data = await Storage.read(key)
+                part = parse_part(data)
+            except Exception:
+                continue
+            by_message.setdefault(part.message_id, []).append(part)
+        for parts in by_message.values():
+            parts.sort(key=lambda p: p.id)
+
+        return [StoredMessageWithParts(info=info, parts=by_message.get(info.id, [])) for info in infos]
 
     @classmethod
     async def delete_messages(
@@ -389,7 +468,15 @@ class Session:
             return 0
 
         for message_id in message_ids:
-            await Storage.remove(cls._message_key(session_id, message_id))
+            await Storage.remove(cls._message_store_key(session_id, message_id))
+        part_keys = await Storage.list(["part", session_id])
+        for key in part_keys:
+            try:
+                part_data = await Storage.read(key)
+            except NotFoundError:
+                continue
+            if part_data.get("message_id") in message_ids:
+                await Storage.remove(key)
 
         try:
             updated_data = await Storage.update(
@@ -425,7 +512,7 @@ class Session:
         if not session:
             return None
 
-        messages = await cls.get_messages(session_id)
+        messages = await cls.messages(session_id=session_id)
 
         # Create new session
         new_session = await cls.create(
@@ -437,15 +524,28 @@ class Session:
             parent_id=session_id
         )
 
-        # Deep-copy messages up to the fork point
+        # Deep-copy structured messages + parts up to the fork point.
+        id_map: Dict[str, str] = {}
         for msg in messages:
-            cloned = msg.model_copy(deep=True)
-            # Give the clone a new ID and re-parent it
-            cloned_id = Identifier.ascending("message")
-            cloned.id = cloned_id
-            cloned.metadata.session_id = new_session.id
-            await cls.add_message(new_session.id, cloned)
-            if from_message_id and msg.id == from_message_id:
+            old_id = msg.info.id
+            new_id = Identifier.ascending("message")
+            id_map[old_id] = new_id
+
+            cloned_info = msg.info.model_copy(deep=True)
+            cloned_info.id = new_id
+            cloned_info.session_id = new_session.id
+            if cloned_info.parent_id:
+                cloned_info.parent_id = id_map.get(cloned_info.parent_id)
+            await cls.update_message(cloned_info)
+
+            for part in msg.parts:
+                cloned_part = part.model_copy(deep=True)
+                cloned_part.id = Identifier.ascending("part")
+                cloned_part.session_id = new_session.id
+                cloned_part.message_id = new_id
+                await cls.update_part(cloned_part)
+
+            if from_message_id and old_id == from_message_id:
                 break
 
         log.info("forked session", {

@@ -6,15 +6,6 @@ from importlib import import_module
 from typing import Dict, Tuple
 
 _EXPORTS: Dict[str, Tuple[str, str]] = {
-    "Message": (".message", "Message"),
-    "MessageInfo": (".message", "MessageInfo"),
-    "MessagePart": (".message", "MessagePart"),
-    "TextPart": (".message", "TextPart"),
-    "ReasoningPart": (".message", "ReasoningPart"),
-    "ToolInvocationPart": (".message", "ToolInvocationPart"),
-    "ToolCall": (".message", "ToolCall"),
-    "ToolResult": (".message", "ToolResult"),
-    "FilePart": (".message", "FilePart"),
     "Session": (".session", "Session"),
     "SessionInfo": (".session", "SessionInfo"),
     "LLM": (".llm", "LLM"),
@@ -29,6 +20,13 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "TodoInfo": (".todo", "TodoInfo"),
     "TodoUpdated": (".todo", "TodoUpdated"),
     "TodoUpdatedProperties": (".todo", "TodoUpdatedProperties"),
+    "StoredMessageInfo": (".message_store", "MessageInfo"),
+    "StoredMessageWithParts": (".message_store", "WithParts"),
+    "StoredMessagePart": (".message_store", "Part"),
+    "SessionPrompt": (".prompting", "SessionPrompt"),
+    "PromptResult": (".prompting", "PromptResult"),
+    "SessionCompaction": (".compaction", "SessionCompaction"),
+    "SessionSummary": (".summary", "SessionSummary"),
 }
 
 

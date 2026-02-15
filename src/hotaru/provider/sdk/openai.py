@@ -66,6 +66,7 @@ class OpenAISDK:
         model: str,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -95,6 +96,8 @@ class OpenAISDK:
 
         if tools:
             params["tools"] = tools
+        if tool_choice is not None:
+            params["tool_choice"] = tool_choice
         if max_tokens is not None:
             params["max_tokens"] = max_tokens
         if temperature is not None:
@@ -110,6 +113,7 @@ class OpenAISDK:
                 "stream",
                 "stream_options",
                 "tools",
+                "tool_choice",
                 "max_tokens",
                 "temperature",
                 "top_p",
@@ -160,27 +164,37 @@ class OpenAISDK:
                             "id": tc.id or "",
                             "name": tc.function.name if tc.function else "",
                             "arguments": "",
+                            "started": False,
                         }
-                        if tc.id and tc.function and tc.function.name:
-                            yield StreamChunk(
-                                type="tool_call_start",
-                                tool_call_id=tc.id,
-                                tool_call_name=tc.function.name,
-                            )
+
+                    current = tool_calls_in_progress[idx]
+                    if tc.id:
+                        current["id"] = tc.id
+                    if tc.function and tc.function.name:
+                        current["name"] = tc.function.name
+
+                    if (not current["started"]) and current["id"] and current["name"]:
+                        current["started"] = True
+                        yield StreamChunk(
+                            type="tool_call_start",
+                            tool_call_id=current["id"],
+                            tool_call_name=current["name"],
+                        )
 
                     # Accumulate arguments
                     if tc.function and tc.function.arguments:
-                        tool_calls_in_progress[idx]["arguments"] += tc.function.arguments
+                        current["arguments"] += tc.function.arguments
                         yield StreamChunk(
                             type="tool_call_delta",
-                            tool_call_id=tool_calls_in_progress[idx]["id"],
+                            tool_call_id=current["id"] or f"tool_call_{idx}",
                             tool_call_input_delta=tc.function.arguments,
                         )
 
             # Handle finish reason
             if choice.finish_reason:
                 # Emit completed tool calls
-                for idx, tc_data in tool_calls_in_progress.items():
+                for idx in sorted(tool_calls_in_progress.keys()):
+                    tc_data = tool_calls_in_progress[idx]
                     try:
                         args = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
                     except json.JSONDecodeError:
@@ -194,6 +208,7 @@ class OpenAISDK:
                             input=args,
                         ),
                     )
+                tool_calls_in_progress.clear()
 
                 yield StreamChunk(
                     type="message_delta",
@@ -207,6 +222,7 @@ class OpenAISDK:
         model: str,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -233,6 +249,7 @@ class OpenAISDK:
             model=model,
             messages=messages,
             tools=tools,
+            tool_choice=tool_choice,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,

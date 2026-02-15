@@ -17,6 +17,21 @@ log = Log.create({"service": "session.system"})
 # Load default prompt
 _PROMPT_DIR = Path(__file__).parent / "prompt"
 _DEFAULT_PROMPT = (_PROMPT_DIR / "default.txt").read_text(encoding="utf-8")
+_MODEL_PROMPTS = {
+    "gpt-5": (
+        "For GPT-5 family models: keep outputs concise by default, prefer structured tool-driven work, "
+        "and avoid unnecessary narrative."
+    ),
+    "gpt": (
+        "For GPT family models: prioritize deterministic tool use, explicit assumptions, and incremental verification."
+    ),
+    "gemini": (
+        "For Gemini family models: avoid dangling tool-call states and keep follow-up user prompts explicit when resuming."
+    ),
+    "claude": (
+        "For Claude family models: avoid empty assistant turns and keep tool call IDs/simple schemas stable."
+    ),
+}
 
 
 class SystemPrompt:
@@ -40,8 +55,31 @@ class SystemPrompt:
         Returns:
             List of system prompt strings
         """
-        # For now, use the same prompt for all models
-        # In the future, we can customize based on model capabilities
+        model_id = (model.id or "").lower()
+        family = (model.family or "").lower()
+        name = (model.name or "").lower()
+        provider = (model.provider_id or "").lower()
+
+        def pick_variant() -> Optional[str]:
+            if "gpt-5" in model_id or "gpt-5" in name:
+                return _MODEL_PROMPTS["gpt-5"]
+            if "gpt" in model_id or "gpt" in name or "openai" in provider:
+                return _MODEL_PROMPTS["gpt"]
+            if "gemini" in model_id or "gemini" in family or "gemini" in name:
+                return _MODEL_PROMPTS["gemini"]
+            if (
+                "claude" in model_id
+                or "claude" in family
+                or "claude" in name
+                or provider == "anthropic"
+                or model.api_type == "anthropic"
+            ):
+                return _MODEL_PROMPTS["claude"]
+            return None
+
+        extra = pick_variant()
+        if extra:
+            return [_DEFAULT_PROMPT, extra]
         return [_DEFAULT_PROMPT]
 
     @classmethod
