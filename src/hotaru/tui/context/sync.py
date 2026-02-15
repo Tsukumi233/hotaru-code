@@ -10,6 +10,7 @@ from contextvars import ContextVar
 import asyncio
 
 from ...util.log import Log
+from ..message_adapter import structured_messages_to_tui
 
 log = Log.create({"service": "tui.context.sync"})
 
@@ -368,9 +369,9 @@ class SyncContext:
                 },
             })
 
-        # Load messages
-        messages = await Session.get_messages(session_id)
-        msg_dicts = [m.model_dump() for m in messages]
+        # Load messages from structured message store.
+        stored_messages = await Session.messages(session_id=session_id)
+        msg_dicts = structured_messages_to_tui(stored_messages)
         self.set_messages(session_id, msg_dicts)
 
         # Mark as synced

@@ -77,6 +77,7 @@ class AnthropicSDK:
         messages: List[Dict[str, Any]],
         system: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         max_tokens: int = 4096,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -108,6 +109,8 @@ class AnthropicSDK:
             params["system"] = system
         if tools:
             params["tools"] = tools
+        if tool_choice is not None:
+            params["tool_choice"] = tool_choice
         if temperature is not None:
             params["temperature"] = temperature
         if top_p is not None:
@@ -121,6 +124,7 @@ class AnthropicSDK:
                 "max_tokens",
                 "system",
                 "tools",
+                "tool_choice",
                 "temperature",
                 "top_p",
                 "stop_sequences",
@@ -140,9 +144,14 @@ class AnthropicSDK:
         async with self.client.messages.stream(**params) as stream:
             async for event in stream:
                 if isinstance(event, MessageStartEvent):
+                    usage: Dict[str, int] = {"input_tokens": event.message.usage.input_tokens}
+                    if getattr(event.message.usage, "cache_read_input_tokens", None):
+                        usage["cache_read_tokens"] = int(event.message.usage.cache_read_input_tokens)
+                    if getattr(event.message.usage, "cache_creation_input_tokens", None):
+                        usage["cache_write_tokens"] = int(event.message.usage.cache_creation_input_tokens)
                     yield StreamChunk(
                         type="message_start",
-                        usage={"input_tokens": event.message.usage.input_tokens},
+                        usage=usage,
                     )
 
                 elif isinstance(event, ContentBlockStartEvent):
@@ -151,7 +160,7 @@ class AnthropicSDK:
                     elif isinstance(event.content_block, ToolUseBlock):
                         current_tool_id = event.content_block.id
                         current_tool_name = event.content_block.name
-                        current_tool_input = ""
+                        current_tool_input = json.dumps(event.content_block.input or {})
                         yield StreamChunk(
                             type="tool_call_start",
                             tool_call_id=current_tool_id,
@@ -204,6 +213,7 @@ class AnthropicSDK:
         messages: List[Dict[str, Any]],
         system: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         max_tokens: int = 4096,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -232,6 +242,7 @@ class AnthropicSDK:
             messages=messages,
             system=system,
             tools=tools,
+            tool_choice=tool_choice,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,

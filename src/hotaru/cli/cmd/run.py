@@ -22,12 +22,11 @@ from ...command import (
     publish_command_executed,
 )
 from ...core.bus import Bus
-from ...core.id import Identifier
 from ...permission import Permission, PermissionAsked, PermissionReply
 from ...question import Question, QuestionAsked
 from ...project import Instance, Project
 from ...provider import Provider
-from ...session import Message, Session, SessionProcessor, SystemPrompt
+from ...session import Session, SessionPrompt, SystemPrompt
 from ...tool import ToolRegistry
 from ...util.log import Log
 
@@ -180,31 +179,7 @@ async def run_command(
         console.print(f"> {agent_name} · {provider_id}/{model_id}")
         console.print()
 
-    # Create user message
-    now = int(time.time() * 1000)
-    user_message = Message.create_user(
-        message_id=Identifier.ascending("message"),
-        session_id=session.id,
-        text=message,
-        created=now,
-        agent=agent_name,
-    )
-    await Session.add_message(session.id, user_message)
-
-    # Create session processor for agentic loop
     is_resuming = continue_session or (session_id is not None)
-    processor = SessionProcessor(
-        session_id=session.id,
-        model_id=model_id,
-        provider_id=provider_id,
-        agent=agent_name,
-        cwd=cwd,
-        worktree=sandbox,
-    )
-
-    # Load prior conversation history when resuming
-    if is_resuming:
-        await processor.load_history()
 
     # Build system prompt
     system_prompt = await SystemPrompt.build_full_prompt(
@@ -389,13 +364,21 @@ async def run_command(
     try:
         if json_output:
             # JSON output mode
-            result = await processor.process(
-                user_message=message,
+            prompt_result = await SessionPrompt.prompt(
+                session_id=session.id,
+                content=message,
+                provider_id=provider_id,
+                model_id=model_id,
+                agent=agent_name,
+                cwd=cwd,
+                worktree=sandbox,
                 system_prompt=system_prompt,
                 on_text=on_text,
                 on_tool_start=on_tool_start,
                 on_tool_end=on_tool_end,
+                resume_history=is_resuming,
             )
+            result = prompt_result.result
 
             # Emit final text
             if response_text:
@@ -418,13 +401,21 @@ async def run_command(
         else:
             # Interactive mode with live display
             with Live(text_buffer, console=console, refresh_per_second=10, transient=True) as live:
-                result = await processor.process(
-                    user_message=message,
+                prompt_result = await SessionPrompt.prompt(
+                    session_id=session.id,
+                    content=message,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    agent=agent_name,
+                    cwd=cwd,
+                    worktree=sandbox,
                     system_prompt=system_prompt,
                     on_text=lambda t: (on_text(t), live.update(text_buffer)),
                     on_tool_start=on_tool_start,
                     on_tool_end=on_tool_end,
+                    resume_history=is_resuming,
                 )
+                result = prompt_result.result
 
             # Print final response
             if response_text:
@@ -448,47 +439,13 @@ async def run_command(
         unsub()
         unsub_question()
 
-    # Create assistant message record
-    assistant_message = Message.create_assistant(
-        message_id=Identifier.ascending("message"),
-        session_id=session.id,
-        model_id=model_id,
-        provider_id=provider_id,
-        cwd=cwd,
-        root=sandbox,
-        created=now,
-        agent=processor.last_assistant_agent(),
-    )
-    Message.add_text(assistant_message, response_text)
-    for tc in (result.tool_calls if result else []):
-        Message.add_tool_result(
-            assistant_message,
-            tool_call_id=tc.id,
-            tool_name=tc.name,
-            args=tc.input,
-            result=tc.output if tc.status == "completed" else (tc.error or ""),
-        )
-        for attachment in tc.attachments:
-            mime = attachment.get("mime") or attachment.get("media_type")
-            url = attachment.get("url")
-            if not mime or not url:
-                continue
-            Message.add_file(
-                assistant_message,
-                media_type=str(mime),
-                filename=attachment.get("filename"),
-                url=str(url),
-            )
-    Message.complete(assistant_message, int(time.time() * 1000))
-    await Session.add_message(session.id, assistant_message)
-
     if init_arguments is not None:
         await publish_command_executed(
             name="init",
             project_id=project.id,
             arguments=init_arguments,
             session_id=session.id,
-            message_id=assistant_message.id,
+            message_id=prompt_result.assistant_message_id,
         )
 
     log.info("run completed", {"session_id": session.id})

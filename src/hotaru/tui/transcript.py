@@ -46,7 +46,7 @@ def format_transcript(
 
 
 def _format_message(message: Dict[str, Any], options: TranscriptOptions) -> List[str]:
-    role = str(message.get("role") or "")
+    role = _message_role(message)
     parts = message.get("parts", [])
 
     lines: List[str] = []
@@ -70,10 +70,7 @@ def _format_assistant_header(message: Dict[str, Any], options: TranscriptOptions
     if not options.assistant_metadata:
         return ["## Assistant", ""]
 
-    metadata = message.get("metadata", {})
-    assistant = metadata.get("assistant", {}) if isinstance(metadata, dict) else {}
-    provider_id = assistant.get("provider_id") if isinstance(assistant, dict) else None
-    model_id = assistant.get("model_id") if isinstance(assistant, dict) else None
+    provider_id, model_id = _assistant_model(message)
 
     model_label = "assistant"
     if provider_id and model_id:
@@ -81,7 +78,7 @@ def _format_assistant_header(message: Dict[str, Any], options: TranscriptOptions
     elif model_id:
         model_label = str(model_id)
 
-    duration = _format_duration(metadata)
+    duration = _format_duration(message)
     if duration:
         return [f"## Assistant ({model_label} · {duration})", ""]
     return [f"## Assistant ({model_label})", ""]
@@ -103,39 +100,67 @@ def _format_part(part: Dict[str, Any], options: TranscriptOptions) -> List[str]:
             return []
         return ["_Thinking:_", "", text, ""]
 
-    if part_type == "tool-invocation":
-        invocation = part.get("tool_invocation")
-        if not isinstance(invocation, dict):
-            return []
-        return _format_tool_invocation(invocation, options)
+    if part_type == "tool":
+        return _format_tool_part(part, options)
+
+    if part_type == "step-start":
+        return ["_Step started._", ""]
+
+    if part_type == "step-finish":
+        reason = str(part.get("reason") or "completed")
+        lines = [f"_Step finished: {reason}._"]
+        if options.tool_details:
+            tokens = part.get("tokens")
+            if isinstance(tokens, dict):
+                token_line = (
+                    f"input={int(tokens.get('input', 0) or 0)}, "
+                    f"output={int(tokens.get('output', 0) or 0)}, "
+                    f"reasoning={int(tokens.get('reasoning', 0) or 0)}"
+                )
+                lines.extend(["", f"`{token_line}`"])
+        lines.append("")
+        return lines
+
+    if part_type == "compaction":
+        auto = bool(part.get("auto"))
+        mode = "auto" if auto else "manual"
+        return [f"_Compaction checkpoint ({mode})._", ""]
+
+    if part_type == "subtask":
+        description = str(part.get("description") or "subtask")
+        agent = str(part.get("agent") or "subagent")
+        return [f"**Subtask ({agent}):** {description}", ""]
 
     if part_type == "file":
         filename = part.get("filename") or "attachment"
         url = part.get("url") or ""
         return [f"**File:** {filename} ({url})", ""]
 
-    if part_type == "source-url":
-        title = part.get("title") or part.get("url") or "source"
-        url = part.get("url") or ""
-        return [f"**Source:** {title} ({url})", ""]
-
     return []
 
 
-def _format_tool_invocation(invocation: Dict[str, Any], options: TranscriptOptions) -> List[str]:
-    tool_name = invocation.get("tool_name") or "tool"
-    state = invocation.get("state") or "call"
-    lines = [f"**Tool: {tool_name}**"]
+def _format_tool_part(part: Dict[str, Any], options: TranscriptOptions) -> List[str]:
+    tool_name = part.get("tool") or "tool"
+    state = part.get("state")
+    if not isinstance(state, dict):
+        return [f"**Tool: {tool_name}**", ""]
+
+    status = str(state.get("status") or "unknown")
+    lines = [f"**Tool: {tool_name} ({status})**"]
 
     if options.tool_details:
-        args = invocation.get("args")
-        if args not in (None, "", {}):
-            lines.extend(["", "**Input:**", "```json", _to_json(args), "```"])
+        input_data = state.get("input")
+        if input_data not in (None, "", {}):
+            lines.extend(["", "**Input:**", "```json", _to_json(input_data), "```"])
 
-        if state == "result":
-            result = invocation.get("result")
-            if result not in (None, ""):
-                lines.extend(["", "**Output:**", "```", str(result), "```"])
+        if status == "completed":
+            output = state.get("output")
+            if output not in (None, ""):
+                lines.extend(["", "**Output:**", "```", str(output), "```"])
+        elif status == "error":
+            error = state.get("error")
+            if error not in (None, ""):
+                lines.extend(["", "**Error:**", "```", str(error), "```"])
 
     lines.append("")
     return lines
@@ -148,10 +173,11 @@ def _to_json(value: Any) -> str:
         return str(value)
 
 
-def _format_duration(metadata: Any) -> str:
-    if not isinstance(metadata, dict):
+def _format_duration(message: Dict[str, Any]) -> str:
+    info = message.get("info")
+    if not isinstance(info, dict):
         return ""
-    time_data = metadata.get("time")
+    time_data = info.get("time")
     if not isinstance(time_data, dict):
         return ""
     created = time_data.get("created")
@@ -161,6 +187,30 @@ def _format_duration(metadata: Any) -> str:
     if completed < created:
         return ""
     return f"{(completed - created) / 1000:.1f}s"
+
+
+def _assistant_model(message: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    info = message.get("info")
+    if isinstance(info, dict):
+        model = info.get("model")
+        if isinstance(model, dict):
+            provider_id = model.get("provider_id")
+            model_id = model.get("model_id")
+            return (
+                str(provider_id) if provider_id else None,
+                str(model_id) if model_id else None,
+            )
+    return None, None
+
+
+def _message_role(message: Dict[str, Any]) -> str:
+    role = message.get("role")
+    if role:
+        return str(role)
+    info = message.get("info")
+    if isinstance(info, dict) and info.get("role"):
+        return str(info.get("role"))
+    return ""
 
 
 def _format_timestamp(timestamp: Any) -> str:

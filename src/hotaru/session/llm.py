@@ -5,14 +5,12 @@ Provides a unified interface for streaming chat completions from different provi
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Union
 
-from pydantic import BaseModel
-
-from ..agent import Agent
 from ..provider import Provider
-from ..provider.sdk.anthropic import AnthropicSDK, StreamChunk as AnthropicChunk, ToolCall
-from ..provider.sdk.openai import OpenAISDK, StreamChunk as OpenAIChunk
+from ..provider.transform import anthropic_messages, anthropic_tools, normalize_messages
+from ..provider.sdk.anthropic import AnthropicSDK, ToolCall
+from ..provider.sdk.openai import OpenAISDK
 from ..util.log import Log
 
 log = Log.create({"service": "llm"})
@@ -39,8 +37,10 @@ class StreamInput:
     model_id: str
     provider_id: str
     messages: List[Dict[str, Any]]
-    system: Optional[str] = None
-    tools: Optional[List[Dict[str, Any]]] = None
+    system: Optional[List[str]] = None
+    tools: Optional[Union[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+    retries: int = 0
     max_tokens: int = 4096
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -61,6 +61,70 @@ class LLM:
 
     Provides a unified interface for streaming chat completions.
     """
+
+    @staticmethod
+    def _join_system_prompt(system: Optional[Union[str, Sequence[str]]]) -> Optional[str]:
+        if system is None:
+            return None
+        if isinstance(system, str):
+            return system
+        parts = [str(item) for item in system if str(item).strip()]
+        return "\n\n".join(parts) if parts else None
+
+    @staticmethod
+    def has_tool_calls(messages: Sequence[Dict[str, Any]]) -> bool:
+        """Check whether message history contains tool call/result records."""
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "tool":
+                return True
+            tool_calls = msg.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                return True
+        return False
+
+    @staticmethod
+    def _normalize_finish_reason(reason: Optional[str]) -> Optional[str]:
+        if not reason:
+            return None
+        normalized = reason.strip().lower()
+        if normalized in {"tool_calls", "tool_call", "tool-use", "tool_use"}:
+            return "tool-calls"
+        if normalized in {"stop", "end_turn", "end-turn", "done"}:
+            return "stop"
+        if normalized in {"length", "max_tokens", "max-tokens"}:
+            return "length"
+        if normalized in {"content_filter", "content-filter"}:
+            return "content_filter"
+        return "unknown"
+
+    @staticmethod
+    def _tool_list(tools: Optional[Union[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]]) -> Optional[List[Dict[str, Any]]]:
+        if not tools:
+            return None
+        if isinstance(tools, list):
+            return tools
+        if isinstance(tools, dict):
+            out: List[Dict[str, Any]] = []
+            for name, item in tools.items():
+                if not isinstance(item, dict):
+                    continue
+                if "function" in item:
+                    out.append(item)
+                    continue
+                out.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": str(name),
+                            "description": str(item.get("description", "")),
+                            "parameters": dict(item.get("parameters") or {"type": "object", "properties": {}}),
+                        },
+                    }
+                )
+            return out
+        return None
 
     @classmethod
     async def stream(cls, input: StreamInput) -> AsyncIterator[StreamChunk]:
@@ -106,40 +170,59 @@ class LLM:
         # Determine API type from model or provider options
         api_type = getattr(model, 'api_type', None) or provider.options.get("type", "openai")
 
-        try:
-            if api_type == "anthropic":
-                # Use Anthropic SDK
-                async for chunk in cls._stream_anthropic(
-                    api_key=api_key,
-                    model=model.api_id,
-                    messages=input.messages,
-                    base_url=base_url,
-                    system=input.system,
-                    tools=input.tools,
-                    max_tokens=input.max_tokens,
-                    temperature=input.temperature,
-                    top_p=input.top_p,
-                    options=input.options,
-                ):
-                    yield chunk
-            else:
-                # Default to OpenAI-compatible (works for most providers)
-                async for chunk in cls._stream_openai(
-                    api_key=api_key,
-                    base_url=base_url,
-                    model=model.api_id,
-                    messages=input.messages,
-                    system=input.system,
-                    tools=input.tools,
-                    max_tokens=input.max_tokens,
-                    temperature=input.temperature,
-                    top_p=input.top_p,
-                    options=input.options,
-                ):
-                    yield chunk
-        except Exception as e:
-            log.error("stream error", {"error": str(e)})
-            yield StreamChunk(type="error", error=str(e))
+        retries = max(int(input.retries or 0), 0)
+        tool_list = cls._tool_list(input.tools)
+        normalized_messages = normalize_messages(
+            input.messages,
+            provider_id=input.provider_id,
+            model_id=input.model_id,
+            api_type=str(api_type),
+        )
+        for attempt in range(retries + 1):
+            try:
+                if api_type == "anthropic":
+                    # Use Anthropic SDK
+                    prepared_messages = anthropic_messages(normalized_messages)
+                    prepared_tools = anthropic_tools(tool_list)
+                    async for chunk in cls._stream_anthropic(
+                        api_key=api_key,
+                        model=model.api_id,
+                        messages=prepared_messages,
+                        base_url=base_url,
+                        system=cls._join_system_prompt(input.system),
+                        tools=prepared_tools,
+                        tool_choice=input.tool_choice,
+                        max_tokens=input.max_tokens,
+                        temperature=input.temperature,
+                        top_p=input.top_p,
+                        options=input.options,
+                    ):
+                        chunk.stop_reason = cls._normalize_finish_reason(chunk.stop_reason)
+                        yield chunk
+                else:
+                    # Default to OpenAI-compatible (works for most providers)
+                    async for chunk in cls._stream_openai(
+                        api_key=api_key,
+                        base_url=base_url,
+                        model=model.api_id,
+                        messages=normalized_messages,
+                        system=cls._join_system_prompt(input.system),
+                        tools=tool_list,
+                        tool_choice=input.tool_choice,
+                        max_tokens=input.max_tokens,
+                        temperature=input.temperature,
+                        top_p=input.top_p,
+                        options=input.options,
+                    ):
+                        chunk.stop_reason = cls._normalize_finish_reason(chunk.stop_reason)
+                        yield chunk
+                return
+            except Exception as e:
+                if attempt >= retries:
+                    log.error("stream error", {"error": str(e), "attempt": attempt})
+                    yield StreamChunk(type="error", error=str(e))
+                    return
+                log.warn("stream retry", {"error": str(e), "attempt": attempt})
 
     @classmethod
     async def _stream_anthropic(
@@ -150,6 +233,7 @@ class LLM:
         base_url: Optional[str] = None,
         system: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         max_tokens: int = 4096,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -163,6 +247,7 @@ class LLM:
             messages=messages,
             system=system,
             tools=tools,
+            tool_choice=tool_choice,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -188,6 +273,7 @@ class LLM:
         base_url: Optional[str] = None,
         system: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         max_tokens: int = 4096,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -204,6 +290,7 @@ class LLM:
             model=model,
             messages=messages,
             tools=tools,
+            tool_choice=tool_choice,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
