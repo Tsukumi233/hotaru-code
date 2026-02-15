@@ -111,7 +111,9 @@ async def test_global_permission_string_is_supported(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.anyio
-async def test_default_read_env_rules_deny_sensitive_env_files(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_default_read_env_rules_require_confirmation_for_sensitive_env_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     Agent.reset()
     _patch_config(monkeypatch, {})
 
@@ -123,8 +125,8 @@ async def test_default_read_env_rules_deny_sensitive_env_files(monkeypatch: pyte
     nested_env_rule = Permission.evaluate("read", "/tmp/.env.local", ruleset)
     env_example_rule = Permission.evaluate("read", "/tmp/.env.example", ruleset)
 
-    assert env_rule.action == PermissionAction.DENY
-    assert nested_env_rule.action == PermissionAction.DENY
+    assert env_rule.action == PermissionAction.ASK
+    assert nested_env_rule.action == PermissionAction.ASK
     assert env_example_rule.action == PermissionAction.ALLOW
 
     Agent.reset()

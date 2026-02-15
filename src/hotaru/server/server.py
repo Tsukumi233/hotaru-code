@@ -108,6 +108,11 @@ class Server:
             Route("/session", cls._list_sessions, methods=["GET"]),
             Route("/session/{session_id}", cls._get_session, methods=["GET"]),
             Route("/session/{session_id}/summarize", cls._summarize_session, methods=["POST"]),
+            Route("/permission", cls._list_permissions, methods=["GET"]),
+            Route("/permission/{request_id}/reply", cls._reply_permission, methods=["POST"]),
+            Route("/question", cls._list_questions, methods=["GET"]),
+            Route("/question/{request_id}/reply", cls._reply_question, methods=["POST"]),
+            Route("/question/{request_id}/reject", cls._reject_question, methods=["POST"]),
 
             # Event stream
             Route("/event", cls._event_stream, methods=["GET"]),
@@ -335,6 +340,78 @@ class Server:
         )
 
     @classmethod
+    async def _list_permissions(cls, request: Request) -> JSONResponse:
+        """List pending permission requests."""
+        from ..permission import Permission
+
+        pending = await Permission.list_pending()
+        return JSONResponse([item.model_dump() for item in pending])
+
+    @classmethod
+    async def _reply_permission(cls, request: Request) -> JSONResponse:
+        """Reply to a permission request."""
+        from ..permission import Permission, PermissionReply
+
+        request_id = request.path_params["request_id"]
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+
+        reply_value = payload.get("reply")
+        message = payload.get("message")
+        if reply_value not in {r.value for r in PermissionReply}:
+            return JSONResponse({"error": "Field 'reply' must be one of: once, always, reject"}, status_code=400)
+
+        await Permission.reply(
+            request_id=request_id,
+            reply=PermissionReply(reply_value),
+            message=message if isinstance(message, str) else None,
+        )
+        return JSONResponse(True)
+
+    @classmethod
+    async def _list_questions(cls, request: Request) -> JSONResponse:
+        """List pending question requests."""
+        from ..question import Question
+
+        pending = await Question.list_pending()
+        return JSONResponse([item.model_dump() for item in pending])
+
+    @classmethod
+    async def _reply_question(cls, request: Request) -> JSONResponse:
+        """Reply to a question request."""
+        from ..question import Question
+
+        request_id = request.path_params["request_id"]
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+
+        answers = payload.get("answers")
+        if not isinstance(answers, list) or any(not isinstance(item, list) for item in answers):
+            return JSONResponse({"error": "Field 'answers' must be a list of string lists"}, status_code=400)
+        if any(any(not isinstance(choice, str) for choice in item) for item in answers):
+            return JSONResponse({"error": "Field 'answers' must contain only strings"}, status_code=400)
+
+        await Question.reply(request_id, answers)
+        return JSONResponse(True)
+
+    @classmethod
+    async def _reject_question(cls, request: Request) -> JSONResponse:
+        """Reject a question request."""
+        from ..question import Question
+
+        request_id = request.path_params["request_id"]
+        await Question.reject(request_id)
+        return JSONResponse(True)
+
+    @classmethod
     async def _event_stream(cls, request: Request) -> StreamingResponse:
         """Server-Sent Events stream for real-time updates."""
         async def event_generator():
@@ -344,8 +421,18 @@ class Server:
             # Subscribe to bus events
             queue: asyncio.Queue = asyncio.Queue()
 
-            def on_event(event: Dict[str, Any]) -> None:
-                asyncio.create_task(queue.put(event))
+            def on_event(event: Any) -> None:
+                if isinstance(event, dict):
+                    payload = event
+                elif hasattr(event, "model_dump"):
+                    payload = event.model_dump()
+                elif hasattr(event, "type") and hasattr(event, "properties"):
+                    payload = {"type": event.type, "properties": event.properties}
+                else:
+                    payload = {"type": "server.event", "properties": {}}
+                asyncio.create_task(queue.put(payload))
+
+            unsubscribe = Bus.subscribe_all(on_event)
 
             # Note: In a full implementation, we would subscribe to Bus events
             # For now, just send heartbeats
@@ -360,6 +447,8 @@ class Server:
                         yield f"data: {json.dumps({'type': 'server.heartbeat'})}\n\n"
             except asyncio.CancelledError:
                 pass
+            finally:
+                unsubscribe()
 
         return StreamingResponse(
             event_generator(),

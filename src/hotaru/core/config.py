@@ -26,6 +26,15 @@ class PermissionAction(str, Enum):
     DENY = "deny"
 
 
+class PermissionMemoryScope(str, Enum):
+    """Scope used for remember/always permission approvals."""
+
+    TURN = "turn"
+    SESSION = "session"
+    PROJECT = "project"
+    PERSISTED = "persisted"
+
+
 class McpLocalConfig(BaseModel):
     """Local MCP server configuration."""
     type: Literal["local"]
@@ -208,8 +217,10 @@ class Config(BaseModel):
 
     # Permission settings
     permission: Optional[Union[str, Dict[str, Any]]] = None
+    permission_memory_scope: Optional[PermissionMemoryScope] = None
     tools: Optional[Dict[str, bool]] = None
     strict_permissions: Optional[bool] = None
+    continue_loop_on_deny: Optional[bool] = None
     experimental: Optional[ExperimentalConfig] = None
 
     # Server settings

@@ -84,6 +84,7 @@ async def test_skill_execute_returns_content_and_requests_permission(
         always=None,
         metadata=None,
         request_id=None,
+        tool=None,
     ):
         captured["session_id"] = session_id
         captured["permission"] = permission

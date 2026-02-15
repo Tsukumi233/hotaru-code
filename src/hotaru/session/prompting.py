@@ -436,6 +436,9 @@ class SessionPrompt:
                 model_id=model_id,
                 output_format=output_format,
             )
+            assistant_id_for_turn = (
+                assistant_message_id if first_assistant and assistant_message_id else Identifier.ascending("message")
+            )
             tool_choice: Optional[Dict[str, Any] | str] = None
             if output_format and output_format.get("type") == "json_schema":
                 tool_choice = "required"
@@ -449,12 +452,10 @@ class SessionPrompt:
                 tool_definitions=resolved_tools,
                 tool_choice=tool_choice,
                 retries=2,
+                assistant_message_id=assistant_id_for_turn,
             )
 
             parent_id = current_user_id
-            assistant_id_for_turn = (
-                assistant_message_id if first_assistant and assistant_message_id else Identifier.ascending("message")
-            )
             first_assistant = False
             assistant_agent = processor.last_assistant_agent()
             await _persist_assistant_message(
@@ -698,14 +699,15 @@ class SessionPrompt:
         )
         compact_processor.messages = list(processor.messages)
 
+        summary_id = Identifier.ascending("message")
         result = await compact_processor.process_step(
             system_prompt=compact_system_prompt,
             on_text=None,
             on_tool_start=None,
             on_tool_end=None,
+            assistant_message_id=summary_id,
         )
 
-        summary_id = Identifier.ascending("message")
         await _persist_assistant_message(
             session_id=session_id,
             message_id=summary_id,

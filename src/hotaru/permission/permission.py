@@ -5,10 +5,9 @@ Controls what actions AI agents can perform based on configurable rules.
 
 import asyncio
 import fnmatch
-import os
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -139,8 +138,119 @@ class Permission:
     # Pending permission requests
     _pending: Dict[str, Dict[str, Any]] = {}
 
-    # Approved rules per project
-    _approved: Dict[str, List[PermissionRule]] = {}
+    # Approved rules per scope
+    _approved_session: Dict[str, List[PermissionRule]] = {}
+    _approved_project: Dict[str, List[PermissionRule]] = {}
+    _persisted_loaded: set[str] = set()
+
+    @classmethod
+    async def _resolve_scope(cls) -> str:
+        scope = "session"
+        try:
+            from ..core.config import ConfigManager
+
+            config = await ConfigManager.get()
+            configured = getattr(config, "permission_memory_scope", None)
+            if configured:
+                candidate = str(configured)
+                if candidate in {"turn", "session", "project", "persisted"}:
+                    scope = candidate
+        except Exception as e:
+            log.debug("failed to resolve permission memory scope", {"error": str(e)})
+        return scope
+
+    @classmethod
+    async def _resolve_project_id(cls, session_id: str) -> Optional[str]:
+        try:
+            from ..session.session import Session
+
+            session = await Session.get(session_id)
+            if session:
+                return session.project_id
+        except Exception as e:
+            log.debug("failed to resolve project id for permission scope", {"session_id": session_id, "error": str(e)})
+        return None
+
+    @classmethod
+    async def _ensure_persisted_loaded(cls, project_id: Optional[str]) -> None:
+        if not project_id or project_id in cls._persisted_loaded:
+            return
+        cls._persisted_loaded.add(project_id)
+        from ..storage import NotFoundError, Storage
+
+        try:
+            data = await Storage.read(["permission_approval", project_id])
+        except NotFoundError:
+            cls._approved_project[project_id] = []
+            return
+        except Exception as e:
+            log.warn("failed to load persisted permission approvals", {"project_id": project_id, "error": str(e)})
+            cls._approved_project[project_id] = []
+            return
+
+        if isinstance(data, list):
+            try:
+                cls._approved_project[project_id] = cls.from_config_list(data)
+                return
+            except Exception as e:
+                log.warn("invalid persisted permission approvals", {"project_id": project_id, "error": str(e)})
+        cls._approved_project[project_id] = []
+
+    @classmethod
+    async def _persist_project_approvals(cls, project_id: Optional[str]) -> None:
+        if not project_id:
+            return
+        try:
+            from ..storage import Storage
+
+            rules = cls._approved_project.get(project_id, [])
+            await Storage.write(
+                ["permission_approval", project_id],
+                [rule.model_dump() for rule in rules],
+            )
+        except Exception as e:
+            log.warn("failed to persist permission approvals", {"project_id": project_id, "error": str(e)})
+
+    @classmethod
+    def _approved_rules(
+        cls,
+        *,
+        scope: str,
+        session_id: str,
+        project_id: Optional[str],
+    ) -> List[PermissionRule]:
+        if scope == "session":
+            return cls._approved_session.get(session_id, [])
+        if scope in {"project", "persisted"} and project_id:
+            return cls._approved_project.get(project_id, [])
+        return []
+
+    @classmethod
+    async def _remember_approvals(
+        cls,
+        *,
+        scope: str,
+        session_id: str,
+        project_id: Optional[str],
+        permission: str,
+        patterns: List[str],
+    ) -> None:
+        if scope == "turn":
+            return
+        if scope == "session":
+            store = cls._approved_session.setdefault(session_id, [])
+        elif scope in {"project", "persisted"} and project_id:
+            store = cls._approved_project.setdefault(project_id, [])
+        else:
+            return
+
+        store.extend(
+            PermissionRule(permission=permission, pattern=pattern, action=PermissionAction.ALLOW)
+            for pattern in patterns
+        )
+
+        if scope == "persisted":
+            await cls._persist_project_approvals(project_id)
 
     @classmethod
     def from_config(cls, config: Dict[str, Any] | str) -> List[PermissionRule]:
@@ -264,7 +374,8 @@ class Permission:
         ruleset: List[PermissionRule],
         always: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        request_id: Optional[str] = None
+        request_id: Optional[str] = None,
+        tool: Optional[Dict[str, str]] = None,
     ) -> None:
         """Request permission for an action.
 
@@ -281,13 +392,20 @@ class Permission:
             always: Patterns to remember if approved
             metadata: Additional metadata
             request_id: Optional request ID
+            tool: Optional tool reference with message_id/call_id
 
         Raises:
             DeniedError: If permission is denied by rule
             RejectedError: If user rejects
             CorrectedError: If user rejects with feedback
         """
-        approved = cls._approved.get(session_id, [])
+        scope = await cls._resolve_scope()
+        project_id: Optional[str] = None
+        if scope in {"project", "persisted"}:
+            project_id = await cls._resolve_project_id(session_id)
+            if scope == "persisted":
+                await cls._ensure_persisted_loaded(project_id)
+        approved = cls._approved_rules(scope=scope, session_id=session_id, project_id=project_id)
 
         for pattern in patterns:
             rule = cls.evaluate(permission, pattern, ruleset, approved)
@@ -317,11 +435,14 @@ class Permission:
                     patterns=patterns,
                     metadata=metadata or {},
                     always=always or [],
+                    tool=tool,
                 )
 
                 cls._pending[rid] = {
                     "request": request,
                     "session_id": session_id,
+                    "project_id": project_id,
+                    "scope": scope,
                     "permission": permission,
                     "always": always or [],
                     "resolve": lambda f=future: f.set_result(None) if not f.done() else None,
@@ -380,6 +501,11 @@ class Permission:
             ]
             for rid, p in session_pending:
                 del cls._pending[rid]
+                await Bus.publish(PermissionReplied, PermissionRepliedProperties(
+                    session_id=session_id,
+                    request_id=rid,
+                    reply=PermissionReply.REJECT,
+                ))
                 p["reject"](RejectedError())
             return
 
@@ -388,25 +514,25 @@ class Permission:
             return
 
         if reply == PermissionReply.ALWAYS:
-            # Add to approved rules
-            if session_id not in cls._approved:
-                cls._approved[session_id] = []
-
-            for pattern in pending.get("always", []):
-                cls._approved[session_id].append(PermissionRule(
-                    permission=pending["permission"],
-                    pattern=pattern,
-                    action=PermissionAction.ALLOW
-                ))
+            await cls._remember_approvals(
+                scope=str(pending.get("scope") or "session"),
+                session_id=session_id,
+                project_id=pending.get("project_id"),
+                permission=pending["permission"],
+                patterns=list(pending.get("always", [])),
+            )
 
             pending["resolve"]()
 
             # Auto-resolve any other pending requests that now match
-            approved = cls._approved.get(session_id, [])
-            auto_resolved = []
             for rid, p in list(cls._pending.items()):
                 if p["session_id"] != session_id:
                     continue
+                approved = cls._approved_rules(
+                    scope=str(p.get("scope") or "session"),
+                    session_id=session_id,
+                    project_id=p.get("project_id"),
+                )
                 # Check if all patterns are now approved
                 all_approved = True
                 for pat in p["request"].patterns:
@@ -414,11 +540,14 @@ class Permission:
                     if rule.action != PermissionAction.ALLOW:
                         all_approved = False
                         break
-                if all_approved:
-                    auto_resolved.append(rid)
-
-            for rid in auto_resolved:
+                if not all_approved:
+                    continue
                 p = cls._pending.pop(rid)
+                await Bus.publish(PermissionReplied, PermissionRepliedProperties(
+                    session_id=session_id,
+                    request_id=rid,
+                    reply=PermissionReply.ALWAYS,
+                ))
                 p["resolve"]()
 
     @classmethod
@@ -465,4 +594,6 @@ class Permission:
     def reset(cls) -> None:
         """Reset permission state."""
         cls._pending.clear()
-        cls._approved.clear()
+        cls._approved_session.clear()
+        cls._approved_project.clear()
+        cls._persisted_loaded.clear()

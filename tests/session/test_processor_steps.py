@@ -2,6 +2,7 @@ import pytest
 from pydantic import BaseModel
 
 from hotaru.agent.agent import AgentInfo, AgentMode
+from hotaru.permission import RejectedError
 from hotaru.project import Instance
 from hotaru.provider.sdk.anthropic import ToolCall
 from hotaru.session.llm import LLM, StreamChunk
@@ -199,3 +200,197 @@ async def test_processor_emits_tool_updates_with_metadata(
     assert "completed" in statuses
     assert any(item.get("metadata", {}).get("progress") == "half" for item in updates)
     assert any(item.get("title") == "Probe done" for item in updates)
+
+
+@pytest.mark.anyio
+async def test_processor_uses_assistant_and_tool_call_ids_in_tool_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ToolRegistry.reset()
+    captured: dict[str, str] = {}
+
+    class _ProbeIDsParams(BaseModel):
+        pass
+
+    async def probe_ids_execute(_params: _ProbeIDsParams, ctx: ToolContext) -> ToolResult:
+        captured["message_id"] = ctx.message_id
+        captured["call_id"] = str(ctx.call_id)
+        return ToolResult(title="ok", output="ok")
+
+    ToolRegistry.register(
+        Tool.define(
+            tool_id="probe_ids",
+            description="Probe IDs",
+            parameters_type=_ProbeIDsParams,
+            execute_fn=probe_ids_execute,
+            auto_truncate=False,
+        )
+    )
+
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="tool_call_start", tool_call_id="call_probe_ids", tool_call_name="probe_ids")
+        yield StreamChunk(
+            type="tool_call_end",
+            tool_call=ToolCall(id="call_probe_ids", name="probe_ids", input={}),
+        )
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    processor = SessionProcessor(
+        session_id="ses_ids",
+        model_id="model",
+        provider_id="provider",
+        agent="build",
+        cwd="/tmp",
+        worktree="/tmp",
+    )
+
+    await processor.process_step(
+        assistant_message_id="msg_assistant_1",
+        tool_definitions=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "probe_ids",
+                    "description": "Probe IDs",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    assert captured["message_id"] == "msg_assistant_1"
+    assert captured["call_id"] == "call_probe_ids"
+
+
+@pytest.mark.anyio
+async def test_processor_stops_turn_when_tool_permission_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ToolRegistry.reset()
+
+    class _RejectParams(BaseModel):
+        pass
+
+    async def reject_execute(_params: _RejectParams, _ctx: ToolContext) -> ToolResult:
+        raise RejectedError()
+
+    ToolRegistry.register(
+        Tool.define(
+            tool_id="reject_tool",
+            description="Reject tool",
+            parameters_type=_RejectParams,
+            execute_fn=reject_execute,
+            auto_truncate=False,
+        )
+    )
+
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="tool_call_start", tool_call_id="call_reject", tool_call_name="reject_tool")
+        yield StreamChunk(
+            type="tool_call_end",
+            tool_call=ToolCall(id="call_reject", name="reject_tool", input={}),
+        )
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    processor = SessionProcessor(
+        session_id="ses_reject",
+        model_id="model",
+        provider_id="provider",
+        agent="build",
+        cwd="/tmp",
+        worktree="/tmp",
+    )
+
+    result = await processor.process_step(
+        tool_definitions=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "reject_tool",
+                    "description": "Reject tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    assert result.status == "stop"
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].status == "error"
+    assert "rejected permission" in str(result.tool_calls[0].error).lower()
+
+
+@pytest.mark.anyio
+async def test_processor_can_continue_loop_on_deny_when_config_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ToolRegistry.reset()
+
+    class _RejectParams(BaseModel):
+        pass
+
+    async def reject_execute(_params: _RejectParams, _ctx: ToolContext) -> ToolResult:
+        raise RejectedError()
+
+    ToolRegistry.register(
+        Tool.define(
+            tool_id="reject_tool",
+            description="Reject tool",
+            parameters_type=_RejectParams,
+            execute_fn=reject_execute,
+            auto_truncate=False,
+        )
+    )
+
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="tool_call_start", tool_call_id="call_reject", tool_call_name="reject_tool")
+        yield StreamChunk(
+            type="tool_call_end",
+            tool_call=ToolCall(id="call_reject", name="reject_tool", input={}),
+        )
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    async def fake_get_config(cls):  # type: ignore[no-untyped-def]
+        return type("Cfg", (), {"continue_loop_on_deny": True})()
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.core.config.ConfigManager.get", classmethod(fake_get_config))
+
+    processor = SessionProcessor(
+        session_id="ses_reject_continue",
+        model_id="model",
+        provider_id="provider",
+        agent="build",
+        cwd="/tmp",
+        worktree="/tmp",
+    )
+
+    result = await processor.process_step(
+        tool_definitions=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "reject_tool",
+                    "description": "Reject tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    assert result.status == "continue"
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].status == "error"

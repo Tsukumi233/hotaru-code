@@ -171,10 +171,34 @@ Hotaru 会合并多来源配置（后者覆盖前者）：
     "bash": "ask",
     "edit": "ask",
     "read": {
-      "*.env": "deny",
+      "*.env": "ask",
+      "*.env.*": "ask",
       "*.env.example": "allow"
     }
-  }
+  },
+  "permission_memory_scope": "session",
+  "continue_loop_on_deny": false
+}
+```
+
+### 权限记忆与 HITL 行为配置
+
+- `permission_memory_scope`：控制权限弹窗里选择 `always` 后的记忆范围，默认 `session`。
+- `continue_loop_on_deny`：当用户拒绝权限/问题时，是否继续当前执行循环，默认 `false`（立即停止当前轮）。
+
+`permission_memory_scope` 可选值：
+
+- `turn`：`always` 仅对当前请求生效，不记忆到后续步骤。
+- `session`：记忆到当前会话（默认）。
+- `project`：记忆到同一项目内的所有会话（仅内存态，进程重启后清空）。
+- `persisted`：与 `project` 相同，但会持久化到本地存储，重启后仍可复用。
+
+推荐配置示例：
+
+```json
+{
+  "permission_memory_scope": "persisted",
+  "continue_loop_on_deny": false
 }
 ```
 

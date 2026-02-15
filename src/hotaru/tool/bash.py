@@ -131,6 +131,29 @@ def _split_commands(command: str) -> list[str]:
     return segments
 
 
+def _requires_conservative_approval(command: str) -> bool:
+    """Detect shell constructs that are unsafe to parse with simple token splitting.
+
+    For these commands we request approval for the full command string and avoid
+    generating reusable always-patterns from potentially incorrect parsing.
+    """
+    markers = (
+        "$(",
+        "`",
+        "<(",
+        ">(",
+        "<<",
+        "<<<",
+    )
+    if any(marker in command for marker in markers):
+        return True
+    # Subshell/grouping can change command boundaries in ways the lightweight
+    # splitter does not model.
+    if "(" in command and ")" in command:
+        return True
+    return False
+
+
 def _contains_path(base: Path, target: Path) -> bool:
     try:
         target.relative_to(base)
@@ -189,10 +212,6 @@ async def bash_execute(params: BashParams, ctx: ToolContext) -> ToolResult:
 
     await assert_external_directory(ctx, cwd_path, kind="directory")
 
-    segments = _split_commands(params.command)
-    if not segments:
-        segments = [params.command.strip()]
-
     command_patterns: list[str] = []
     always_patterns: list[str] = []
     external_globs: Set[str] = set()
@@ -200,33 +219,42 @@ async def bash_execute(params: BashParams, ctx: ToolContext) -> ToolResult:
     worktree_value = str(ctx.extra.get("worktree") or "")
     worktree_path = Path(worktree_value).resolve() if worktree_value else None
 
-    for segment in segments:
-        tokens = _parse_tokens(segment)
-        if not tokens:
+    if _requires_conservative_approval(params.command):
+        stripped = params.command.strip()
+        if stripped:
+            command_patterns.append(stripped)
+    else:
+        segments = _split_commands(params.command)
+        if not segments:
+            segments = [params.command.strip()]
+
+        for segment in segments:
+            tokens = _parse_tokens(segment)
+            if not tokens:
+                command_patterns.append(segment)
+                continue
+
+            command_name = tokens[0]
+
+            if command_name in PATH_COMMANDS:
+                for arg in tokens[1:]:
+                    if command_name == "chmod" and arg.startswith("+"):
+                        continue
+                    resolved = _resolve_path_argument(arg, cwd_path)
+                    if not resolved:
+                        continue
+                    if _in_project_boundary(resolved, base_cwd.resolve(), worktree_path):
+                        continue
+                    parent_dir = resolved if resolved.is_dir() else resolved.parent
+                    external_globs.add(str(parent_dir / "*"))
+
+            if command_name == "cd":
+                continue
+
             command_patterns.append(segment)
-            continue
-
-        command_name = tokens[0]
-
-        if command_name in PATH_COMMANDS:
-            for arg in tokens[1:]:
-                if command_name == "chmod" and arg.startswith("+"):
-                    continue
-                resolved = _resolve_path_argument(arg, cwd_path)
-                if not resolved:
-                    continue
-                if _in_project_boundary(resolved, base_cwd.resolve(), worktree_path):
-                    continue
-                parent_dir = resolved if resolved.is_dir() else resolved.parent
-                external_globs.add(str(parent_dir / "*"))
-
-        if command_name == "cd":
-            continue
-
-        command_patterns.append(segment)
-        prefix = BashArity.prefix(tokens)
-        if prefix:
-            always_patterns.append(" ".join(prefix) + " *")
+            prefix = BashArity.prefix(tokens)
+            if prefix:
+                always_patterns.append(" ".join(prefix) + " *")
 
     if external_globs:
         globs = sorted(external_globs)

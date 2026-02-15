@@ -5,10 +5,11 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union, Callable
+from typing import Any, Dict, List, Optional, Set, Union
 
 from ..core.id import Identifier
 from ..permission import RejectedError, CorrectedError, DeniedError
+from ..question.question import RejectedError as QuestionRejectedError
 from ..tool import ToolContext
 from ..tool.registry import ToolRegistry
 from ..util.log import Log
@@ -103,6 +104,7 @@ class SessionProcessor:
         self._last_assistant_agent: Optional[str] = None
         self._allowed_tools: Optional[Set[str]] = None
         self._structured_output: Optional[Any] = None
+        self._continue_loop_on_deny = False
 
     async def load_history(self) -> None:
         """Load prior conversation history from persisted messages.
@@ -166,6 +168,14 @@ class SessionProcessor:
             )
 
         self.add_user_message(user_message)
+        try:
+            from ..core.config import ConfigManager
+
+            config = await ConfigManager.get()
+            self._continue_loop_on_deny = bool(getattr(config, "continue_loop_on_deny", False))
+        except Exception as e:
+            self._continue_loop_on_deny = False
+            log.debug("failed to read continue_loop_on_deny", {"error": str(e)})
         direct_subagent_result = await self.try_direct_subagent_mention(user_message)
         if direct_subagent_result is not None:
             self.messages.append({"role": "assistant", "content": direct_subagent_result})
@@ -216,6 +226,7 @@ class SessionProcessor:
         tool_definitions: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         retries: int = 0,
+        assistant_message_id: Optional[str] = None,
     ) -> ProcessorResult:
         """Process exactly one assistant turn.
 
@@ -230,6 +241,14 @@ class SessionProcessor:
             )
 
         self.turn += 1
+        try:
+            from ..core.config import ConfigManager
+
+            config = await ConfigManager.get()
+            self._continue_loop_on_deny = bool(getattr(config, "continue_loop_on_deny", False))
+        except Exception as e:
+            self._continue_loop_on_deny = False
+            log.debug("failed to read continue_loop_on_deny", {"error": str(e)})
         await self._sync_agent_from_session()
         agent_info = await Agent.get(self.agent)
         assistant_agent_for_turn = self.agent
@@ -342,6 +361,7 @@ class SessionProcessor:
             on_tool_start=on_tool_start,
             on_tool_end=on_tool_end,
             on_tool_update=on_tool_update,
+            assistant_message_id=assistant_message_id,
         )
         if turn_result.error:
             turn_result.status = "error"
@@ -382,7 +402,8 @@ class SessionProcessor:
         if self._pending_synthetic_users:
             await self._flush_synthetic_users()
 
-        turn_result.status = "continue"
+        if turn_result.status != "stop":
+            turn_result.status = "continue"
         return turn_result
 
     def last_assistant_agent(self) -> str:
@@ -632,6 +653,7 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
         on_tool_start: Optional[callable] = None,
         on_tool_end: Optional[callable] = None,
         on_tool_update: Optional[callable] = None,
+        assistant_message_id: Optional[str] = None,
     ) -> ProcessorResult:
         """Process a single turn of the conversation.
 
@@ -647,6 +669,7 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
         """
         result = ProcessorResult(status="continue")
         current_tool_calls: Dict[str, ToolCallState] = {}
+        blocked = False
 
         try:
             async for chunk in LLM.stream(stream_input):
@@ -689,12 +712,15 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                             tc.input,
                             tc=tc,
                             on_tool_update=on_tool_update,
+                            assistant_message_id=assistant_message_id,
                         )
                         tc.end_time = int(time.time() * 1000)
 
                         if tool_result.get("error"):
                             tc.status = "error"
                             tc.error = tool_result["error"]
+                            if tool_result.get("blocked") and not self._continue_loop_on_deny:
+                                blocked = True
                         else:
                             tc.status = "completed"
                             tc.output = tool_result.get("output", "")
@@ -714,6 +740,9 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                                 tool_result.get("title", ""),
                                 callback_metadata,
                             )
+                        if blocked:
+                            result.status = "stop"
+                            break
 
                 elif chunk.type == "message_delta" and chunk.usage:
                     result.usage.update(chunk.usage)
@@ -741,6 +770,7 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
         *,
         tc: Optional[ToolCallState] = None,
         on_tool_update: Optional[callable] = None,
+        assistant_message_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Execute a tool.
 
@@ -816,9 +846,9 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
             # Create tool context with permission ruleset
             ctx = ToolContext(
                 session_id=self.session_id,
-                message_id=Identifier.ascending("message"),
+                message_id=assistant_message_id or Identifier.ascending("message"),
                 agent=self.agent,
-                call_id=Identifier.ascending("call"),
+                call_id=(tc.id if tc and tc.id else Identifier.ascending("call")),
                 extra={
                     "cwd": self.cwd,
                     "worktree": self.worktree,
@@ -854,11 +884,21 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                 "attachments": result.attachments,
             }
 
-        except (RejectedError, CorrectedError, DeniedError) as e:
+        except (RejectedError, CorrectedError) as e:
             if pending_tasks:
                 await asyncio.gather(*pending_tasks, return_exceptions=True)
             log.info("permission error", {"tool": tool_name, "error": str(e)})
+            return {"error": str(e), "blocked": True}
+        except DeniedError as e:
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+            log.info("permission denied by ruleset", {"tool": tool_name, "error": str(e)})
             return {"error": str(e)}
+        except QuestionRejectedError as e:
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+            log.info("question rejected", {"tool": tool_name, "error": str(e)})
+            return {"error": str(e), "blocked": True}
         except Exception as e:
             if pending_tasks:
                 await asyncio.gather(*pending_tasks, return_exceptions=True)

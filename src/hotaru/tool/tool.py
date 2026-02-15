@@ -44,7 +44,9 @@ class ToolContext:
         permission: str,
         patterns: List[str],
         always: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        request_id: Optional[str] = None,
+        tool_ref: Optional[Dict[str, str]] = None,
     ) -> None:
         """Request permission for an action.
 
@@ -55,6 +57,8 @@ class ToolContext:
             patterns: Patterns to check (e.g. command string, file path)
             always: Patterns to remember if user chooses "always"
             metadata: Additional context for the permission dialog
+            request_id: Optional explicit request id
+            tool_ref: Optional explicit tool reference (message/call IDs)
 
         Raises:
             DeniedError: If permission is denied by configuration rule
@@ -63,6 +67,13 @@ class ToolContext:
         """
         from ..permission import Permission
 
+        resolved_tool = tool_ref
+        if resolved_tool is None and self.message_id and self.call_id:
+            resolved_tool = {
+                "message_id": self.message_id,
+                "call_id": self.call_id,
+            }
+
         await Permission.ask(
             session_id=self.session_id,
             permission=permission,
@@ -70,6 +81,8 @@ class ToolContext:
             ruleset=Permission.from_config_list(self._ruleset),
             always=always,
             metadata=metadata,
+            request_id=request_id,
+            tool=resolved_tool,
         )
 
     @property
