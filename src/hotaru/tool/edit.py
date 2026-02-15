@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Generator, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..util.log import Log
 from .external_directory import assert_external_directory
@@ -30,8 +30,7 @@ class EditParams(BaseModel):
         description="Replace all occurrences of old_string (default false)",
     )
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 DESCRIPTION = """Performs exact string replacements in files.

@@ -39,3 +39,8 @@ packages = ["src/hotaru"]
 dev = [
     "pytest>=9.0.2",
 ]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "error::pydantic.warnings.PydanticDeprecatedSince20",
+]

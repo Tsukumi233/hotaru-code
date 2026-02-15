@@ -6,7 +6,7 @@ from base64 import b64encode
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.id import Identifier
 from ..util.log import Log
@@ -34,8 +34,7 @@ class ReadParams(BaseModel):
     offset: Optional[int] = Field(None, description="The line number to start reading from (1-based)")
     limit: Optional[int] = Field(None, description="The number of lines to read (defaults to 2000)")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 DESCRIPTION = """Reads a file from the local filesystem.

@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..util.log import Log
 from .external_directory import assert_external_directory
@@ -22,8 +22,7 @@ class WriteParams(BaseModel):
     )
     content: str = Field(..., description="The content to write to the file")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 DESCRIPTION = """Writes content to a file, creating it if it doesn't exist or overwriting if it does.

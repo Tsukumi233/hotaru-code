@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..patch import (
     AddHunk,
@@ -28,8 +28,7 @@ class ApplyPatchParams(BaseModel):
 
     patch_text: str = Field(..., alias="patchText", description="Full patch text to apply")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 @dataclass
@@ -213,4 +212,3 @@ ApplyPatchTool = Tool.define(
     execute_fn=apply_patch_execute,
     auto_truncate=False,
 )
-

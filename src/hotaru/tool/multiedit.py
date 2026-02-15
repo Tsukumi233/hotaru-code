@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .edit import EditParams, EditTool
 from .tool import Tool, ToolContext, ToolResult
@@ -18,8 +18,7 @@ class MultiEditOperation(BaseModel):
     new_string: str = Field(..., alias="newString", description="Replacement text")
     replace_all: Optional[bool] = Field(False, alias="replaceAll", description="Replace all occurrences")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class MultiEditParams(BaseModel):
@@ -28,8 +27,7 @@ class MultiEditParams(BaseModel):
     file_path: str = Field(..., alias="filePath", description="Absolute file path to modify")
     edits: List[MultiEditOperation] = Field(..., description="Edit operations to run sequentially")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 async def multiedit_execute(params: MultiEditParams, ctx: ToolContext) -> ToolResult:
@@ -61,4 +59,3 @@ MultiEditTool = Tool.define(
     execute_fn=multiedit_execute,
     auto_truncate=False,
 )
-

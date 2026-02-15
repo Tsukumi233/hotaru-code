@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.global_paths import GlobalPath
 from ..util.log import Log
@@ -74,8 +74,7 @@ class ModelInfo(BaseModel):
     provider: Optional[Dict[str, str]] = None
     variants: Optional[Dict[str, Dict[str, Any]]] = None
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class ProviderDef(BaseModel):
@@ -87,8 +86,7 @@ class ProviderDef(BaseModel):
     npm: Optional[str] = None
     models: Dict[str, ModelInfo] = Field(default_factory=dict)
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class ModelCapabilities(BaseModel):

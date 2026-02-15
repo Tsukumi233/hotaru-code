@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.bus import Bus, BusEvent
 from ..core.id import Identifier
@@ -32,8 +32,7 @@ class PermissionRule(BaseModel):
     pattern: str
     action: PermissionAction
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class PermissionRequest(BaseModel):

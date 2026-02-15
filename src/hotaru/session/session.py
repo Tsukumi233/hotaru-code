@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.bus import Bus, BusEvent
 from ..core.id import Identifier
@@ -49,8 +49,7 @@ class SessionInfo(BaseModel):
     time: SessionTime
     share: Optional[SessionShare] = None
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 # Session events

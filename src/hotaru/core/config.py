@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .global_paths import GlobalPath
 from .config_markdown import parse_markdown_config
@@ -67,9 +67,7 @@ class AgentConfig(BaseModel):
     permission: Optional[Union[str, Dict[str, Any]]] = None
     options: Optional[Dict[str, Any]] = None
 
-    class Config:
-        extra = "allow"
-        populate_by_name = True
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @property
     def effective_steps(self) -> Optional[int]:
@@ -93,8 +91,7 @@ class CustomModelConfig(BaseModel):
     options: Optional[Dict[str, Any]] = None
     headers: Optional[Dict[str, str]] = None
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class ProviderConfig(BaseModel):
@@ -137,8 +134,7 @@ class ProviderConfig(BaseModel):
     whitelist: Optional[List[str]] = None
     blacklist: Optional[List[str]] = None
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class ServerConfig(BaseModel):
@@ -178,8 +174,7 @@ class ExperimentalConfig(BaseModel):
     lsp_tool: Optional[bool] = None
     primary_tools: Optional[List[str]] = None
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class Config(BaseModel):
@@ -233,9 +228,7 @@ class Config(BaseModel):
     lsp: Optional[Union[Literal[False], Dict[str, Any]]] = None
     formatter: Optional[Union[Literal[False], Dict[str, Any]]] = None
 
-    class Config:
-        extra = "allow"
-        populate_by_name = True
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
 def _get_managed_config_dir() -> str:

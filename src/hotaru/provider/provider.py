@@ -7,7 +7,7 @@ import os
 from enum import Enum
 from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.config import ConfigManager, ProviderConfig
 from ..util.log import Log
@@ -61,8 +61,7 @@ class ProcessedModelInfo(BaseModel):
     headers: Dict[str, str] = Field(default_factory=dict)
     variants: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class ProviderInfo(BaseModel):
@@ -75,8 +74,7 @@ class ProviderInfo(BaseModel):
     options: Dict[str, Any] = Field(default_factory=dict)
     models: Dict[str, ProcessedModelInfo] = Field(default_factory=dict)
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class ModelNotFoundError(Exception):

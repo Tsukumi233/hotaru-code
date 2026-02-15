@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.config import ConfigManager
 from ..core.global_paths import GlobalPath
@@ -46,8 +46,7 @@ class AgentInfo(BaseModel):
     options: Dict[str, Any] = Field(default_factory=dict)
     steps: Optional[int] = None
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 _PROMPT_DIR = Path(__file__).parent / "prompt"

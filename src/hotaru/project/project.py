@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from ..core.bus import Bus, BusEvent
 from ..storage import NotFoundError, Storage
@@ -49,8 +49,7 @@ class ProjectInfo(BaseModel):
     time: ProjectTime
     sandboxes: List[str] = field(default_factory=list)
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 # Project events

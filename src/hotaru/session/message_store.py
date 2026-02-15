@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 
 Role = Literal["user", "assistant", "tool", "system"]
@@ -73,8 +73,7 @@ class MessageInfo(BaseModel):
     summary: Optional[bool] = None
     structured: Optional[Any] = None
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class PartTime(BaseModel):
