@@ -26,6 +26,7 @@ class ToolContext:
     extra: Dict[str, Any] = field(default_factory=dict)
     messages: List[Dict[str, Any]] = field(default_factory=list)
     _metadata: Dict[str, Any] = field(default_factory=dict)
+    _on_metadata: Optional[Callable[[Dict[str, Any]], None]] = None
     _aborted: bool = False
     _ruleset: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -35,6 +36,8 @@ class ToolContext:
             self._metadata["title"] = title
         if metadata:
             self._metadata.update(metadata)
+        if self._on_metadata:
+            self._on_metadata(dict(self._metadata))
 
     async def ask(
         self,

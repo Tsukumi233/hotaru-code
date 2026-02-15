@@ -314,6 +314,13 @@ def create_default_commands() -> List[Command]:
             category=CommandCategory.SESSION,
             slash_name="copy",
         ),
+        Command(
+            id="session.toggle.actions",
+            title="Toggle tool details",
+            category=CommandCategory.SESSION,
+            slash_name="actions",
+            slash_aliases=["toggle-actions"],
+        ),
 
         # Agent commands
         Command(

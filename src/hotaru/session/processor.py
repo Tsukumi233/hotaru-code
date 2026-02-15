@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Union, Callable
 
 from ..core.id import Identifier
 from ..permission import RejectedError, CorrectedError, DeniedError
@@ -13,7 +13,6 @@ from ..tool import ToolContext
 from ..tool.registry import ToolRegistry
 from ..util.log import Log
 from .llm import LLM, StreamInput, StreamChunk
-from .message import Message, MessageInfo
 
 log = Log.create({"service": "session.processor"})
 
@@ -24,6 +23,7 @@ _MAX_STEPS_PROMPT_PATH = Path(__file__).parent / "prompt" / "max-steps.txt"
 _MAX_STEPS_PROMPT = _MAX_STEPS_PROMPT_PATH.read_text(encoding="utf-8").strip()
 _BUILD_SWITCH_PROMPT_PATH = Path(__file__).parent / "prompt" / "build-switch.txt"
 _BUILD_SWITCH_PROMPT = _BUILD_SWITCH_PROMPT_PATH.read_text(encoding="utf-8").strip()
+_STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
 
 
 @dataclass
@@ -36,6 +36,7 @@ class ToolCallState:
     status: str = "pending"  # pending, running, completed, error
     output: Optional[str] = None
     error: Optional[str] = None
+    title: Optional[str] = None
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     start_time: Optional[int] = None
@@ -50,6 +51,8 @@ class ProcessorResult:
     tool_calls: List[ToolCallState] = field(default_factory=list)
     error: Optional[str] = None
     usage: Dict[str, int] = field(default_factory=dict)
+    stop_reason: Optional[str] = None
+    structured_output: Optional[Any] = None
 
 
 class SessionProcessor:
@@ -71,6 +74,7 @@ class SessionProcessor:
         cwd: str,
         worktree: Optional[str] = None,
         max_turns: int = 100,
+        sync_agent_from_session: bool = True,
     ):
         """Initialize the processor.
 
@@ -90,79 +94,40 @@ class SessionProcessor:
         self.cwd = cwd
         self.worktree = worktree or cwd
         self.max_turns = max_turns
+        self._sync_agent_from_session_enabled = bool(sync_agent_from_session)
         self.turn = 0
         self.messages: List[Dict[str, Any]] = []
         self.tool_calls: Dict[str, ToolCallState] = {}
         self._recent_tool_signatures: List[str] = []
         self._pending_synthetic_users: List[Dict[str, str]] = []
         self._last_assistant_agent: Optional[str] = None
+        self._allowed_tools: Optional[Set[str]] = None
+        self._structured_output: Optional[Any] = None
 
     async def load_history(self) -> None:
         """Load prior conversation history from persisted messages.
 
-        Converts stored ``MessageInfo`` objects into the OpenAI-format
-        message list that the LLM expects.  Must be called before
+        Converts stored structured messages into the OpenAI-format
+        message list that the LLM expects. Must be called before
         ``process()`` when resuming an existing session.
         """
         from .session import Session
-        from .message import TextPart, ToolInvocationPart
+        from .message_store import filter_compacted, to_model_messages
 
-        stored = await Session.get_messages(self.session_id)
-        for msg in stored:
-            if msg.role == "user":
-                # Extract text from parts
-                text_parts = [p.text for p in msg.parts if isinstance(p, TextPart)]
-                self.messages.append({
-                    "role": "user",
-                    "content": "".join(text_parts),
-                })
-            elif msg.role == "assistant":
-                if msg.metadata.assistant and msg.metadata.assistant.agent:
-                    self._last_assistant_agent = msg.metadata.assistant.agent
-                elif msg.metadata.agent:
-                    self._last_assistant_agent = msg.metadata.agent
-                text_parts = [p.text for p in msg.parts if isinstance(p, TextPart)]
-                tool_invocations = [
-                    p for p in msg.parts
-                    if isinstance(p, ToolInvocationPart)
-                ]
+        stored_structured = await Session.messages(session_id=self.session_id)
+        filtered = filter_compacted(stored_structured)
+        self.messages = to_model_messages(filtered)
 
-                assistant_msg: Dict[str, Any] = {"role": "assistant"}
-                assistant_msg["content"] = "".join(text_parts) or None
-
-                # Collect tool calls
-                tc_list = []
-                tc_results = []
-                for ti in tool_invocations:
-                    inv = ti.tool_invocation
-                    if hasattr(inv, "state") and inv.state == "result":
-                        # This is a completed tool call — add both call and result
-                        tc_list.append({
-                            "id": inv.tool_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": inv.tool_name,
-                                "arguments": json.dumps(inv.args) if not isinstance(inv.args, str) else inv.args,
-                            },
-                        })
-                        tc_results.append({
-                            "role": "tool",
-                            "tool_call_id": inv.tool_call_id,
-                            "content": inv.result if hasattr(inv, "result") else "",
-                        })
-
-                if tc_list:
-                    assistant_msg["tool_calls"] = tc_list
-
-                self.messages.append(assistant_msg)
-
-                # Append tool result messages
-                for tr in tc_results:
-                    self.messages.append(tr)
-
+        for msg in reversed(filtered):
+            if msg.info.role != "assistant":
+                continue
+            if msg.info.agent:
+                self._last_assistant_agent = msg.info.agent
+            break
         log.info("loaded history", {
             "session_id": self.session_id,
             "message_count": len(self.messages),
+            "source": "message_store",
         })
 
     async def process(
@@ -172,19 +137,9 @@ class SessionProcessor:
         on_text: Optional[callable] = None,
         on_tool_start: Optional[callable] = None,
         on_tool_end: Optional[callable] = None,
+        on_tool_update: Optional[callable] = None,
     ) -> ProcessorResult:
-        """Process a user message through the agentic loop.
-
-        Args:
-            user_message: User's message
-            system_prompt: Optional system prompt
-            on_text: Callback for text chunks
-            on_tool_start: Callback when tool starts
-            on_tool_end: Callback when tool ends
-
-        Returns:
-            ProcessorResult with final state
-        """
+        """Compatibility entrypoint that runs the full loop."""
         from ..core.context import ContextNotFoundError
         from ..project import Instance
 
@@ -206,51 +161,102 @@ class SessionProcessor:
                     on_text=on_text,
                     on_tool_start=on_tool_start,
                     on_tool_end=on_tool_end,
+                    on_tool_update=on_tool_update,
                 ),
             )
 
-        # Add user message to history
-        self.messages.append({"role": "user", "content": user_message})
-
-        from ..agent import Agent
-
-        await self._sync_agent_from_session()
-        agent_info = await Agent.get(self.agent)
-        direct_subagent_result = await self._handle_direct_subagent_mention(user_message, agent_info)
+        self.add_user_message(user_message)
+        direct_subagent_result = await self.try_direct_subagent_mention(user_message)
         if direct_subagent_result is not None:
             self.messages.append({"role": "assistant", "content": direct_subagent_result})
             return ProcessorResult(status="stop", text=direct_subagent_result)
 
         result = ProcessorResult(status="continue")
+        while result.status == "continue":
+            turn_result = await self.process_step(
+                system_prompt=system_prompt,
+                on_text=on_text,
+                on_tool_start=on_tool_start,
+                on_tool_end=on_tool_end,
+                on_tool_update=on_tool_update,
+            )
+            result.text += turn_result.text
+            result.tool_calls.extend(turn_result.tool_calls)
+            for key, value in (turn_result.usage or {}).items():
+                result.usage[key] = result.usage.get(key, 0) + value
+            if turn_result.error:
+                result.status = "error"
+                result.error = turn_result.error
+                break
+            result.status = turn_result.status
+            if result.status != "continue":
+                break
+        return result
 
-        while result.status == "continue" and self.turn < self.max_turns:
-            self.turn += 1
-            await self._sync_agent_from_session()
-            agent_info = await Agent.get(self.agent)
-            assistant_agent_for_turn = self.agent
+    def add_user_message(self, user_message: str) -> None:
+        """Append a user message to in-memory model history."""
+        self.messages.append({"role": "user", "content": user_message})
 
-            log.info(
-                "processing turn",
-                {
-                    "turn": self.turn,
-                    "session_id": self.session_id,
-                    "agent": self.agent,
-                },
+    async def try_direct_subagent_mention(self, user_message: str) -> Optional[str]:
+        """Run direct @subagent dispatch if the user explicitly invoked one."""
+        from ..agent import Agent
+
+        await self._sync_agent_from_session()
+        agent_info = await Agent.get(self.agent)
+        return await self._handle_direct_subagent_mention(user_message, agent_info)
+
+    async def process_step(
+        self,
+        *,
+        system_prompt: Optional[Union[str, List[str]]] = None,
+        on_text: Optional[callable] = None,
+        on_tool_start: Optional[callable] = None,
+        on_tool_end: Optional[callable] = None,
+        on_tool_update: Optional[callable] = None,
+        tool_definitions: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        retries: int = 0,
+    ) -> ProcessorResult:
+        """Process exactly one assistant turn.
+
+        This is the single-turn primitive used by SessionPrompt.loop.
+        """
+        from ..agent import Agent
+
+        if self.turn >= self.max_turns:
+            return ProcessorResult(
+                status="error",
+                error=f"Maximum turns ({self.max_turns}) exceeded",
             )
 
-            # Get tool definitions
-            max_steps = agent_info.steps if agent_info else None
-            is_last_step = bool(max_steps is not None and self.turn >= max_steps)
+        self.turn += 1
+        await self._sync_agent_from_session()
+        agent_info = await Agent.get(self.agent)
+        assistant_agent_for_turn = self.agent
 
-            tool_definitions: List[Dict[str, Any]] = []
+        log.info(
+            "processing turn",
+            {
+                "turn": self.turn,
+                "session_id": self.session_id,
+                "agent": self.agent,
+            },
+        )
+
+        max_steps = agent_info.steps if agent_info else None
+        is_last_step = bool(max_steps is not None and self.turn >= max_steps)
+
+        if tool_definitions is not None:
+            effective_tools = list(tool_definitions)
+        else:
+            effective_tools: List[Dict[str, Any]] = []
             if not is_last_step:
-                tool_definitions = await ToolRegistry.get_tool_definitions(
+                effective_tools = await ToolRegistry.get_tool_definitions(
                     caller_agent=self.agent,
                     provider_id=self.provider_id,
                     model_id=self.model_id,
                 )
 
-            # Merge MCP tools
             if not is_last_step:
                 try:
                     from ..mcp import MCP
@@ -260,132 +266,132 @@ class SessionProcessor:
                         schema = dict(tool_info.get("input_schema") or {})
                         schema.setdefault("type", "object")
                         schema["additionalProperties"] = False
-                        tool_definitions.append({
-                            "type": "function",
-                            "function": {
-                                "name": tool_id,
-                                "description": tool_info.get("description", ""),
-                                "parameters": schema,
-                            },
-                        })
+                        effective_tools.append(
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": tool_id,
+                                    "description": tool_info.get("description", ""),
+                                    "parameters": schema,
+                                },
+                            }
+                        )
+                except asyncio.CancelledError as e:
+                    # Some MCP client transports may surface connection failures as
+                    # CancelledError. Treat that as MCP unavailable instead of
+                    # cancelling the whole assistant turn.
+                    log.warn("failed to load MCP tools", {"error": str(e)})
                 except Exception as e:
                     log.warn("failed to load MCP tools", {"error": str(e)})
 
-            # Filter out disabled tools based on agent permission rules
             if not is_last_step:
                 try:
                     from ..permission import Permission
 
                     if agent_info and agent_info.permission:
                         ruleset = Permission.from_config_list(agent_info.permission)
-                        tool_names = [d["function"]["name"] for d in tool_definitions]
+                        tool_names = [d["function"]["name"] for d in effective_tools]
                         disabled = Permission.disabled_tools(tool_names, ruleset)
                         if disabled:
                             log.info("filtering disabled tools", {"disabled": list(disabled)})
-                            tool_definitions = [
-                                d for d in tool_definitions
-                                if d["function"]["name"] not in disabled
-                            ]
+                            effective_tools = [d for d in effective_tools if d["function"]["name"] not in disabled]
                 except Exception as e:
                     log.warn("failed to filter disabled tools", {"error": str(e)})
 
-            await self._insert_mode_reminders(
-                current_agent=self.agent,
-                previous_assistant_agent=self._last_assistant_agent,
-            )
-            messages_for_turn = self.messages.copy()
-            if is_last_step:
-                messages_for_turn.append({
+        if is_last_step:
+            effective_tools = []
+
+        self._allowed_tools = {
+            str(item.get("function", {}).get("name"))
+            for item in effective_tools
+            if isinstance(item, dict) and isinstance(item.get("function"), dict) and item["function"].get("name")
+        } or None
+        self._structured_output = None
+
+        await self._insert_mode_reminders(
+            current_agent=self.agent,
+            previous_assistant_agent=self._last_assistant_agent,
+        )
+        messages_for_turn = self.messages.copy()
+        if is_last_step:
+            messages_for_turn.append(
+                {
                     "role": "assistant",
                     "content": _MAX_STEPS_PROMPT,
-                })
-
-            # Create stream input
-            stream_input = StreamInput(
-                session_id=self.session_id,
-                model_id=self.model_id,
-                provider_id=self.provider_id,
-                messages=messages_for_turn,
-                system=system_prompt,
-                tools=tool_definitions if tool_definitions else None,
-                max_tokens=4096,
-                temperature=agent_info.temperature if agent_info else None,
-                top_p=agent_info.top_p if agent_info else None,
-                options=(agent_info.options or None) if agent_info else None,
+                }
             )
 
-            # Process the stream
-            turn_result = await self._process_turn(
-                stream_input,
-                on_text=on_text,
-                on_tool_start=on_tool_start,
-                on_tool_end=on_tool_end,
-            )
+        stream_input = StreamInput(
+            session_id=self.session_id,
+            model_id=self.model_id,
+            provider_id=self.provider_id,
+            messages=messages_for_turn,
+            system=system_prompt,
+            tools=effective_tools if effective_tools else None,
+            tool_choice=tool_choice if effective_tools else None,
+            retries=int(retries or 0),
+            max_tokens=4096,
+            temperature=agent_info.temperature if agent_info else None,
+            top_p=agent_info.top_p if agent_info else None,
+            options=(agent_info.options or None) if agent_info else None,
+        )
 
-            result.text += turn_result.text
-            result.tool_calls.extend(turn_result.tool_calls)
-            if turn_result.usage:
-                for key, value in turn_result.usage.items():
-                    result.usage[key] = result.usage.get(key, 0) + value
+        turn_result = await self._process_turn(
+            stream_input,
+            on_text=on_text,
+            on_tool_start=on_tool_start,
+            on_tool_end=on_tool_end,
+            on_tool_update=on_tool_update,
+        )
+        if turn_result.error:
+            turn_result.status = "error"
+            return turn_result
 
-            if turn_result.error:
-                result.status = "error"
-                result.error = turn_result.error
-                break
-
+        if self._structured_output is not None:
+            turn_result.structured_output = self._structured_output
+            turn_result.status = "stop"
             self._last_assistant_agent = assistant_agent_for_turn
+            return turn_result
 
-            # Check if we should continue
-            if not turn_result.tool_calls:
-                # No tool calls, we're done
-                result.status = "stop"
-                break
+        self._last_assistant_agent = assistant_agent_for_turn
+        if not turn_result.tool_calls:
+            turn_result.status = "stop"
+            return turn_result
 
-            # Add assistant message with tool calls to history (OpenAI format)
-            assistant_message: Dict[str, Any] = {"role": "assistant"}
-            if turn_result.text:
-                assistant_message["content"] = turn_result.text
-            else:
-                assistant_message["content"] = None
+        assistant_message: Dict[str, Any] = {"role": "assistant"}
+        assistant_message["content"] = turn_result.text if turn_result.text else None
+        assistant_message["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.name, "arguments": json.dumps(tc.input)},
+            }
+            for tc in turn_result.tool_calls
+        ]
+        self.messages.append(assistant_message)
 
-            # Add tool calls in OpenAI format
-            tool_calls_list = []
-            for tc in turn_result.tool_calls:
-                tool_calls_list.append({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.name,
-                        "arguments": json.dumps(tc.input),
-                    },
-                })
-            assistant_message["tool_calls"] = tool_calls_list
-
-            self.messages.append(assistant_message)
-
-            # Add tool results as separate messages (OpenAI format)
-            for tc in turn_result.tool_calls:
-                tool_result_message = {
+        for tc in turn_result.tool_calls:
+            self.messages.append(
+                {
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": tc.output if tc.status == "completed" else tc.error or "Tool execution failed",
                 }
-                self.messages.append(tool_result_message)
+            )
 
-            if self._pending_synthetic_users:
-                await self._flush_synthetic_users()
+        if self._pending_synthetic_users:
+            await self._flush_synthetic_users()
 
-        if self.turn >= self.max_turns:
-            result.status = "error"
-            result.error = f"Maximum turns ({self.max_turns}) exceeded"
-
-        return result
+        turn_result.status = "continue"
+        return turn_result
 
     def last_assistant_agent(self) -> str:
         """Return the agent name used for the latest assistant turn."""
         return self._last_assistant_agent or self.agent
 
     async def _sync_agent_from_session(self) -> None:
+        if not self._sync_agent_from_session_enabled:
+            return
         from .session import Session
 
         session = await Session.get(self.session_id)
@@ -505,25 +511,39 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
 
     async def _flush_synthetic_users(self) -> None:
         from .session import Session
+        from .message_store import MessageInfo, MessageTime, ModelRef, PartTime, TextPart
 
         pending = list(self._pending_synthetic_users)
         self._pending_synthetic_users.clear()
         if not pending:
             return
 
+        now_ms = int(time.time() * 1000)
         for item in pending:
             text = item["text"]
             agent = item["agent"]
+            message_id = Identifier.ascending("message")
             self.messages.append({"role": "user", "content": text})
-            user_msg = Message.create_user(
-                message_id=Identifier.ascending("message"),
-                session_id=self.session_id,
-                text=text,
-                created=int(time.time() * 1000),
-                agent=agent,
-                synthetic=True,
+            await Session.update_message(
+                MessageInfo(
+                    id=message_id,
+                    session_id=self.session_id,
+                    role="user",
+                    agent=agent,
+                    model=ModelRef(provider_id=self.provider_id, model_id=self.model_id),
+                    time=MessageTime(created=now_ms, completed=now_ms),
+                )
             )
-            await Session.add_message(self.session_id, user_msg)
+            await Session.update_part(
+                TextPart(
+                    id=Identifier.ascending("part"),
+                    session_id=self.session_id,
+                    message_id=message_id,
+                    text=text,
+                    synthetic=True,
+                    time=PartTime(start=now_ms, end=now_ms),
+                )
+            )
 
     async def _handle_direct_subagent_mention(
         self,
@@ -583,12 +603,35 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                 return inner
         return content
 
+    @staticmethod
+    def _tool_update_payload(tc: ToolCallState) -> Dict[str, Any]:
+        return {
+            "id": tc.id,
+            "name": tc.name,
+            "input_json": tc.input_json,
+            "input": dict(tc.input or {}),
+            "status": tc.status,
+            "output": tc.output,
+            "error": tc.error,
+            "title": tc.title,
+            "metadata": dict(tc.metadata or {}),
+            "attachments": list(tc.attachments or []),
+            "start_time": tc.start_time,
+            "end_time": tc.end_time,
+        }
+
+    async def _emit_tool_update(self, callback: Optional[callable], tc: ToolCallState) -> None:
+        if not callback:
+            return
+        await self._call_callback(callback, self._tool_update_payload(tc))
+
     async def _process_turn(
         self,
         stream_input: StreamInput,
         on_text: Optional[callable] = None,
         on_tool_start: Optional[callable] = None,
         on_tool_end: Optional[callable] = None,
+        on_tool_update: Optional[callable] = None,
     ) -> ProcessorResult:
         """Process a single turn of the conversation.
 
@@ -597,6 +640,7 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
             on_text: Callback for text chunks
             on_tool_start: Callback when tool starts
             on_tool_end: Callback when tool ends
+            on_tool_update: Callback when a tool state changes
 
         Returns:
             ProcessorResult for this turn
@@ -621,6 +665,7 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                     current_tool_calls[tc.id] = tc
                     if on_tool_start:
                         await self._call_callback(on_tool_start, tc.name, tc.id, {})
+                    await self._emit_tool_update(on_tool_update, tc)
 
                 elif chunk.type == "tool_call_delta":
                     if chunk.tool_call_id and chunk.tool_call_id in current_tool_calls:
@@ -636,9 +681,15 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                         # Notify with parsed input args
                         if on_tool_start:
                             await self._call_callback(on_tool_start, tc.name, tc.id, tc.input)
+                        await self._emit_tool_update(on_tool_update, tc)
 
                         # Execute the tool
-                        tool_result = await self._execute_tool(tc.name, tc.input)
+                        tool_result = await self._execute_tool(
+                            tc.name,
+                            tc.input,
+                            tc=tc,
+                            on_tool_update=on_tool_update,
+                        )
                         tc.end_time = int(time.time() * 1000)
 
                         if tool_result.get("error"):
@@ -647,9 +698,11 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                         else:
                             tc.status = "completed"
                             tc.output = tool_result.get("output", "")
+                            tc.title = str(tool_result.get("title") or "") or None
                             tc.attachments = tool_result.get("attachments", [])
                             tc.metadata = dict(tool_result.get("metadata", {}) or {})
                             self._apply_mode_switch_metadata(tc.metadata)
+                        await self._emit_tool_update(on_tool_update, tc)
 
                         result.tool_calls.append(tc)
                         if on_tool_end:
@@ -664,6 +717,10 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
 
                 elif chunk.type == "message_delta" and chunk.usage:
                     result.usage.update(chunk.usage)
+                    if chunk.stop_reason:
+                        result.stop_reason = chunk.stop_reason
+                elif chunk.type == "message_delta" and chunk.stop_reason:
+                    result.stop_reason = chunk.stop_reason
 
                 elif chunk.type == "error" and chunk.error:
                     result.status = "error"
@@ -677,7 +734,14 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
 
         return result
 
-    async def _execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    async def _execute_tool(
+        self,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+        *,
+        tc: Optional[ToolCallState] = None,
+        on_tool_update: Optional[callable] = None,
+    ) -> Dict[str, Any]:
         """Execute a tool.
 
         Args:
@@ -687,6 +751,19 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
         Returns:
             Dict with output or error
         """
+        if self._allowed_tools is not None and tool_name not in self._allowed_tools:
+            return {"error": f"Unknown tool: {tool_name}"}
+
+        if tool_name == _STRUCTURED_OUTPUT_TOOL:
+            if not self._allowed_tools or tool_name not in self._allowed_tools:
+                return {"error": f"Unknown tool: {tool_name}"}
+            self._structured_output = dict(tool_input or {})
+            return {
+                "output": "Structured output captured successfully.",
+                "title": "Structured Output",
+                "metadata": {"valid": True},
+            }
+
         tool = ToolRegistry.get(tool_name)
         if not tool:
             # Check if it's an MCP tool
@@ -699,18 +776,42 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                 log.error("MCP tool lookup failed", {"tool": tool_name, "error": str(e)})
             return {"error": f"Unknown tool: {tool_name}"}
 
-        # Load agent permission ruleset
-        agent_ruleset: List[Dict[str, Any]] = []
+        # Load agent + session permission rulesets.
+        merged_ruleset: List[Dict[str, Any]] = []
         try:
             from ..agent import Agent
+            from .session import Session
+
             agent_info = await Agent.get(self.agent)
-            if agent_info:
-                agent_ruleset = agent_info.permission
+            if agent_info and agent_info.permission:
+                merged_ruleset.extend(agent_info.permission)
+
+            session = await Session.get(self.session_id)
+            session_permission = getattr(session, "permission", None) if session else None
+            if isinstance(session_permission, list):
+                merged_ruleset.extend(session_permission)
         except Exception as e:
             log.warn("failed to load agent permissions", {"error": str(e)})
 
+        pending_tasks: List[asyncio.Task[Any]] = []
+
+        def _handle_metadata_update(snapshot: Dict[str, Any]) -> None:
+            if tc is None:
+                return
+            title = snapshot.get("title")
+            tc.title = str(title) if isinstance(title, str) and title else tc.title
+            tc.metadata = {
+                key: value
+                for key, value in snapshot.items()
+                if key != "title"
+            }
+            if on_tool_update:
+                pending_tasks.append(
+                    asyncio.create_task(self._emit_tool_update(on_tool_update, tc))
+                )
+
         try:
-            await self._check_doom_loop(tool_name, tool_input, agent_ruleset)
+            await self._check_doom_loop(tool_name, tool_input, merged_ruleset)
 
             # Create tool context with permission ruleset
             ctx = ToolContext(
@@ -725,7 +826,8 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                     "model_id": self.model_id,
                 },
                 messages=list(self.messages),
-                _ruleset=agent_ruleset,
+                _on_metadata=_handle_metadata_update,
+                _ruleset=merged_ruleset,
             )
 
             # Validate and parse input
@@ -736,18 +838,30 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
 
             # Execute the tool
             result = await tool.execute(args, ctx)
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+            raw_metadata = dict(ctx._metadata or {})
+            raw_metadata.update(dict(result.metadata or {}))
+            title = str(result.title or raw_metadata.pop("title", "") or "")
+            if title:
+                raw_metadata["title"] = title
 
             return {
                 "output": result.output,
-                "title": result.title,
-                "metadata": result.metadata,
+                "title": title,
+                "metadata": raw_metadata,
                 "attachments": result.attachments,
             }
 
         except (RejectedError, CorrectedError, DeniedError) as e:
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
             log.info("permission error", {"tool": tool_name, "error": str(e)})
             return {"error": str(e)}
         except Exception as e:
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
             log.error("tool execution error", {"tool": tool_name, "error": str(e)})
             return {"error": str(e)}
 

@@ -36,6 +36,8 @@ def test_transcript_commands_are_enabled() -> None:
     assert registry.get("session.copy").enabled is True
     assert registry.get("session.export").enabled is True
     assert registry.get("session.share").enabled is True
+    assert registry.get("session.toggle.actions").enabled is True
+    assert registry.get("session.toggle.actions").slash_name == "actions"
     assert registry.get("project.init").enabled is True
     assert registry.get("project.init").slash_name == "init"
     assert registry.get("provider.connect").enabled is True
