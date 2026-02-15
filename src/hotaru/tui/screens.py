@@ -833,6 +833,10 @@ class SessionScreen(Screen):
                     self._active_turn = None
                     if self.session_id:
                         await sync.sync_session(self.session_id, force=True)
+                        session_data = sync.get_session(self.session_id)
+                        if session_data and isinstance(session_data.get("agent"), str):
+                            local.agent.set(session_data["agent"])
+                            self._refresh_prompt_meta()
                 elif event_type == "error":
                     error_msg = event.get("data", {}).get("error", "Unknown error")
                     self.app.notify(f"Error: {error_msg}", severity="error")

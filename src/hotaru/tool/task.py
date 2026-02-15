@@ -174,6 +174,7 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
         session_id=session.id,
         text=params.prompt,
         created=now,
+        agent=agent.name,
     )
     await Session.add_message(session.id, user_message)
 
@@ -190,6 +191,7 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
         cwd=cwd,
         root=worktree,
         created=now,
+        agent=processor.last_assistant_agent(),
     )
     if result.text:
         Message.add_text(assistant_message, result.text)

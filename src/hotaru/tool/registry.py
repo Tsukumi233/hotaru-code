@@ -185,9 +185,6 @@ class ToolRegistry:
         if tool_id == "lsp":
             return bool(experimental.get("lsp_tool", False))
 
-        if tool_id in {"plan_enter", "plan_exit"}:
-            return bool(experimental.get("plan_mode", False))
-
         if tool_id == "apply_patch":
             return cls._apply_patch_enabled_for_model(model_id or "")
 

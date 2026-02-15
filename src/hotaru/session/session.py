@@ -5,12 +5,14 @@ Persisted via the hierarchical JSON file storage layer.
 """
 
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 from ..core.bus import Bus, BusEvent
 from ..core.id import Identifier
+from ..core.global_paths import GlobalPath
 from ..storage import Storage, NotFoundError
 from ..util.log import Log
 from .message import MessageInfo
@@ -33,6 +35,7 @@ class SessionShare(BaseModel):
 class SessionInfo(BaseModel):
     """Session information."""
     id: str
+    slug: Optional[str] = None
     project_id: str
     title: Optional[str] = None
     agent: str = "build"
@@ -123,6 +126,7 @@ class Session:
 
         session = SessionInfo(
             id=session_id,
+            slug=session_id,
             project_id=project_id,
             agent=agent,
             directory=directory,
@@ -142,6 +146,41 @@ class Session:
         await Bus.publish(SessionCreated, SessionCreatedProperties(session=session))
 
         return session
+
+    @classmethod
+    def plan_path_for(
+        cls,
+        session: SessionInfo,
+        *,
+        worktree: Optional[str] = None,
+        is_git: Optional[bool] = None,
+    ) -> str:
+        """Return the canonical plan file path for a session."""
+        if is_git is None:
+            is_git = bool(worktree and worktree != "/")
+
+        if is_git and worktree:
+            base = Path(worktree) / ".hotaru" / "plans"
+        else:
+            base = Path(GlobalPath.data()) / "plans"
+
+        slug = session.slug or session.id
+        filename = f"{session.time.created}-{slug}.md"
+        return str(base / filename)
+
+    @classmethod
+    async def plan_path(
+        cls,
+        session_id: str,
+        *,
+        worktree: Optional[str] = None,
+        is_git: Optional[bool] = None,
+    ) -> Optional[str]:
+        """Resolve the canonical plan file path for a session id."""
+        session = await cls.get(session_id)
+        if not session:
+            return None
+        return cls.plan_path_for(session, worktree=worktree, is_git=is_git)
 
     @classmethod
     async def get(cls, session_id: str, project_id: Optional[str] = None) -> Optional[SessionInfo]:

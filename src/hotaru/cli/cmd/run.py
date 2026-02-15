@@ -129,21 +129,16 @@ async def run_command(
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
-    # Validate agent
-    agent_name = agent
-    if agent_name:
-        agent_info = await Agent.get(agent_name)
+    # Validate requested agent (if provided)
+    requested_agent = agent
+    if requested_agent:
+        agent_info = await Agent.get(requested_agent)
         if not agent_info:
-            console.print(f"[yellow]Warning:[/yellow] Agent '{agent_name}' not found, using default")
-            agent_name = None
+            console.print(f"[yellow]Warning:[/yellow] Agent '{requested_agent}' not found, using session/default")
+            requested_agent = None
         elif agent_info.mode == "subagent":
-            console.print(f"[yellow]Warning:[/yellow] Agent '{agent_name}' is a subagent, using default")
-            agent_name = None
-
-    if not agent_name:
-        agent_name = await Agent.default_agent()
-
-    agent_info = await Agent.get(agent_name)
+            console.print(f"[yellow]Warning:[/yellow] Agent '{requested_agent}' is a subagent, using session/default")
+            requested_agent = None
 
     # Get or create session
     if continue_session:
@@ -151,9 +146,10 @@ async def run_command(
         if sessions:
             session = sessions[0]
         else:
+            initial_agent = requested_agent or await Agent.default_agent()
             session = await Session.create(
                 project_id=project.id,
-                agent=agent_name,
+                agent=initial_agent,
                 directory=cwd,
                 model_id=model_id,
                 provider_id=provider_id,
@@ -164,13 +160,20 @@ async def run_command(
             console.print(f"[red]Error:[/red] Session '{session_id}' not found")
             sys.exit(1)
     else:
+        initial_agent = requested_agent or await Agent.default_agent()
         session = await Session.create(
             project_id=project.id,
-            agent=agent_name,
+            agent=initial_agent,
             directory=cwd,
             model_id=model_id,
             provider_id=provider_id,
         )
+
+    agent_name = requested_agent or session.agent or await Agent.default_agent()
+    if agent_name != session.agent:
+        updated = await Session.update(session.id, agent=agent_name)
+        if updated:
+            session = updated
 
     if not json_output:
         console.print()
@@ -184,6 +187,7 @@ async def run_command(
         session_id=session.id,
         text=message,
         created=now,
+        agent=agent_name,
     )
     await Session.add_message(session.id, user_message)
 
@@ -453,6 +457,7 @@ async def run_command(
         cwd=cwd,
         root=sandbox,
         created=now,
+        agent=processor.last_assistant_agent(),
     )
     Message.add_text(assistant_message, response_text)
     for tc in (result.tool_calls if result else []):

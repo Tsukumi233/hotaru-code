@@ -162,6 +162,8 @@ class Agent:
             skill_globs = []
 
         # Default permission rules
+        global_plan_glob = str(Path(GlobalPath.data()) / "plans" / "*")
+        local_plan_glob = "*/.hotaru/plans/*"
         default_permissions = [
             {"permission": "*", "pattern": "*", "action": "allow"},
             {"permission": "doom_loop", "pattern": "*", "action": "ask"},
@@ -171,6 +173,8 @@ class Agent:
             {"permission": "read", "pattern": "*.env.*", "action": "deny"},
             {"permission": "read", "pattern": "*.env.example", "action": "allow"},
             {"permission": "question", "pattern": "*", "action": "deny"},
+            {"permission": "plan_enter", "pattern": "*", "action": "deny"},
+            {"permission": "plan_exit", "pattern": "*", "action": "deny"},
         ]
         for glob in skill_globs:
             default_permissions.append({"permission": "external_directory", "pattern": glob, "action": "allow"})
@@ -199,21 +203,27 @@ class Agent:
                 native=True,
                 permission=merge_permissions(
                     default_permissions,
-                    [{"permission": "question", "pattern": "*", "action": "allow"}],
+                    [
+                        {"permission": "question", "pattern": "*", "action": "allow"},
+                        {"permission": "plan_enter", "pattern": "*", "action": "allow"},
+                    ],
                     user_permissions
                 ),
             ),
             "plan": AgentInfo(
                 name="plan",
-                description="Plan mode. Analyze and plan without making unintended changes.",
+                description="Plan mode. Disallows all edit tools except the plan file.",
                 mode=AgentMode.PRIMARY,
                 native=True,
                 permission=merge_permissions(
                     default_permissions,
                     [
                         {"permission": "question", "pattern": "*", "action": "allow"},
-                        {"permission": "edit", "pattern": "*", "action": "ask"},
-                        {"permission": "bash", "pattern": "*", "action": "ask"},
+                        {"permission": "plan_exit", "pattern": "*", "action": "allow"},
+                        {"permission": "external_directory", "pattern": global_plan_glob, "action": "allow"},
+                        {"permission": "edit", "pattern": "*", "action": "deny"},
+                        {"permission": "edit", "pattern": local_plan_glob, "action": "allow"},
+                        {"permission": "edit", "pattern": global_plan_glob, "action": "allow"},
                     ],
                     user_permissions
                 ),

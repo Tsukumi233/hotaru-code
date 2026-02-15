@@ -33,3 +33,22 @@ async def test_registry_exposes_batch_when_enabled(monkeypatch: pytest.MonkeyPat
     names = {item["function"]["name"] for item in definitions}
     assert "batch" in names
 
+
+@pytest.mark.anyio
+async def test_registry_keeps_plan_tools_visible_when_plan_flag_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ToolRegistry.reset()
+
+    async def fake_get(cls):  # type: ignore[no-untyped-def]
+        return Config(experimental=ExperimentalConfig(plan_mode=False, batch_tool=False, enable_exa=False))
+
+    monkeypatch.setattr(ConfigManager, "get", classmethod(fake_get))
+
+    definitions = await ToolRegistry.get_tool_definitions(
+        provider_id="openai",
+        model_id="gpt-5",
+    )
+    names = {item["function"]["name"] for item in definitions}
+    assert "plan_enter" in names
+    assert "plan_exit" in names

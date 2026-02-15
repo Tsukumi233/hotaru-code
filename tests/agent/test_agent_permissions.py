@@ -1,6 +1,7 @@
 import pytest
 
 from hotaru.agent.agent import Agent
+from hotaru.core.global_paths import GlobalPath
 from hotaru.core.config import Config, ConfigManager
 from hotaru.permission import Permission, PermissionAction
 
@@ -125,5 +126,38 @@ async def test_default_read_env_rules_deny_sensitive_env_files(monkeypatch: pyte
     assert env_rule.action == PermissionAction.DENY
     assert nested_env_rule.action == PermissionAction.DENY
     assert env_example_rule.action == PermissionAction.ALLOW
+
+    Agent.reset()
+
+
+@pytest.mark.anyio
+async def test_plan_mode_permissions_are_aligned(monkeypatch: pytest.MonkeyPatch) -> None:
+    Agent.reset()
+    _patch_config(monkeypatch, {})
+
+    build = await Agent.get("build")
+    plan = await Agent.get("plan")
+    assert build is not None
+    assert plan is not None
+
+    build_rules = Permission.from_config_list(build.permission)
+    plan_rules = Permission.from_config_list(plan.permission)
+
+    assert Permission.evaluate("plan_enter", "*", build_rules).action == PermissionAction.ALLOW
+    assert Permission.evaluate("plan_exit", "*", build_rules).action == PermissionAction.DENY
+
+    assert Permission.evaluate("plan_enter", "*", plan_rules).action == PermissionAction.DENY
+    assert Permission.evaluate("plan_exit", "*", plan_rules).action == PermissionAction.ALLOW
+
+    normal_edit = Permission.evaluate("edit", "/tmp/project/src/main.py", plan_rules)
+    local_plan_edit = Permission.evaluate("edit", "/tmp/project/.hotaru/plans/p.md", plan_rules)
+    global_plan_edit = Permission.evaluate(
+        "edit",
+        f"{GlobalPath.data()}/plans/p.md",
+        plan_rules,
+    )
+    assert normal_edit.action == PermissionAction.DENY
+    assert local_plan_edit.action == PermissionAction.ALLOW
+    assert global_plan_edit.action == PermissionAction.ALLOW
 
     Agent.reset()

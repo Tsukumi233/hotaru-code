@@ -13,6 +13,7 @@ class TextPart(BaseModel):
     """Text content part."""
     type: Literal["text"] = "text"
     text: str
+    synthetic: bool = False
 
 
 class ReasoningPart(BaseModel):
@@ -134,6 +135,7 @@ class AssistantMetadata(BaseModel):
     system: List[str] = Field(default_factory=list)
     model_id: str
     provider_id: str
+    agent: Optional[str] = None
     path: PathInfo
     cost: float = 0.0
     summary: Optional[bool] = None
@@ -144,6 +146,7 @@ class MessageMetadata(BaseModel):
     """Metadata for a message."""
     time: MessageTime
     session_id: str
+    agent: Optional[str] = None
     error: Optional[Dict[str, Any]] = None
     tool: Dict[str, ToolMetadata] = Field(default_factory=dict)
     assistant: Optional[AssistantMetadata] = None
@@ -169,7 +172,10 @@ class Message:
         message_id: str,
         session_id: str,
         text: str,
-        created: int
+        created: int,
+        *,
+        agent: Optional[str] = None,
+        synthetic: bool = False,
     ) -> MessageInfo:
         """Create a user message.
 
@@ -185,10 +191,11 @@ class Message:
         return MessageInfo(
             id=message_id,
             role=MessageRole.USER,
-            parts=[TextPart(text=text)],
+            parts=[TextPart(text=text, synthetic=synthetic)],
             metadata=MessageMetadata(
                 time=MessageTime(created=created, completed=created),
                 session_id=session_id,
+                agent=agent,
             )
         )
 
@@ -200,7 +207,9 @@ class Message:
         provider_id: str,
         cwd: str,
         root: str,
-        created: int
+        created: int,
+        *,
+        agent: Optional[str] = None,
     ) -> MessageInfo:
         """Create an assistant message.
 
@@ -223,9 +232,11 @@ class Message:
             metadata=MessageMetadata(
                 time=MessageTime(created=created),
                 session_id=session_id,
+                agent=agent,
                 assistant=AssistantMetadata(
                     model_id=model_id,
                     provider_id=provider_id,
+                    agent=agent,
                     path=PathInfo(cwd=cwd, root=root),
                 )
             )
