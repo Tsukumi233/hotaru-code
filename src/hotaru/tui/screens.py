@@ -1,6 +1,7 @@
 """Screens for TUI application."""
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -11,7 +12,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from .commands import CommandRegistry, create_default_commands
-from .context import use_local, use_route, use_sdk, use_sync
+from .context import use_kv, use_local, use_route, use_sdk, use_sync
 from .context.route import HomeRoute, PromptInfo, SessionRoute
 from .dialogs import InputDialog, PermissionDialog, SelectDialog
 from .input_parsing import enrich_content_with_file_references
@@ -299,6 +300,9 @@ class SessionScreen(Screen):
         self.initial_message = initial_message
         self._active_turn: Optional[AssistantTurnState] = None
         self._loading_spinner: Optional[Spinner] = None
+        self._uses_tool_part_updates: bool = False
+        self._legacy_tool_parts: Dict[str, Dict[str, Any]] = {}
+        self._show_tool_details = bool(use_kv().get("tool_details_visibility", True))
         self._command_registry = CommandRegistry()
         for cmd in create_default_commands():
             self._command_registry.register(cmd)
@@ -364,6 +368,7 @@ class SessionScreen(Screen):
         """Load and render historical messages for an existing session."""
         if not self.session_id:
             return
+        self._show_tool_details = bool(use_kv().get("tool_details_visibility", True))
 
         sync = use_sync()
         if not sync.is_session_synced(self.session_id):
@@ -396,7 +401,12 @@ class SessionScreen(Screen):
             )
             return
 
+        info = message.get("info", {})
         agent = use_local().agent.current().get("name", "assistant")
+        if isinstance(info, dict):
+            info_agent = info.get("agent")
+            if isinstance(info_agent, str) and info_agent:
+                agent = info_agent
         await container.mount(
             MessageBubble(
                 content="",
@@ -422,38 +432,34 @@ class SessionScreen(Screen):
                             classes="message assistant-message",
                         )
                     )
-            elif part_type == "tool-invocation":
-                invocation = part.get("tool_invocation", {})
-                if not isinstance(invocation, dict):
+            elif part_type == "tool":
+                if self._should_hide_tool_part(part):
                     continue
-
-                state = invocation.get("state")
-                tool_name = invocation.get("tool_name", "tool")
-                tool_id = invocation.get("tool_call_id", f"history-tool-{idx}")
-                args = invocation.get("args") or {}
-
-                if state == "result":
-                    output = invocation.get("result")
-                    await container.mount(
-                        ToolDisplay(
-                            tool_name=tool_name,
-                            tool_id=tool_id,
-                            status="completed",
-                            input_data=args if isinstance(args, dict) else {},
-                            output=self._stringify_output(output),
-                            classes="message tool-display",
-                        )
+                await container.mount(
+                    ToolDisplay(
+                        part=part,
+                        show_details=self._show_tool_details,
+                        on_open_session=self._open_task_session,
+                        classes="message tool-display",
                     )
-                elif state in ("call", "partial-call"):
-                    await container.mount(
-                        ToolDisplay(
-                            tool_name=tool_name,
-                            tool_id=tool_id,
-                            status="running",
-                            input_data=args if isinstance(args, dict) else {},
-                            classes="message tool-display",
-                        )
+                )
+            elif part_type == "step-start":
+                await container.mount(
+                    AssistantTextPart(
+                        content="[Step started]",
+                        part_id=f"history-{message.get('id', '')}-{idx}",
+                        classes="message assistant-message",
                     )
+                )
+            elif part_type == "step-finish":
+                reason = str(part.get("reason") or "completed")
+                await container.mount(
+                    AssistantTextPart(
+                        content=f"[Step finished: {reason}]",
+                        part_id=f"history-{message.get('id', '')}-{idx}",
+                        classes="message assistant-message",
+                    )
+                )
 
     def _extract_text(self, message: Dict[str, Any]) -> str:
         parts = message.get("parts", [])
@@ -495,13 +501,14 @@ class SessionScreen(Screen):
             total_cost = 0.0
             for msg in messages:
                 if msg.get("role") == "assistant":
-                    metadata = msg.get("metadata", {})
-                    if isinstance(metadata, dict):
-                        usage = metadata.get("usage", {})
-                        if isinstance(usage, dict):
-                            total_tokens += usage.get("input_tokens", 0)
-                            total_tokens += usage.get("output_tokens", 0)
-                        total_cost += metadata.get("cost", 0.0)
+                    info = msg.get("info", {})
+                    if isinstance(info, dict):
+                        tokens = info.get("tokens", {})
+                        if isinstance(tokens, dict):
+                            total_tokens += int(tokens.get("input", 0) or 0)
+                            total_tokens += int(tokens.get("output", 0) or 0)
+                            total_tokens += int(tokens.get("reasoning", 0) or 0)
+                        total_cost += float(info.get("cost", 0.0) or 0.0)
             if total_tokens > 0:
                 header.context_info = f"{total_tokens:,}"
             else:
@@ -681,6 +688,8 @@ class SessionScreen(Screen):
                 classes="message assistant-message",
             )
         )
+        self._uses_tool_part_updates = False
+        self._legacy_tool_parts = {}
         self._active_turn = AssistantTurnState()
 
     async def _send_message_async(
@@ -866,71 +875,141 @@ class SessionScreen(Screen):
         self, event: Dict[str, Any], container: ScrollableContainer, agent: str
     ) -> None:
         part = event.get("data", {}).get("part", {})
-        if part.get("type") != "text":
+        part_type = part.get("type")
+        if part_type == "text":
+            part_id = part.get("id", "")
+            text = part.get("text", "")
+            turn = await self._ensure_turn(container, agent)
+
+            widget = turn.text_parts.get(part_id)
+            if widget:
+                widget.content = text
+                widget.refresh()
+                return
+
+            text_widget = AssistantTextPart(
+                content=text,
+                part_id=part_id,
+                classes="message assistant-message",
+            )
+            turn.text_parts[part_id] = text_widget
+            await container.mount(text_widget)
+            return
+        if part_type == "tool":
+            self._uses_tool_part_updates = True
+            await self._handle_tool_part_update(part, container, agent)
             return
 
-        part_id = part.get("id", "")
-        text = part.get("text", "")
+    async def _handle_tool_part_update(
+        self,
+        part: Dict[str, Any],
+        container: ScrollableContainer,
+        agent: str,
+    ) -> None:
+        tool_key = self._tool_widget_key(part)
+        if not tool_key:
+            return
         turn = await self._ensure_turn(container, agent)
-
-        widget = turn.text_parts.get(part_id)
+        widget = turn.tool_widgets.get(tool_key)
         if widget:
-            widget.content = text
+            widget.show_details = self._show_tool_details
+            widget.set_part(part)
             widget.refresh()
             return
-
-        text_widget = AssistantTextPart(
-            content=text,
-            part_id=part_id,
-            classes="message assistant-message",
+        if self._should_hide_tool_part(part):
+            return
+        widget = ToolDisplay(
+            part=part,
+            show_details=self._show_tool_details,
+            on_open_session=self._open_task_session,
+            classes="message tool-display",
         )
-        turn.text_parts[part_id] = text_widget
-        await container.mount(text_widget)
+        turn.tool_widgets[tool_key] = widget
+        await container.mount(widget)
+
+    @staticmethod
+    def _tool_widget_key(part: Dict[str, Any]) -> str:
+        call_id = part.get("call_id")
+        if isinstance(call_id, str) and call_id:
+            return call_id
+        part_id = part.get("id")
+        if isinstance(part_id, str) and part_id:
+            return part_id
+        return ""
+
+    def _should_hide_tool_part(self, part: Dict[str, Any]) -> bool:
+        if self._show_tool_details:
+            return False
+        state = part.get("state")
+        if not isinstance(state, dict):
+            return False
+        status = state.get("status")
+        error = state.get("error")
+        return status == "completed" and not error
+
+    def _open_task_session(self, session_id: str) -> None:
+        route = use_route()
+        route.navigate(SessionRoute(session_id=session_id))
 
     async def _handle_tool_start(
         self, event: Dict[str, Any], container: ScrollableContainer, agent: str
     ) -> None:
+        if self._uses_tool_part_updates:
+            return
         data = event.get("data", {})
         tool_id = data.get("tool_id", "")
         tool_name = data.get("tool_name", "tool")
         input_data = data.get("input", {})
-        turn = await self._ensure_turn(container, agent)
-
-        widget = turn.tool_widgets.get(tool_id)
-        if widget:
-            widget.status = "running"
-            widget.input_data = input_data
-            widget.refresh()
-            return
-
-        widget = ToolDisplay(
-            tool_name=tool_name,
-            tool_id=tool_id,
-            status="running",
-            input_data=input_data,
-            classes="message tool-display",
-        )
-        turn.tool_widgets[tool_id] = widget
-        await container.mount(widget)
+        now_ms = int(time.time() * 1000)
+        part_id = self._legacy_tool_parts.get(tool_id, {}).get("id")
+        part = {
+            "id": part_id or f"tool-{tool_id or tool_name}",
+            "type": "tool",
+            "tool": tool_name,
+            "call_id": tool_id,
+            "state": {
+                "status": "running",
+                "input": input_data if isinstance(input_data, dict) else {},
+                "raw": "",
+                "output": None,
+                "error": None,
+                "title": "",
+                "metadata": {},
+                "attachments": [],
+                "time": {"start": now_ms, "end": None},
+            },
+        }
+        self._legacy_tool_parts[tool_id] = part
+        await self._handle_tool_part_update(part, container, agent)
 
     async def _handle_tool_end(
         self, event: Dict[str, Any], container: ScrollableContainer
     ) -> None:
-        if self._active_turn is None:
+        if self._uses_tool_part_updates or self._active_turn is None:
             return
 
         data = event.get("data", {})
         tool_id = data.get("tool_id", "")
-        widget = self._active_turn.tool_widgets.get(tool_id)
-        if not widget:
+        existing = self._legacy_tool_parts.get(tool_id)
+        if not existing:
             return
-
-        widget.output = data.get("output")
-        widget.error = data.get("error")
-        widget.title = data.get("title", "")
-        widget.metadata = data.get("metadata", {})
-        widget.status = "error" if data.get("error") else "completed"
-        widget.refresh()
+        state = dict(existing.get("state") or {})
+        state["status"] = "error" if data.get("error") else "completed"
+        state["output"] = data.get("output")
+        state["error"] = data.get("error")
+        state["title"] = data.get("title", "")
+        metadata = data.get("metadata", {})
+        state["metadata"] = metadata if isinstance(metadata, dict) else {}
+        time_info = dict(state.get("time") or {})
+        time_info["end"] = int(time.time() * 1000)
+        state["time"] = time_info
+        existing["state"] = state
+        self._legacy_tool_parts[tool_id] = existing
+        await self._handle_tool_part_update(
+            existing,
+            container,
+            use_local().agent.current().get("name", "assistant"),
+        )
 
     def action_command_palette(self) -> None:
         self.app.action_command_palette()
@@ -968,6 +1047,18 @@ class SessionScreen(Screen):
     async def refresh_history(self) -> None:
         """Refresh session messages from persisted storage."""
         await self._load_session_history()
+
+    def set_tool_details_visibility(self, visible: bool) -> None:
+        """Update tool detail visibility and refresh timeline rendering."""
+        self._show_tool_details = bool(visible)
+        if self._active_turn:
+            for widget in self._active_turn.tool_widgets.values():
+                widget.show_details = self._show_tool_details
+                widget.refresh()
+        prompt = self.query_one("#prompt-input", PromptInput)
+        if prompt.disabled:
+            return
+        self.run_worker(self._load_session_history(), exclusive=False)
 
     def set_prompt_text(self, text: str) -> None:
         """Set prompt input value and keep focus on input."""

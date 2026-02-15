@@ -121,3 +121,81 @@ async def test_processor_binds_instance_context_for_tool_execution(
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].status == "completed"
     assert result.tool_calls[0].output == str(tmp_path.resolve())
+
+
+@pytest.mark.anyio
+async def test_processor_emits_tool_updates_with_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ToolRegistry.reset()
+
+    class _MetaParams(BaseModel):
+        pass
+
+    async def meta_execute(_params: _MetaParams, ctx: ToolContext) -> ToolResult:
+        ctx.metadata(title="Probe running", metadata={"progress": "half"})
+        return ToolResult(title="Probe done", output="ok", metadata={"result": 1})
+
+    ToolRegistry.register(
+        Tool.define(
+            tool_id="meta_probe",
+            description="Metadata probe",
+            parameters_type=_MetaParams,
+            execute_fn=meta_execute,
+            auto_truncate=False,
+        )
+    )
+
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(
+            type="tool_call_start",
+            tool_call_id="call_meta_probe",
+            tool_call_name="meta_probe",
+        )
+        yield StreamChunk(
+            type="tool_call_end",
+            tool_call=ToolCall(id="call_meta_probe", name="meta_probe", input={}),
+        )
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(
+            name=name,
+            mode=AgentMode.PRIMARY,
+            permission=[],
+            options={},
+        )
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    updates = []
+
+    processor = SessionProcessor(
+        session_id="ses_updates",
+        model_id="model",
+        provider_id="provider",
+        agent="build",
+        cwd="/tmp",
+        worktree="/tmp",
+    )
+
+    await processor.process_step(
+        on_tool_update=lambda payload: updates.append(payload),
+        tool_definitions=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "meta_probe",
+                    "description": "Metadata probe",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    statuses = [item.get("status") for item in updates]
+    assert "pending" in statuses
+    assert "running" in statuses
+    assert "completed" in statuses
+    assert any(item.get("metadata", {}).get("progress") == "half" for item in updates)
+    assert any(item.get("title") == "Probe done" for item in updates)

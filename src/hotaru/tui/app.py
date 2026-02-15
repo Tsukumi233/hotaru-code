@@ -320,6 +320,10 @@ class TuiApp(App):
                 command.on_select = (
                     lambda source="palette", argument=None: self.action_session_copy()
                 )
+            elif command.id == "session.toggle.actions":
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_toggle_actions()
+                )
             elif command.id == "provider.connect":
                 command.on_select = (
                     lambda source="palette", argument=None: self.action_provider_connect()
@@ -787,7 +791,8 @@ class TuiApp(App):
         self.notify("Undid the last turn. Use /redo to restore it.")
 
     async def _redo_session_turn(self) -> None:
-        from ..session import MessageInfo, Session
+        from ..session import Session, StoredMessageInfo
+        from ..session.message_store import parse_part
 
         session_id = self._active_session_id()
         if not session_id:
@@ -807,12 +812,28 @@ class TuiApp(App):
 
         restored = 0
         for message in turn:
-            try:
-                parsed = MessageInfo.model_validate(message)
-            except Exception:
+            if not isinstance(message, dict):
                 continue
-            await Session.add_message(session_id, parsed)
-            restored += 1
+
+            info_data = message.get("info")
+            if isinstance(info_data, dict):
+                try:
+                    structured_info = StoredMessageInfo.model_validate(info_data)
+                except Exception:
+                    continue
+                await Session.update_message(structured_info)
+                for part_data in message.get("parts", []):
+                    if not isinstance(part_data, dict):
+                        continue
+                    try:
+                        parsed_part = parse_part(part_data)
+                    except Exception:
+                        continue
+                    await Session.update_part(parsed_part)
+                restored += 1
+                continue
+
+            continue
 
         if restored == 0:
             self.notify("Redo failed: no messages could be restored.", severity="error")
@@ -1068,6 +1089,18 @@ class TuiApp(App):
         """Copy the current session transcript to clipboard."""
         self.run_worker(self._copy_session_transcript(), exclusive=False)
 
+    def action_session_toggle_actions(self) -> None:
+        """Toggle tool details visibility in the session timeline."""
+        visible = bool(self.kv_ctx.toggle("tool_details_visibility", True))
+        label = "shown" if visible else "hidden"
+        self.notify(f"Tool details {label}.")
+        try:
+            screen = self.screen
+        except Exception:
+            return
+        if isinstance(screen, SessionScreen):
+            screen.set_tool_details_visibility(visible)
+
     async def _copy_session_transcript(self) -> None:
         session_id = self._active_session_id()
         if not session_id:
@@ -1195,7 +1228,7 @@ class TuiApp(App):
 
         options = TranscriptOptions(
             thinking=False,
-            tool_details=True,
+            tool_details=bool(self.kv_ctx.get("tool_details_visibility", True)),
             assistant_metadata=True,
         )
         return format_transcript(session, messages, options)

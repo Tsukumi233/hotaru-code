@@ -1,22 +1,21 @@
 """SDK context for API communication.
 
 This module provides SDK client context for communicating with
-the Hotaru backend API. Uses the real SessionProcessor for LLM
-interactions instead of mock responses.
+the Hotaru backend API. Uses SessionPrompt for LLM interactions.
 """
 
 from typing import Optional, Dict, Any, Callable, List, AsyncIterator
 from contextvars import ContextVar
 from pathlib import Path
 import asyncio
-import time
 
 from ...agent import Agent
 from ...core.id import Identifier
 from ...project import Project
 from ...provider import Provider
-from ...session import Message, Session, SessionProcessor, SystemPrompt
+from ...session import Session, SessionPrompt, SystemPrompt
 from ...util.log import Log
+from ..message_adapter import structured_messages_to_tui
 
 log = Log.create({"service": "tui.context.sdk"})
 
@@ -26,7 +25,7 @@ class SDKContext:
 
     Provides methods for interacting with the Hotaru backend API,
     including sending messages, managing sessions, and handling events.
-    Uses the real SessionProcessor for LLM interactions.
+    Uses the real session prompt loop for LLM interactions.
     """
 
     def __init__(self, cwd: Optional[str] = None) -> None:
@@ -60,7 +59,7 @@ class SDKContext:
     ) -> AsyncIterator[Dict[str, Any]]:
         """Send a message and stream the response.
 
-        Uses the real SessionProcessor for LLM interactions.
+        Uses the real session prompt loop for LLM interactions.
 
         Args:
             session_id: Session ID
@@ -119,30 +118,6 @@ class SDKContext:
             if updated:
                 session = updated
 
-        # Create session processor
-        processor = SessionProcessor(
-            session_id=session_id,
-            model_id=model_id,
-            provider_id=provider_id,
-            agent=agent_name,
-            cwd=self._cwd,
-            worktree=self._sandbox or self._cwd,
-        )
-
-        # Load prior conversation history for resumed sessions
-        await processor.load_history()
-
-        # Persist user message to disk so load_history() can find it
-        now = int(time.time() * 1000)
-        user_msg = Message.create_user(
-            message_id=Identifier.ascending("message"),
-            session_id=session_id,
-            text=content,
-            created=now,
-            agent=agent_name,
-        )
-        await Session.add_message(session_id, user_msg)
-
         # Build system prompt
         system_prompt = await SystemPrompt.build_full_prompt(
             model=model_info,
@@ -155,10 +130,19 @@ class SDKContext:
         message_id = Identifier.ascending("message")
         part_id_counter = [0]  # mutable counter for generating unique part IDs
         response_text = ""
+        tool_part_ids: Dict[str, str] = {}
 
         def _next_part_id() -> str:
             part_id_counter[0] += 1
             return f"part-{part_id_counter[0]}"
+
+        def _tool_part_id(tool_id: str) -> str:
+            existing = tool_part_ids.get(tool_id)
+            if existing:
+                return existing
+            generated = _next_part_id()
+            tool_part_ids[tool_id] = generated
+            return generated
 
         # Yield message created event
         yield {
@@ -188,11 +172,19 @@ class SDKContext:
                 "kind": "tool_end",
                 "tool_name": tool_name,
                 "tool_id": tool_id,
-                "output": output[:500] if output else None,
+                "output": output,
                 "error": error,
                 "title": title,
                 "metadata": metadata or {},
             })
+
+        def on_tool_update(tool_state: Dict[str, Any]):
+            event_queue.put_nowait(
+                {
+                    "kind": "tool_update",
+                    "tool_state": dict(tool_state or {}),
+                }
+            )
 
         # Process with streaming text/tool updates
         # We need to yield events as they come in
@@ -208,14 +200,23 @@ class SDKContext:
                     response_text += text
                     event_queue.put_nowait({"kind": "text", "text": text})
 
-                result = await processor.process(
-                    user_message=content,
+                prompt_result = await SessionPrompt.prompt(
+                    session_id=session_id,
+                    content=content,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    agent=agent_name,
+                    cwd=self._cwd,
+                    worktree=self._sandbox or self._cwd,
                     system_prompt=system_prompt,
                     on_text=queue_text,
                     on_tool_start=on_tool_start,
                     on_tool_end=on_tool_end,
+                    on_tool_update=on_tool_update,
+                    resume_history=True,
+                    assistant_message_id=message_id,
                 )
-                result_holder.append(result)
+                result_holder.append(prompt_result.result)
             except Exception as e:
                 error_holder.append(str(e))
             finally:
@@ -270,6 +271,43 @@ class SDKContext:
                         "metadata": evt.get("metadata", {}),
                     }
                 }
+            elif kind == "tool_update":
+                state = dict(evt.get("tool_state") or {})
+                tool_id = str(state.get("id") or "")
+                start_time = int(state.get("start_time") or 0)
+                end_time = state.get("end_time")
+                normalized_state: Dict[str, Any] = {
+                    "status": state.get("status") or "pending",
+                    "input": state.get("input") if isinstance(state.get("input"), dict) else {},
+                    "raw": state.get("input_json") or "",
+                    "output": state.get("output"),
+                    "error": state.get("error"),
+                    "title": state.get("title"),
+                    "metadata": state.get("metadata") if isinstance(state.get("metadata"), dict) else {},
+                    "attachments": state.get("attachments") if isinstance(state.get("attachments"), list) else [],
+                    "time": {
+                        "start": start_time,
+                        "end": int(end_time) if isinstance(end_time, (int, float)) else None,
+                    },
+                }
+                status = str(normalized_state.get("status") or "")
+                if status in {"completed", "error"}:
+                    segment_text = ""
+                    current_part_id = _next_part_id()
+                return {
+                    "type": "message.part.updated",
+                    "data": {
+                        "part": {
+                            "id": _tool_part_id(tool_id or Identifier.ascending("toolpart")),
+                            "session_id": session_id,
+                            "message_id": message_id,
+                            "type": "tool",
+                            "tool": state.get("name") or "tool",
+                            "call_id": tool_id,
+                            "state": normalized_state,
+                        }
+                    },
+                }
             return None
 
         while True:
@@ -313,41 +351,6 @@ class SDKContext:
                     "data": {"error": result.error}
                 }
                 return
-
-            # Persist assistant message (with tool calls) to disk
-            assistant_msg = Message.create_assistant(
-                message_id=message_id,
-                session_id=session_id,
-                model_id=model_id,
-                provider_id=provider_id,
-                cwd=self._cwd,
-                root=self._sandbox or self._cwd,
-                created=now,
-                agent=processor.last_assistant_agent(),
-            )
-            if response_text:
-                Message.add_text(assistant_msg, response_text)
-            for tc in result.tool_calls:
-                Message.add_tool_result(
-                    assistant_msg,
-                    tool_call_id=tc.id,
-                    tool_name=tc.name,
-                    args=tc.input,
-                    result=tc.output if tc.status == "completed" else (tc.error or ""),
-                )
-                for attachment in tc.attachments:
-                    mime = attachment.get("mime") or attachment.get("media_type")
-                    url = attachment.get("url")
-                    if not mime or not url:
-                        continue
-                    Message.add_file(
-                        assistant_msg,
-                        media_type=str(mime),
-                        filename=attachment.get("filename"),
-                        url=str(url),
-                    )
-            Message.complete(assistant_msg, int(time.time() * 1000))
-            await Session.add_message(session_id, assistant_msg)
 
             # Yield completion event
             yield {
@@ -495,10 +498,9 @@ class SDKContext:
         Returns:
             List of messages
         """
-        from ...session import Session
         log.debug("getting messages", {"session_id": session_id})
-        messages = await Session.get_messages(session_id)
-        return [m.model_dump() for m in messages]
+        structured = await Session.messages(session_id=session_id)
+        return structured_messages_to_tui(structured)
 
     async def abort_message(self, session_id: str) -> None:
         """Abort the current message generation.
