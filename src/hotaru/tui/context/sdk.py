@@ -105,13 +105,19 @@ class SDKContext:
             return
 
         # Get agent name
-        agent_name = agent
+        session = await Session.get(session_id)
+        agent_name = agent or (session.agent if session else None)
         if agent_name:
             agent_info = await Agent.get(agent_name)
             if not agent_info or agent_info.mode == "subagent":
                 agent_name = await Agent.default_agent()
         else:
             agent_name = await Agent.default_agent()
+
+        if session and session.agent != agent_name:
+            updated = await Session.update(session_id, agent=agent_name)
+            if updated:
+                session = updated
 
         # Create session processor
         processor = SessionProcessor(
@@ -133,6 +139,7 @@ class SDKContext:
             session_id=session_id,
             text=content,
             created=now,
+            agent=agent_name,
         )
         await Session.add_message(session_id, user_msg)
 
@@ -316,6 +323,7 @@ class SDKContext:
                 cwd=self._cwd,
                 root=self._sandbox or self._cwd,
                 created=now,
+                agent=processor.last_assistant_agent(),
             )
             if response_text:
                 Message.add_text(assistant_msg, response_text)

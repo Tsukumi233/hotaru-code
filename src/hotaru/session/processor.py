@@ -22,6 +22,8 @@ DOOM_LOOP_THRESHOLD = 3
 
 _MAX_STEPS_PROMPT_PATH = Path(__file__).parent / "prompt" / "max-steps.txt"
 _MAX_STEPS_PROMPT = _MAX_STEPS_PROMPT_PATH.read_text(encoding="utf-8").strip()
+_BUILD_SWITCH_PROMPT_PATH = Path(__file__).parent / "prompt" / "build-switch.txt"
+_BUILD_SWITCH_PROMPT = _BUILD_SWITCH_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 @dataclass
@@ -35,6 +37,7 @@ class ToolCallState:
     output: Optional[str] = None
     error: Optional[str] = None
     attachments: List[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     start_time: Optional[int] = None
     end_time: Optional[int] = None
 
@@ -91,6 +94,8 @@ class SessionProcessor:
         self.messages: List[Dict[str, Any]] = []
         self.tool_calls: Dict[str, ToolCallState] = {}
         self._recent_tool_signatures: List[str] = []
+        self._pending_synthetic_users: List[Dict[str, str]] = []
+        self._last_assistant_agent: Optional[str] = None
 
     async def load_history(self) -> None:
         """Load prior conversation history from persisted messages.
@@ -100,7 +105,7 @@ class SessionProcessor:
         ``process()`` when resuming an existing session.
         """
         from .session import Session
-        from .message import TextPart, ToolInvocationPart, ToolResult as MsgToolResult
+        from .message import TextPart, ToolInvocationPart
 
         stored = await Session.get_messages(self.session_id)
         for msg in stored:
@@ -112,6 +117,10 @@ class SessionProcessor:
                     "content": "".join(text_parts),
                 })
             elif msg.role == "assistant":
+                if msg.metadata.assistant and msg.metadata.assistant.agent:
+                    self._last_assistant_agent = msg.metadata.assistant.agent
+                elif msg.metadata.agent:
+                    self._last_assistant_agent = msg.metadata.agent
                 text_parts = [p.text for p in msg.parts if isinstance(p, TextPart)]
                 tool_invocations = [
                     p for p in msg.parts
@@ -205,6 +214,7 @@ class SessionProcessor:
 
         from ..agent import Agent
 
+        await self._sync_agent_from_session()
         agent_info = await Agent.get(self.agent)
         direct_subagent_result = await self._handle_direct_subagent_mention(user_message, agent_info)
         if direct_subagent_result is not None:
@@ -215,7 +225,18 @@ class SessionProcessor:
 
         while result.status == "continue" and self.turn < self.max_turns:
             self.turn += 1
-            log.info("processing turn", {"turn": self.turn, "session_id": self.session_id})
+            await self._sync_agent_from_session()
+            agent_info = await Agent.get(self.agent)
+            assistant_agent_for_turn = self.agent
+
+            log.info(
+                "processing turn",
+                {
+                    "turn": self.turn,
+                    "session_id": self.session_id,
+                    "agent": self.agent,
+                },
+            )
 
             # Get tool definitions
             max_steps = agent_info.steps if agent_info else None
@@ -268,6 +289,10 @@ class SessionProcessor:
                 except Exception as e:
                     log.warn("failed to filter disabled tools", {"error": str(e)})
 
+            await self._insert_mode_reminders(
+                current_agent=self.agent,
+                previous_assistant_agent=self._last_assistant_agent,
+            )
             messages_for_turn = self.messages.copy()
             if is_last_step:
                 messages_for_turn.append({
@@ -308,6 +333,8 @@ class SessionProcessor:
                 result.error = turn_result.error
                 break
 
+            self._last_assistant_agent = assistant_agent_for_turn
+
             # Check if we should continue
             if not turn_result.tool_calls:
                 # No tool calls, we're done
@@ -345,11 +372,158 @@ class SessionProcessor:
                 }
                 self.messages.append(tool_result_message)
 
+            if self._pending_synthetic_users:
+                await self._flush_synthetic_users()
+
         if self.turn >= self.max_turns:
             result.status = "error"
             result.error = f"Maximum turns ({self.max_turns}) exceeded"
 
         return result
+
+    def last_assistant_agent(self) -> str:
+        """Return the agent name used for the latest assistant turn."""
+        return self._last_assistant_agent or self.agent
+
+    async def _sync_agent_from_session(self) -> None:
+        from .session import Session
+
+        session = await Session.get(self.session_id)
+        if session and session.agent:
+            self.agent = session.agent
+
+    async def _insert_mode_reminders(
+        self,
+        *,
+        current_agent: str,
+        previous_assistant_agent: Optional[str],
+    ) -> None:
+        from .session import Session
+
+        if current_agent != "plan" and previous_assistant_agent != "plan":
+            return
+
+        session = await Session.get(self.session_id)
+        if not session:
+            return
+
+        plan_path = Session.plan_path_for(
+            session,
+            worktree=self.worktree,
+            is_git=bool(self.worktree and self.worktree != "/"),
+        )
+
+        if current_agent != "plan" and previous_assistant_agent == "plan":
+            if Path(plan_path).exists():
+                self._append_reminder_to_latest_user(
+                    _BUILD_SWITCH_PROMPT
+                    + "\n\n"
+                    + f"A plan file exists at {plan_path}. You should execute on the plan defined within it"
+                )
+            return
+
+        if current_agent == "plan" and previous_assistant_agent != "plan":
+            exists = Path(plan_path).exists()
+            if not exists:
+                Path(plan_path).parent.mkdir(parents=True, exist_ok=True)
+            self._append_reminder_to_latest_user(self._build_plan_mode_reminder(plan_path=plan_path, exists=exists))
+
+    def _append_reminder_to_latest_user(self, reminder: str) -> None:
+        for message in reversed(self.messages):
+            if message.get("role") != "user":
+                continue
+
+            content = str(message.get("content") or "")
+            if reminder in content:
+                return
+            message["content"] = f"{content.rstrip()}\n\n{reminder}" if content.strip() else reminder
+            return
+
+    def _build_plan_mode_reminder(self, *, plan_path: str, exists: bool) -> str:
+        plan_info = (
+            f"A plan file already exists at {plan_path}. You can read it and make incremental edits using the edit tool."
+            if exists
+            else f"No plan file exists yet. You should create your plan at {plan_path} using the write tool."
+        )
+        return f"""<system-reminder>
+Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supersedes any other instructions you have received.
+
+## Plan File Info:
+{plan_info}
+You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
+
+## Plan Workflow
+
+### Phase 1: Initial Understanding
+Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the explore subagent type.
+
+1. Focus on understanding the user's request and the code associated with their request.
+2. Launch up to 3 explore agents in parallel only when scope is uncertain; otherwise use one.
+3. After exploration, use question tool to clarify ambiguities.
+
+### Phase 2: Design
+Goal: Design an implementation approach.
+Use general agent(s) to draft the implementation strategy based on exploration results.
+
+### Phase 3: Review
+Goal: Ensure alignment with user intentions.
+Read critical files identified by agents and ask follow-up questions where needed.
+
+### Phase 4: Final Plan
+Goal: Write the final plan to the plan file.
+Include critical file paths, concrete implementation steps, and an end-to-end verification section.
+
+### Phase 5: Call plan_exit
+At the end of planning, call plan_exit to request switching back to build mode.
+Your turn should only end by either asking a question or calling plan_exit.
+
+NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
+</system-reminder>"""
+
+    def _apply_mode_switch_metadata(self, metadata: Dict[str, Any]) -> None:
+        mode_switch = metadata.get("mode_switch")
+        if not isinstance(mode_switch, dict):
+            return
+
+        target_agent = mode_switch.get("to")
+        if isinstance(target_agent, str) and target_agent:
+            self.agent = target_agent
+
+        synthetic_user = metadata.get("synthetic_user")
+        if not isinstance(synthetic_user, dict):
+            return
+
+        text = synthetic_user.get("text")
+        agent = synthetic_user.get("agent")
+        if isinstance(text, str) and text.strip():
+            self._pending_synthetic_users.append(
+                {
+                    "text": text.strip(),
+                    "agent": str(agent or target_agent or self.agent),
+                }
+            )
+
+    async def _flush_synthetic_users(self) -> None:
+        from .session import Session
+
+        pending = list(self._pending_synthetic_users)
+        self._pending_synthetic_users.clear()
+        if not pending:
+            return
+
+        for item in pending:
+            text = item["text"]
+            agent = item["agent"]
+            self.messages.append({"role": "user", "content": text})
+            user_msg = Message.create_user(
+                message_id=Identifier.ascending("message"),
+                session_id=self.session_id,
+                text=text,
+                created=int(time.time() * 1000),
+                agent=agent,
+                synthetic=True,
+            )
+            await Session.add_message(self.session_id, user_msg)
 
     async def _handle_direct_subagent_mention(
         self,
@@ -474,6 +648,8 @@ class SessionProcessor:
                             tc.status = "completed"
                             tc.output = tool_result.get("output", "")
                             tc.attachments = tool_result.get("attachments", [])
+                            tc.metadata = dict(tool_result.get("metadata", {}) or {})
+                            self._apply_mode_switch_metadata(tc.metadata)
 
                         result.tool_calls.append(tc)
                         if on_tool_end:
