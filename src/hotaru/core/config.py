@@ -160,6 +160,7 @@ class CompactionConfig(BaseModel):
     """Compaction settings."""
     auto: Optional[bool] = None
     prune: Optional[bool] = None
+    reserved: Optional[int] = None
 
 
 class TuiConfig(BaseModel):

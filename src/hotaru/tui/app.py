@@ -312,6 +312,10 @@ class TuiApp(App):
                 command.on_select = (
                     lambda source="palette", argument=None: self.action_session_rename(argument)
                 )
+            elif command.id == "session.compact":
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_compact()
+                )
             elif command.id == "session.export":
                 command.on_select = (
                     lambda source="palette", argument=None: self.action_session_export()
@@ -687,6 +691,10 @@ class TuiApp(App):
         """Rename the active session."""
         self.run_worker(self._rename_session(title), exclusive=False)
 
+    def action_session_compact(self) -> None:
+        """Manually compact the active session."""
+        self.run_worker(self._compact_session(), exclusive=False)
+
     def action_session_undo(self) -> None:
         """Undo the latest user turn in the active session."""
         self.run_worker(self._undo_session_turn(), exclusive=False)
@@ -749,6 +757,32 @@ class TuiApp(App):
             }
         )
         self.notify(f"Renamed session to '{next_title}'.")
+
+    async def _compact_session(self) -> None:
+        session_id = self._active_session_id()
+        if not session_id:
+            self.notify("Open a session first to compact it.", severity="warning")
+            return
+
+        current_model = self.local_ctx.model.current()
+        model_ref = None
+        if current_model:
+            model_ref = f"{current_model.provider_id}/{current_model.model_id}"
+
+        self.notify("Compacting session...")
+        try:
+            result = await self.sdk_ctx.compact_session(session_id=session_id, model=model_ref)
+        except Exception as exc:
+            self.notify(f"Session compaction failed: {exc}", severity="error")
+            return
+
+        if result.get("error"):
+            self.notify(f"Session compaction failed: {result['error']}", severity="error")
+            return
+
+        await self.sync_ctx.sync_session(session_id, force=True)
+        await self._refresh_active_session_screen(session_id)
+        self.notify("Session compacted.")
 
     async def _undo_session_turn(self) -> None:
         from ..session import Session

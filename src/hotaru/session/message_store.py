@@ -188,6 +188,7 @@ class WithParts:
 _COMPACTION_USER_TEXT = "What did we do so far?"
 _SUBTASK_USER_TEXT = "The following tool was executed by the user"
 _INTERRUPTED_TOOL_ERROR = "[Tool execution was interrupted]"
+_COMPACTED_TOOL_RESULT = "[Old tool result content cleared]"
 
 
 def _openai_text_from_parts(parts: Sequence[Part]) -> str:
@@ -240,11 +241,16 @@ def to_openai_messages(messages: Iterable[WithParts]) -> List[Dict[str, Any]]:
                         }
                     )
                     if part.state.status == "completed":
+                        output_text = (
+                            _COMPACTED_TOOL_RESULT
+                            if part.state.time.compacted
+                            else (part.state.output or "")
+                        )
                         tool_results.append(
                             {
                                 "role": "tool",
                                 "tool_call_id": part.call_id,
-                                "content": part.state.output or "",
+                                "content": output_text,
                             }
                         )
                     elif part.state.status == "error":

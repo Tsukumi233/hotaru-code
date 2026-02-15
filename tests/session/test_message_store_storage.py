@@ -183,3 +183,35 @@ def test_to_model_messages_includes_interrupted_tool_results() -> None:
     assert model_messages[1]["tool_calls"][0]["id"] == "call_1"
     assert model_messages[2]["role"] == "tool"
     assert model_messages[2]["content"] == "[Tool execution was interrupted]"
+
+
+def test_to_model_messages_compacted_tool_result_uses_placeholder() -> None:
+    messages = [
+        WithParts(
+            info=MessageInfo(id="m1", session_id="s1", role="user", time=MessageTime(created=1)),
+            parts=[TextPart(id="p1", session_id="s1", message_id="m1", text="run tool")],
+        ),
+        WithParts(
+            info=MessageInfo(id="m2", session_id="s1", role="assistant", time=MessageTime(created=2)),
+            parts=[
+                ToolPart(
+                    id="p2",
+                    session_id="s1",
+                    message_id="m2",
+                    tool="read",
+                    call_id="call_1",
+                    state=ToolState(
+                        status="completed",
+                        input={"filePath": "README.md"},
+                        output="very long historical output",
+                        time=ToolStateTime(start=2, end=3, compacted=4),
+                    ),
+                )
+            ],
+        ),
+    ]
+
+    model_messages = to_model_messages(messages)
+    assert model_messages[1]["role"] == "assistant"
+    assert model_messages[2]["role"] == "tool"
+    assert model_messages[2]["content"] == "[Old tool result content cleared]"

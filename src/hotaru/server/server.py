@@ -26,6 +26,7 @@ Example:
 import asyncio
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from starlette.applications import Starlette
@@ -40,7 +41,7 @@ from ..core.bus import Bus
 from ..core.config import ConfigManager
 from ..core.global_paths import GlobalPath
 from ..provider import Provider
-from ..session import Session
+from ..session import Session, SessionCompaction, SessionPrompt
 from ..skill import Skill
 from ..util.log import Log
 
@@ -106,6 +107,7 @@ class Server:
             # Session endpoints
             Route("/session", cls._list_sessions, methods=["GET"]),
             Route("/session/{session_id}", cls._get_session, methods=["GET"]),
+            Route("/session/{session_id}/summarize", cls._summarize_session, methods=["POST"]),
 
             # Event stream
             Route("/event", cls._event_stream, methods=["GET"]),
@@ -262,6 +264,75 @@ class Server:
             "provider_id": session.provider_id,
             "created": session.created,
         })
+
+    @classmethod
+    async def _summarize_session(cls, request: Request) -> JSONResponse:
+        """Manually compact a session."""
+        session_id = request.path_params["session_id"]
+        session = await Session.get(session_id)
+        if not session:
+            return JSONResponse(
+                {"error": f"Session '{session_id}' not found"},
+                status_code=404,
+            )
+
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+
+        provider_id = payload.get("provider_id") or payload.get("providerID") or session.provider_id
+        model_id = payload.get("model_id") or payload.get("modelID") or session.model_id
+        auto = bool(payload.get("auto", False))
+
+        if not provider_id or not model_id:
+            provider_id, model_id = await Provider.default_model()
+
+        provider_id = str(provider_id)
+        model_id = str(model_id)
+
+        try:
+            await Provider.get_model(provider_id, model_id)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+        agent_name = session.agent or await Agent.default_agent()
+        cwd = session.directory or str(Path.cwd())
+
+        try:
+            await SessionCompaction.create(
+                session_id=session_id,
+                agent=agent_name,
+                provider_id=provider_id,
+                model_id=model_id,
+                auto=auto,
+            )
+            result = await SessionPrompt.loop(
+                session_id=session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                agent=agent_name,
+                cwd=cwd,
+                worktree=cwd,
+                resume_history=True,
+                auto_compaction=False,
+            )
+        except Exception as e:
+            log.error("session summarize failed", {"session_id": session_id, "error": str(e)})
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+        return JSONResponse(
+            {
+                "ok": result.result.error is None,
+                "assistant_message_id": result.assistant_message_id,
+                "status": result.result.status,
+                "error": result.result.error,
+            }
+        )
 
     @classmethod
     async def _event_stream(cls, request: Request) -> StreamingResponse:

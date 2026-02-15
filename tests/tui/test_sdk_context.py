@@ -116,3 +116,65 @@ async def test_send_message_emits_tool_part_updates_without_truncation(
     assert completed["state"]["output"] == long_output
     assert completed["state"]["title"] == "Long output"
     assert completed["state"]["metadata"]["progress"] == "done"
+
+
+@pytest.mark.anyio
+async def test_compact_session_creates_manual_compaction_and_runs_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    sdk = SDKContext(cwd=str(tmp_path))
+
+    async def fake_ensure_project(self):
+        self._project = SimpleNamespace(vcs="git")
+        self._sandbox = str(tmp_path)
+
+    async def fake_session_get(cls, session_id: str):
+        assert session_id == "session_1"
+        return SimpleNamespace(agent="build", provider_id="openai", model_id="gpt-5")
+
+    async def fake_get_model(cls, provider_id: str, model_id: str):
+        return ProcessedModelInfo(
+            id=model_id,
+            provider_id=provider_id,
+            name=model_id,
+            api_id=model_id,
+        )
+
+    async def fake_system_prompt(cls, **_kwargs):
+        return "system prompt"
+
+    compaction_calls = {}
+
+    async def fake_compaction_create(cls, **kwargs):
+        compaction_calls.update(kwargs)
+        return "message_compaction"
+
+    async def fake_loop(cls, **kwargs):
+        assert kwargs["session_id"] == "session_1"
+        assert kwargs["resume_history"] is True
+        assert kwargs["auto_compaction"] is False
+        return SimpleNamespace(
+            assistant_message_id="message_summary",
+            text="summary",
+            result=SimpleNamespace(status="stop", error=None, usage={"input_tokens": 10}),
+        )
+
+    monkeypatch.setattr(SDKContext, "_ensure_project", fake_ensure_project)
+    monkeypatch.setattr("hotaru.session.session.Session.get", classmethod(fake_session_get))
+    monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
+    monkeypatch.setattr("hotaru.session.system.SystemPrompt.build_full_prompt", classmethod(fake_system_prompt))
+    monkeypatch.setattr("hotaru.session.compaction.SessionCompaction.create", classmethod(fake_compaction_create))
+    monkeypatch.setattr("hotaru.session.prompting.SessionPrompt.loop", classmethod(fake_loop))
+
+    result = await sdk.compact_session(session_id="session_1")
+
+    assert compaction_calls["session_id"] == "session_1"
+    assert compaction_calls["agent"] == "build"
+    assert compaction_calls["provider_id"] == "openai"
+    assert compaction_calls["model_id"] == "gpt-5"
+    assert compaction_calls["auto"] is False
+    assert result["user_message_id"] == "message_compaction"
+    assert result["assistant_message_id"] == "message_summary"
+    assert result["status"] == "stop"
+    assert result["error"] is None

@@ -299,8 +299,6 @@ def create_default_commands() -> List[Command]:
             category=CommandCategory.SESSION,
             slash_name="compact",
             slash_aliases=["summarize"],
-            enabled=False,
-            availability_reason="Session compaction is not available in the Textual UI yet.",
         ),
         Command(
             id="session.export",

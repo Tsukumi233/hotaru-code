@@ -22,6 +22,14 @@ class SessionCompaction:
     PRUNE_MINIMUM = 20_000
     PRUNE_PROTECT = 40_000
     PRUNE_PROTECTED_TOOLS = {"skill"}
+    CHARS_PER_TOKEN = 4
+
+    @classmethod
+    def estimate_tokens(cls, text: str) -> int:
+        """Fast token estimate used for compaction decisions."""
+        if not text:
+            return 0
+        return max(0, round(len(text) / cls.CHARS_PER_TOKEN))
 
     @classmethod
     async def is_overflow(cls, *, tokens: TokenUsage, model: ProcessedModelInfo) -> bool:
@@ -39,7 +47,11 @@ class SessionCompaction:
             + tokens.cache_read
             + tokens.cache_write
         )
-        reserved = min(cls.COMPACTION_BUFFER, model.limit.output)
+        reserved_cfg = cfg.compaction.reserved if cfg.compaction else None
+        if isinstance(reserved_cfg, int) and reserved_cfg >= 0:
+            reserved = reserved_cfg
+        else:
+            reserved = min(cls.COMPACTION_BUFFER, model.limit.output)
         usable = (model.limit.input - reserved) if model.limit.input else (model.limit.context - model.limit.output)
         return count >= max(usable, 1)
 
@@ -110,7 +122,7 @@ class SessionCompaction:
                 if part.state.time.compacted:
                     break
 
-                estimate = len((part.state.output or "").encode("utf-8"))
+                estimate = cls.estimate_tokens(part.state.output or "")
                 total += estimate
                 if total > cls.PRUNE_PROTECT:
                     pruned += estimate
@@ -123,7 +135,7 @@ class SessionCompaction:
         for part in candidates:
             part.state.time.compacted = now
             await Session.update_part(part)
-        log.info("pruned tool outputs", {"count": len(candidates), "bytes": pruned})
+        log.info("pruned tool outputs", {"count": len(candidates), "tokens": pruned})
 
     @classmethod
     async def compact_agent_name(cls) -> str:

@@ -206,7 +206,11 @@ def start_cleanup_task():
     """Start the background cleanup task."""
     global _cleanup_task
     if _cleanup_task is None:
-        _cleanup_task = asyncio.create_task(_periodic_cleanup())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        _cleanup_task = loop.create_task(_periodic_cleanup())
 
 
 def stop_cleanup_task():

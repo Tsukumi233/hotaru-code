@@ -26,6 +26,7 @@ from .skill import SkillTool, build_skill_description
 from .task import TaskTool, build_task_description
 from .todo import TodoReadTool, TodoWriteTool
 from .tool import ToolInfo
+from .truncation import start_cleanup_task
 from .webfetch import WebFetchTool
 from .websearch import WebSearchTool
 from .write import WriteTool
@@ -143,6 +144,8 @@ class ToolRegistry:
 
         custom_tools = cls._load_custom_tools()
         tools.update(custom_tools)
+
+        start_cleanup_task()
 
         cls._tools = tools
         cls._initialized = True

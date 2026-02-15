@@ -8,16 +8,16 @@ def _build_registry() -> CommandRegistry:
     return registry
 
 
-def test_execute_disabled_command_returns_reason() -> None:
+def test_execute_unwired_command_returns_reason() -> None:
     registry = _build_registry()
 
     executed, reason = registry.execute("session.compact", source="slash")
     assert not executed
     assert reason is not None
-    assert "not available" in reason.lower()
+    assert "wired" in reason.lower()
 
 
-def test_search_includes_disabled_commands() -> None:
+def test_search_includes_compact_command() -> None:
     registry = _build_registry()
 
     results = registry.search("compact")

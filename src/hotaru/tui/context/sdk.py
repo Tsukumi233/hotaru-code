@@ -13,7 +13,7 @@ from ...agent import Agent
 from ...core.id import Identifier
 from ...project import Project
 from ...provider import Provider
-from ...session import Session, SessionPrompt, SystemPrompt
+from ...session import Session, SessionCompaction, SessionPrompt, SystemPrompt
 from ...util.log import Log
 from ..message_adapter import structured_messages_to_tui
 
@@ -423,6 +423,71 @@ class SDKContext:
                 "created": session.time.created,
                 "updated": session.time.updated,
             }
+        }
+
+    async def compact_session(
+        self,
+        session_id: str,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run manual session compaction.
+
+        Args:
+            session_id: Session to compact
+            model: Optional model override (format: provider/model)
+
+        Returns:
+            Compact execution result metadata
+        """
+        await self._ensure_project()
+
+        session = await Session.get(session_id)
+        if not session:
+            raise ValueError(f"Session not found: {session_id}")
+
+        if model:
+            provider_id, model_id = Provider.parse_model(model)
+        elif session.provider_id and session.model_id:
+            provider_id, model_id = session.provider_id, session.model_id
+        else:
+            provider_id, model_id = await Provider.default_model()
+
+        model_info = await Provider.get_model(provider_id, model_id)
+        agent_name = session.agent or await Agent.default_agent()
+
+        system_prompt = await SystemPrompt.build_full_prompt(
+            model=model_info,
+            directory=self._cwd,
+            worktree=self._sandbox or self._cwd,
+            is_git=self._project.vcs == "git" if self._project else False,
+        )
+
+        compaction_user_id = await SessionCompaction.create(
+            session_id=session_id,
+            agent=agent_name,
+            provider_id=provider_id,
+            model_id=model_id,
+            auto=False,
+        )
+
+        result = await SessionPrompt.loop(
+            session_id=session_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            agent=agent_name,
+            cwd=self._cwd,
+            worktree=self._sandbox or self._cwd,
+            system_prompt=system_prompt,
+            resume_history=True,
+            auto_compaction=False,
+        )
+        return {
+            "user_message_id": compaction_user_id,
+            "assistant_message_id": result.assistant_message_id,
+            "status": result.result.status,
+            "error": result.result.error,
+            "text": result.text,
+            "usage": result.result.usage,
         }
 
     async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
