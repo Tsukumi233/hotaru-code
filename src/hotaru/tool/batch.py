@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field
@@ -115,9 +116,11 @@ async def batch_execute(params: BatchParams, ctx: ToolContext) -> ToolResult:
     )
 
 
+_DESCRIPTION = (Path(__file__).parent / "batch.txt").read_text(encoding="utf-8")
+
 BatchTool = Tool.define(
     tool_id="batch",
-    description="Execute multiple local tool calls in parallel for speed.",
+    description=_DESCRIPTION,
     parameters_type=BatchParams,
     execute_fn=batch_execute,
     auto_truncate=False,

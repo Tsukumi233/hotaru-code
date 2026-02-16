@@ -15,6 +15,8 @@ from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "grep"})
 
+DESCRIPTION = (Path(__file__).parent / "grep.txt").read_text(encoding="utf-8")
+
 MAX_LINE_LENGTH = 2000
 
 
@@ -23,21 +25,6 @@ class GrepParams(BaseModel):
     pattern: str = Field(..., description="The regex pattern to search for in file contents")
     path: Optional[str] = Field(None, description="The directory to search in. Defaults to the current working directory.")
     include: Optional[str] = Field(None, description='File pattern to include in the search (e.g. "*.py", "*.{ts,tsx}")')
-
-
-DESCRIPTION = """A powerful search tool for finding content in files.
-
-Usage:
-- Supports full regex syntax (e.g., "log.*Error", "function\\s+\\w+")
-- Filter files with the 'include' parameter (e.g., "*.py", "*.js")
-- Results are sorted by modification time (newest first)
-- Results are limited to 100 matches
-
-Examples:
-- pattern: "def.*test" → Find function definitions containing "test"
-- pattern: "TODO", include: "*.py" → Find TODOs in Python files
-- pattern: "import.*from" → Find ES6 imports
-"""
 
 
 def _search_file(

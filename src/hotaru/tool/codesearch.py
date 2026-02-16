@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -80,9 +81,11 @@ async def codesearch_execute(params: CodeSearchParams, ctx: ToolContext) -> Tool
     )
 
 
+_DESCRIPTION = (Path(__file__).parent / "codesearch.txt").read_text(encoding="utf-8")
+
 CodeSearchTool = Tool.define(
     tool_id="codesearch",
-    description="Search API/library code context for implementation guidance.",
+    description=_DESCRIPTION,
     parameters_type=CodeSearchParams,
     execute_fn=codesearch_execute,
     auto_truncate=True,

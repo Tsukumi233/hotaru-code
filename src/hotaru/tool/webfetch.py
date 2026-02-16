@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import re
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Literal, Optional
 
 import httpx
@@ -163,9 +164,11 @@ async def webfetch_execute(params: WebFetchParams, ctx: ToolContext) -> ToolResu
     return ToolResult(title=title, output=output, metadata={})
 
 
+_DESCRIPTION = (Path(__file__).parent / "webfetch.txt").read_text(encoding="utf-8")
+
 WebFetchTool = Tool.define(
     tool_id="webfetch",
-    description="Fetch remote URL content as text, markdown, html, or image attachment.",
+    description=_DESCRIPTION,
     parameters_type=WebFetchParams,
     execute_fn=webfetch_execute,
     auto_truncate=True,

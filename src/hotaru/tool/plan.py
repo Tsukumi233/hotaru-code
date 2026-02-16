@@ -149,9 +149,12 @@ async def plan_exit_execute(_params: PlanParams, ctx: ToolContext) -> ToolResult
     )
 
 
+_PLAN_ENTER_DESC = (Path(__file__).parent / "plan-enter.txt").read_text(encoding="utf-8")
+_PLAN_EXIT_DESC = (Path(__file__).parent / "plan-exit.txt").read_text(encoding="utf-8")
+
 PlanEnterTool = Tool.define(
     tool_id="plan_enter",
-    description="Switch to plan agent after user confirmation.",
+    description=_PLAN_ENTER_DESC,
     parameters_type=PlanParams,
     execute_fn=plan_enter_execute,
     auto_truncate=False,
@@ -159,7 +162,7 @@ PlanEnterTool = Tool.define(
 
 PlanExitTool = Tool.define(
     tool_id="plan_exit",
-    description="Switch to build agent after user confirmation.",
+    description=_PLAN_EXIT_DESC,
     parameters_type=PlanParams,
     execute_fn=plan_exit_execute,
     auto_truncate=False,

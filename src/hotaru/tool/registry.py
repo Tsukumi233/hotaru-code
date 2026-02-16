@@ -16,7 +16,7 @@ from .edit import EditTool
 from .glob import GlobTool
 from .grep import GrepTool
 from .invalid import InvalidTool
-from .list import ListTool, LsTool
+from .list import LsTool
 from .lsp import LspTool
 from .multiedit import MultiEditTool
 from .plan import PlanEnterTool, PlanExitTool
@@ -122,7 +122,6 @@ class ToolRegistry:
             GrepTool,
             EditTool,
             WriteTool,
-            ListTool,
             LsTool,
             TaskTool,
             SkillTool,

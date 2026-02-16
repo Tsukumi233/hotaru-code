@@ -33,20 +33,12 @@ class BashParams(BaseModel):
     )
 
 
-DESCRIPTION = f"""Executes a shell command.
-
-Usage:
-- Commands are executed in the system shell
-- Default timeout is 2 minutes
-- Output is truncated if it exceeds {Truncate.MAX_LINES} lines or {Truncate.MAX_BYTES} bytes
-- Use 'workdir' parameter instead of 'cd' commands
-- Always provide a clear description of what the command does
-
-Examples:
-- "git status" → "Shows working tree status"
-- "npm install" → "Installs package dependencies"
-- "mkdir foo" → "Creates directory 'foo'"
-"""
+DESCRIPTION = (
+    (Path(__file__).parent / "bash.txt")
+    .read_text(encoding="utf-8")
+    .replace("${maxLines}", str(Truncate.MAX_LINES))
+    .replace("${maxBytes}", str(Truncate.MAX_BYTES))
+)
 
 
 PATH_COMMANDS = {"cd", "rm", "cp", "mv", "mkdir", "touch", "chmod", "chown", "cat"}

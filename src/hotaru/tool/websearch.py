@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Literal, Optional
 
 import httpx
@@ -86,9 +87,11 @@ async def websearch_execute(params: WebSearchParams, ctx: ToolContext) -> ToolRe
     )
 
 
+_DESCRIPTION = (Path(__file__).parent / "websearch.txt").read_text(encoding="utf-8")
+
 WebSearchTool = Tool.define(
     tool_id="websearch",
-    description="Search the web for current information.",
+    description=_DESCRIPTION,
     parameters_type=WebSearchParams,
     execute_fn=websearch_execute,
     auto_truncate=True,

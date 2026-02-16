@@ -205,9 +205,11 @@ async def apply_patch_execute(params: ApplyPatchParams, ctx: ToolContext) -> Too
     )
 
 
+_DESCRIPTION = (Path(__file__).parent / "apply_patch.txt").read_text(encoding="utf-8")
+
 ApplyPatchTool = Tool.define(
     tool_id="apply_patch",
-    description="Apply a multi-file patch in apply_patch grammar format.",
+    description=_DESCRIPTION,
     parameters_type=ApplyPatchParams,
     execute_fn=apply_patch_execute,
     auto_truncate=False,

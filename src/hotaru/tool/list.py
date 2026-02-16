@@ -52,14 +52,7 @@ class ListParams(BaseModel):
     )
 
 
-DESCRIPTION = """List files and folders as a compact tree.
-
-Usage:
-- Lists a directory tree with directories before files
-- Default ignores common build/dependency folders
-- Results are limited to 100 files for performance
-- Use 'ignore' to add extra glob patterns
-"""
+DESCRIPTION = (Path(__file__).parent / "ls.txt").read_text(encoding="utf-8")
 
 
 def _normalize(path_value: str) -> str:
@@ -192,17 +185,9 @@ async def list_execute(params: ListParams, ctx: ToolContext) -> ToolResult:
     )
 
 
-ListTool = Tool.define(
-    tool_id="list",
-    description=DESCRIPTION,
-    parameters_type=ListParams,
-    execute_fn=list_execute,
-    auto_truncate=False,
-)
-
 LsTool = Tool.define(
     tool_id="ls",
-    description="Unix-style alias for the list tool.",
+    description=DESCRIPTION,
     parameters_type=ListParams,
     execute_fn=list_execute,
     auto_truncate=False,

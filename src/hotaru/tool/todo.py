@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import List
 
 from pydantic import BaseModel, Field
@@ -57,9 +58,12 @@ async def todo_read_execute(_params: TodoReadParams, ctx: ToolContext) -> ToolRe
     )
 
 
+_TODOWRITE_DESC = (Path(__file__).parent / "todowrite.txt").read_text(encoding="utf-8")
+_TODOREAD_DESC = (Path(__file__).parent / "todoread.txt").read_text(encoding="utf-8")
+
 TodoWriteTool = Tool.define(
     tool_id="todowrite",
-    description="Write/update your todo list.",
+    description=_TODOWRITE_DESC,
     parameters_type=TodoWriteParams,
     execute_fn=todo_write_execute,
     auto_truncate=False,
@@ -67,7 +71,7 @@ TodoWriteTool = Tool.define(
 
 TodoReadTool = Tool.define(
     tool_id="todoread",
-    description="Read your todo list.",
+    description=_TODOREAD_DESC,
     parameters_type=TodoReadParams,
     execute_fn=todo_read_execute,
     auto_truncate=False,

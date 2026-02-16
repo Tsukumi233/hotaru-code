@@ -14,6 +14,8 @@ from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "edit"})
 
+DESCRIPTION = (Path(__file__).parent / "edit.txt").read_text(encoding="utf-8")
+
 
 class EditParams(BaseModel):
     """Parameters for the Edit tool."""
@@ -31,17 +33,6 @@ class EditParams(BaseModel):
     )
 
     model_config = ConfigDict(populate_by_name=True)
-
-
-DESCRIPTION = """Performs exact string replacements in files.
-
-Usage:
-- You must read a file before editing it
-- The old_string must be unique in the file (or use replace_all=true)
-- old_string and new_string must be different
-- Preserves exact indentation and whitespace
-- Use for surgical edits rather than rewriting entire files
-"""
 
 
 # Similarity thresholds for fuzzy matching

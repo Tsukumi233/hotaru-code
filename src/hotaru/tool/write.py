@@ -12,6 +12,8 @@ from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "write"})
 
+DESCRIPTION = (Path(__file__).parent / "write.txt").read_text(encoding="utf-8")
+
 
 class WriteParams(BaseModel):
     """Parameters for the Write tool."""
@@ -23,16 +25,6 @@ class WriteParams(BaseModel):
     content: str = Field(..., description="The content to write to the file")
 
     model_config = ConfigDict(populate_by_name=True)
-
-
-DESCRIPTION = """Writes content to a file, creating it if it doesn't exist or overwriting if it does.
-
-Usage:
-- The file_path parameter must be an absolute path
-- Parent directories will be created if they don't exist
-- The entire content will be written, replacing any existing content
-- Use the Edit tool instead if you only want to modify part of a file
-"""
 
 
 def _create_diff(old_content: str, new_content: str, filepath: str) -> str:

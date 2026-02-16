@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -52,9 +53,11 @@ async def multiedit_execute(params: MultiEditParams, ctx: ToolContext) -> ToolRe
     )
 
 
+_DESCRIPTION = (Path(__file__).parent / "multiedit.txt").read_text(encoding="utf-8")
+
 MultiEditTool = Tool.define(
     tool_id="multiedit",
-    description="Run multiple edit operations sequentially on one file.",
+    description=_DESCRIPTION,
     parameters_type=MultiEditParams,
     execute_fn=multiedit_execute,
     auto_truncate=False,

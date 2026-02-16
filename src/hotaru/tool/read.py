@@ -15,6 +15,8 @@ from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "read"})
 
+DESCRIPTION = (Path(__file__).parent / "read.txt").read_text(encoding="utf-8")
+
 DEFAULT_READ_LIMIT = 2000
 MAX_LINE_LENGTH = 2000
 MAX_BYTES = 50 * 1024  # 50 KB
@@ -35,19 +37,6 @@ class ReadParams(BaseModel):
     limit: Optional[int] = Field(None, description="The number of lines to read (defaults to 2000)")
 
     model_config = ConfigDict(populate_by_name=True)
-
-
-DESCRIPTION = """Reads a file from the local filesystem.
-
-Usage:
-- The file_path parameter must be an absolute path, not a relative path
-- By default, it reads up to 2000 lines starting from the beginning of the file
-- You can optionally specify a line offset and limit for long files
-- Any lines longer than 2000 characters will be truncated
-- Results are returned with line numbers starting at 1
-- This tool can read images (PNG, JPG, etc.) and PDFs
-- Binary files cannot be read and will return an error
-"""
 
 
 def _is_binary_file(filepath: Path) -> bool:

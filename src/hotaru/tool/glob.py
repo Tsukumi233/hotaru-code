@@ -13,6 +13,8 @@ from .tool import Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "glob"})
 
+DESCRIPTION = (Path(__file__).parent / "glob.txt").read_text(encoding="utf-8")
+
 
 class GlobParams(BaseModel):
     """Parameters for the Glob tool."""
@@ -25,21 +27,6 @@ class GlobParams(BaseModel):
             "DO NOT enter 'undefined' or 'null' - simply omit it for the default behavior."
         )
     )
-
-
-DESCRIPTION = """Fast file pattern matching tool.
-
-Usage:
-- Supports glob patterns like "**/*.py" or "src/**/*.ts"
-- Returns matching file paths sorted by modification time
-- Use this tool when you need to find files by name patterns
-- Results are limited to 100 files
-
-Examples:
-- "*.py" → Python files in current directory
-- "**/*.py" → All Python files recursively
-- "src/**/*.ts" → TypeScript files in src directory
-"""
 
 
 def _match_glob(root: Path, pattern: str, limit: int = 100) -> List[Tuple[Path, float]]:

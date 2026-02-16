@@ -96,9 +96,11 @@ async def lsp_execute(args: LspParams, ctx: ToolContext) -> ToolResult:
     )
 
 
+_DESCRIPTION = (Path(__file__).parent / "lsp.txt").read_text(encoding="utf-8")
+
 LspTool = Tool.define(
     tool_id="lsp",
-    description="Query language server features such as hover/definition/references.",
+    description=_DESCRIPTION,
     parameters_type=LspParams,
     execute_fn=lsp_execute,
     auto_truncate=True,

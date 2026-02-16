@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List
 
 from pydantic import BaseModel, Field
@@ -9,14 +10,13 @@ from pydantic import BaseModel, Field
 from ..question import Question, QuestionInfo, QuestionToolRef
 from .tool import Tool, ToolContext, ToolResult
 
+DESCRIPTION = (Path(__file__).parent / "question.txt").read_text(encoding="utf-8")
+
 
 class QuestionParams(BaseModel):
     """Parameters for question tool."""
 
     questions: List[QuestionInfo] = Field(..., description="Questions to ask")
-
-
-DESCRIPTION = """Ask one or more short multiple-choice questions and wait for user input."""
 
 
 async def question_execute(params: QuestionParams, ctx: ToolContext) -> ToolResult:
