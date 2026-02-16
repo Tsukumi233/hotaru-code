@@ -181,6 +181,21 @@ def _process_provider(provider_def: ProviderDef) -> ProviderInfo:
     )
 
 
+def _lookup_interleaved(model_id: str) -> Optional[Union[bool, dict]]:
+    """Best-effort lookup of interleaved capability from models.dev cache."""
+    cache = ModelsDev._cache
+    if not cache:
+        return None
+    for provider_def in cache.values():
+        model_info = provider_def.models.get(model_id)
+        if model_info and model_info.interleaved:
+            val = model_info.interleaved
+            if hasattr(val, "model_dump"):
+                return val.model_dump()
+            return val
+    return None
+
+
 def _create_custom_provider(provider_id: str, config: ProviderConfig) -> Optional[ProviderInfo]:
     """Create a custom provider from config.
 
@@ -210,6 +225,24 @@ def _create_custom_provider(provider_id: str, config: ProviderConfig) -> Optiona
         model_options = model_config.options if model_config else {}
         model_headers = model_config.headers if model_config else {}
 
+        # Read interleaved from model config, fall back to models.dev lookup
+        raw_interleaved = getattr(model_config, "interleaved", None) if model_config else None
+        if raw_interleaved is None:
+            raw_interleaved = _lookup_interleaved(model_id)
+
+        from .models import InterleavedConfig
+        if isinstance(raw_interleaved, dict):
+            try:
+                interleaved_val: Union[bool, InterleavedConfig] = InterleavedConfig.model_validate(raw_interleaved)
+            except Exception:
+                interleaved_val = False
+        elif isinstance(raw_interleaved, InterleavedConfig):
+            interleaved_val = raw_interleaved
+        elif raw_interleaved is True:
+            interleaved_val = True
+        else:
+            interleaved_val = False
+
         processed = ProcessedModelInfo(
             id=model_id,
             provider_id=provider_id,
@@ -225,7 +258,7 @@ def _create_custom_provider(provider_id: str, config: ProviderConfig) -> Optiona
                 toolcall=True,
                 input={"text": True, "audio": False, "image": False, "video": False, "pdf": False},
                 output={"text": True, "audio": False, "image": False, "video": False, "pdf": False},
-                interleaved=False,
+                interleaved=interleaved_val,
             ),
             cost=ModelCostInfo(),
             limit=ModelLimit(

@@ -415,9 +415,7 @@ class SessionProcessor:
             turn_result.status = "stop"
             return turn_result
 
-        interleaved_field: Optional[str] = None
-        if turn_result.reasoning_text:
-            interleaved_field = await self._resolve_interleaved_field()
+        interleaved_field = await self._resolve_interleaved_field()
 
         assistant_message: Dict[str, Any] = {"role": "assistant"}
         assistant_message["content"] = turn_result.text if turn_result.text else None

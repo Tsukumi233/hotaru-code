@@ -296,6 +296,9 @@ def to_openai_messages(
 
             if tool_calls:
                 assistant["tool_calls"] = tool_calls
+                # Ensure interleaved field is present for tool-call messages
+                if interleaved_field and interleaved_field not in assistant:
+                    assistant[interleaved_field] = ""
             if assistant["content"] is not None or tool_calls:
                 out.append(assistant)
                 out.extend(tool_results)
