@@ -229,7 +229,7 @@ class Agent:
             ),
             "general": AgentInfo(
                 name="general",
-                description="General-purpose agent for researching complex questions and executing multi-step tasks.",
+                description="General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.",
                 mode=AgentMode.SUBAGENT,
                 native=True,
                 permission=merge_permissions(
@@ -244,9 +244,13 @@ class Agent:
             "explore": AgentInfo(
                 name="explore",
                 description=(
-                    "Fast agent specialized for exploring codebases. Use this when you need to "
-                    "quickly find files by patterns, search code for keywords, or answer questions "
-                    "about the codebase."
+                    'Fast agent specialized for exploring codebases. Use this when you need to '
+                    'quickly find files by patterns (eg. "src/components/**/*.tsx"), search code '
+                    'for keywords (eg. "API endpoints"), or answer questions about the codebase '
+                    '(eg. "how do API endpoints work?"). When calling this agent, specify the '
+                    'desired thoroughness level: "quick" for basic searches, "medium" for moderate '
+                    'exploration, or "very thorough" for comprehensive analysis across multiple '
+                    'locations and naming conventions.'
                 ),
                 mode=AgentMode.SUBAGENT,
                 native=True,
@@ -259,6 +263,9 @@ class Agent:
                         {"permission": "list", "pattern": "*", "action": "allow"},
                         {"permission": "read", "pattern": "*", "action": "allow"},
                         {"permission": "bash", "pattern": "*", "action": "ask" if strict_permissions else "allow"},
+                        {"permission": "webfetch", "pattern": "*", "action": "allow"},
+                        {"permission": "websearch", "pattern": "*", "action": "allow"},
+                        {"permission": "codesearch", "pattern": "*", "action": "allow"},
                     ],
                     user_permissions
                 ),
