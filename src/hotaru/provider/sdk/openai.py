@@ -87,6 +87,67 @@ class OpenAISDK:
             return "".join(chunks)
         return ""
 
+    @staticmethod
+    def _field(data: Any, key: str) -> Any:
+        if isinstance(data, dict):
+            return data.get(key)
+        return getattr(data, key, None)
+
+    @classmethod
+    def _field_any(cls, data: Any, *keys: str) -> Any:
+        for key in keys:
+            value = cls._field(data, key)
+            if value is not None:
+                return value
+        return None
+
+    @staticmethod
+    def _to_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _extract_usage(cls, usage: Any) -> Dict[str, int]:
+        result: Dict[str, int] = {}
+
+        input_tokens = cls._to_int(cls._field_any(usage, "prompt_tokens", "input_tokens"))
+        if input_tokens is not None:
+            result["input_tokens"] = input_tokens
+
+        output_tokens = cls._to_int(cls._field_any(usage, "completion_tokens", "output_tokens"))
+        if output_tokens is not None:
+            result["output_tokens"] = output_tokens
+
+        total_tokens = cls._to_int(cls._field(usage, "total_tokens"))
+        if total_tokens is not None:
+            result["total_tokens"] = total_tokens
+
+        completion_details = cls._field_any(usage, "completion_tokens_details", "output_tokens_details")
+        reasoning_tokens = cls._to_int(cls._field(completion_details, "reasoning_tokens"))
+        if reasoning_tokens is None:
+            reasoning_tokens = cls._to_int(cls._field(usage, "reasoning_tokens"))
+        if reasoning_tokens is not None:
+            result["reasoning_tokens"] = reasoning_tokens
+
+        prompt_details = cls._field_any(usage, "prompt_tokens_details", "input_tokens_details")
+        cache_read_tokens = cls._to_int(cls._field(prompt_details, "cached_tokens"))
+        if cache_read_tokens is None:
+            cache_read_tokens = cls._to_int(cls._field(usage, "cache_read_tokens"))
+        if cache_read_tokens is not None:
+            result["cache_read_tokens"] = cache_read_tokens
+
+        cache_write_tokens = cls._to_int(
+            cls._field_any(usage, "cache_creation_input_tokens", "cache_write_tokens")
+        )
+        if cache_write_tokens is not None:
+            result["cache_write_tokens"] = cache_write_tokens
+
+        return result
+
     async def stream(
         self,
         model: str,
@@ -165,12 +226,12 @@ class OpenAISDK:
             if not chunk.choices:
                 # Final chunk with usage
                 if chunk.usage:
+                    usage_payload = self._extract_usage(chunk.usage)
+                    if not usage_payload:
+                        continue
                     yield StreamChunk(
                         type="message_delta",
-                        usage={
-                            "input_tokens": chunk.usage.prompt_tokens,
-                            "output_tokens": chunk.usage.completion_tokens,
-                        },
+                        usage=usage_payload,
                     )
                 continue
 

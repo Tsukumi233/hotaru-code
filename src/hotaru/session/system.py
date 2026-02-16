@@ -14,24 +14,22 @@ from .instruction import InstructionPrompt
 
 log = Log.create({"service": "session.system"})
 
-# Load default prompt
 _PROMPT_DIR = Path(__file__).parent / "prompt"
-_DEFAULT_PROMPT = (_PROMPT_DIR / "default.txt").read_text(encoding="utf-8")
-_MODEL_PROMPTS = {
-    "gpt-5": (
-        "For GPT-5 family models: keep outputs concise by default, prefer structured tool-driven work, "
-        "and avoid unnecessary narrative."
-    ),
-    "gpt": (
-        "For GPT family models: prioritize deterministic tool use, explicit assumptions, and incremental verification."
-    ),
-    "gemini": (
-        "For Gemini family models: avoid dangling tool-call states and keep follow-up user prompts explicit when resuming."
-    ),
-    "claude": (
-        "For Claude family models: avoid empty assistant turns and keep tool call IDs/simple schemas stable."
-    ),
-}
+
+
+def _load_prompt(filename: str, fallback: str) -> str:
+    try:
+        return (_PROMPT_DIR / filename).read_text(encoding="utf-8").strip()
+    except Exception:
+        return fallback
+
+
+_DEFAULT_PROMPT = _load_prompt("default.txt", "You are Hotaru Code, an AI-powered coding assistant.")
+_PROMPT_CODEX = _load_prompt("codex_header.txt", _DEFAULT_PROMPT)
+_PROMPT_ANTHROPIC = _load_prompt("anthropic.txt", _DEFAULT_PROMPT)
+_PROMPT_QWEN = _load_prompt("qwen.txt", _DEFAULT_PROMPT)
+_PROMPT_GEMINI = _load_prompt("gemini.txt", _DEFAULT_PROMPT)
+_PROMPT_TRINITY = _load_prompt("trinity.txt", _DEFAULT_PROMPT)
 
 
 class SystemPrompt:
@@ -59,27 +57,37 @@ class SystemPrompt:
         family = (model.family or "").lower()
         name = (model.name or "").lower()
         provider = (model.provider_id or "").lower()
+        api_type = str(model.api_type or "").lower()
 
-        def pick_variant() -> Optional[str]:
-            if "gpt-5" in model_id or "gpt-5" in name:
-                return _MODEL_PROMPTS["gpt-5"]
-            if "gpt" in model_id or "gpt" in name or "openai" in provider:
-                return _MODEL_PROMPTS["gpt"]
-            if "gemini" in model_id or "gemini" in family or "gemini" in name:
-                return _MODEL_PROMPTS["gemini"]
-            if (
-                "claude" in model_id
-                or "claude" in family
-                or "claude" in name
-                or provider == "anthropic"
-                or model.api_type == "anthropic"
-            ):
-                return _MODEL_PROMPTS["claude"]
-            return None
+        if "gpt-5" in model_id or "gpt-5" in name:
+            return [_PROMPT_CODEX]
 
-        extra = pick_variant()
-        if extra:
-            return [_DEFAULT_PROMPT, extra]
+        if "qwen" in model_id or "qwen" in family or "qwen" in name:
+            return [_PROMPT_QWEN]
+
+        if "gemini" in model_id or "gemini" in family or "gemini" in name:
+            return [_PROMPT_GEMINI]
+
+        if (
+            "claude" in model_id
+            or "claude" in family
+            or "claude" in name
+            or provider == "anthropic"
+            or api_type == "anthropic"
+        ):
+            return [_PROMPT_ANTHROPIC]
+
+        if "trinity" in model_id or "trinity" in family or "trinity" in name:
+            return [_PROMPT_TRINITY]
+
+        if (
+            "gpt-" in model_id
+            or "gpt-" in name
+            or model_id.startswith("o1")
+            or model_id.startswith("o3")
+        ):
+            return [_PROMPT_CODEX]
+
         return [_DEFAULT_PROMPT]
 
     @classmethod

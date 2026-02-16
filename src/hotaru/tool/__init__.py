@@ -16,6 +16,7 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "GlobTool": (".glob", "GlobTool"),
     "GrepTool": (".grep", "GrepTool"),
     "ListTool": (".list", "ListTool"),
+    "LsTool": (".list", "LsTool"),
     "SkillTool": (".skill", "SkillTool"),
     "TaskTool": (".task", "TaskTool"),
     "QuestionTool": (".question", "QuestionTool"),

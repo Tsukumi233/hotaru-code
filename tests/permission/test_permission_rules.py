@@ -41,3 +41,11 @@ def test_from_config_list_expands_home_patterns() -> None:
         ]
     )
     assert rules[0].pattern == f"{home}/sandbox/*"
+
+
+def test_disabled_tools_maps_ls_to_list_permission() -> None:
+    rules = Permission.from_config({"list": "deny"})
+    disabled = Permission.disabled_tools(["list", "ls", "read"], rules)
+    assert "list" in disabled
+    assert "ls" in disabled
+    assert "read" not in disabled

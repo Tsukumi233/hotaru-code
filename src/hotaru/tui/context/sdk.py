@@ -14,6 +14,7 @@ from ...core.id import Identifier
 from ...project import Project
 from ...provider import Provider
 from ...session import Session, SessionCompaction, SessionPrompt, SystemPrompt
+from ...session.stream_parts import PartStreamBuilder
 from ...util.log import Log
 from ..message_adapter import structured_messages_to_tui
 
@@ -128,38 +129,8 @@ class SDKContext:
 
         # Track response state
         message_id = Identifier.ascending("message")
-        part_id_counter = [0]  # mutable counter for generating unique part IDs
         response_text = ""
-        tool_part_ids: Dict[str, str] = {}
-        reasoning_part_ids: Dict[str, str] = {}
-        reasoning_segments: Dict[str, str] = {}
-
-        def _next_part_id() -> str:
-            part_id_counter[0] += 1
-            return f"part-{part_id_counter[0]}"
-
-        def _tool_part_id(tool_id: str) -> str:
-            existing = tool_part_ids.get(tool_id)
-            if existing:
-                return existing
-            generated = _next_part_id()
-            tool_part_ids[tool_id] = generated
-            return generated
-
-        def _reasoning_key(reasoning_id: Optional[str]) -> str:
-            value = str(reasoning_id or "").strip()
-            if value:
-                return value
-            return "__anonymous_reasoning__"
-
-        def _reasoning_part_id(reasoning_id: Optional[str]) -> str:
-            key = _reasoning_key(reasoning_id)
-            existing = reasoning_part_ids.get(key)
-            if existing:
-                return existing
-            generated = _next_part_id()
-            reasoning_part_ids[key] = generated
-            return generated
+        part_builder = PartStreamBuilder(session_id=session_id, message_id=message_id)
 
         # Yield message created event
         yield {
@@ -313,27 +284,16 @@ class SDKContext:
         # Start processing in background
         process_task = asyncio.create_task(process_with_queue())
 
-        # Yield events as they arrive
-        # Each text segment between tool calls gets its own part_id
-        # so the screen can mount separate widgets for each segment.
-        segment_text = ""
-        current_part_id = _next_part_id()
-
         def _make_event(evt: Dict[str, Any]):
             """Convert a queue event dict to a yield-able event dict."""
-            nonlocal segment_text, current_part_id
             kind = evt.get("kind")
             if kind == "text":
-                segment_text += evt["text"]
+                part = part_builder.text_delta(str(evt.get("text") or ""))
+                if part is None:
+                    return None
                 return {
                     "type": "message.part.updated",
-                    "data": {
-                        "part": {
-                            "type": "text",
-                            "text": segment_text,
-                            "id": current_part_id,
-                        }
-                    }
+                    "data": {"part": part},
                 }
             elif kind == "tool_start":
                 return {
@@ -345,9 +305,6 @@ class SDKContext:
                     }
                 }
             elif kind == "tool_end":
-                # After a tool completes, reset text segment for next part
-                segment_text = ""
-                current_part_id = _next_part_id()
                 return {
                     "type": "message.part.tool.end",
                     "data": {
@@ -360,122 +317,62 @@ class SDKContext:
                     }
                 }
             elif kind == "tool_update":
-                state = dict(evt.get("tool_state") or {})
-                tool_id = str(state.get("id") or "")
-                start_time = int(state.get("start_time") or 0)
-                end_time = state.get("end_time")
-                normalized_state: Dict[str, Any] = {
-                    "status": state.get("status") or "pending",
-                    "input": state.get("input") if isinstance(state.get("input"), dict) else {},
-                    "raw": state.get("input_json") or "",
-                    "output": state.get("output"),
-                    "error": state.get("error"),
-                    "title": state.get("title"),
-                    "metadata": state.get("metadata") if isinstance(state.get("metadata"), dict) else {},
-                    "attachments": state.get("attachments") if isinstance(state.get("attachments"), list) else [],
-                    "time": {
-                        "start": start_time,
-                        "end": int(end_time) if isinstance(end_time, (int, float)) else None,
-                    },
-                }
-                status = str(normalized_state.get("status") or "")
-                if status in {"completed", "error"}:
-                    segment_text = ""
-                    current_part_id = _next_part_id()
+                part = part_builder.tool_update(dict(evt.get("tool_state") or {}))
                 return {
                     "type": "message.part.updated",
-                    "data": {
-                        "part": {
-                            "id": _tool_part_id(tool_id or Identifier.ascending("toolpart")),
-                            "session_id": session_id,
-                            "message_id": message_id,
-                            "type": "tool",
-                            "tool": state.get("name") or "tool",
-                            "call_id": tool_id,
-                            "state": normalized_state,
-                        }
-                    },
+                    "data": {"part": part},
                 }
             elif kind == "reasoning_start":
-                rid = _reasoning_key(evt.get("reasoning_id"))
-                reasoning_segments.setdefault(rid, "")
-                return None
+                part = part_builder.reasoning_start(
+                    evt.get("reasoning_id"),
+                    dict(evt.get("metadata") or {}),
+                )
+                if part is None:
+                    return None
+                return {"type": "message.part.updated", "data": {"part": part}}
             elif kind == "reasoning_delta":
-                rid = _reasoning_key(evt.get("reasoning_id"))
-                delta = str(evt.get("delta") or "")
-                reasoning_segments[rid] = reasoning_segments.get(rid, "") + delta
+                part = part_builder.reasoning_delta(
+                    evt.get("reasoning_id"),
+                    str(evt.get("delta") or ""),
+                    dict(evt.get("metadata") or {}),
+                )
                 return {
                     "type": "message.part.updated",
-                    "data": {
-                        "part": {
-                            "id": _reasoning_part_id(rid),
-                            "session_id": session_id,
-                            "message_id": message_id,
-                            "type": "reasoning",
-                            "text": reasoning_segments[rid],
-                            "metadata": dict(evt.get("metadata") or {}),
-                        }
-                    },
+                    "data": {"part": part},
                 }
             elif kind == "reasoning_end":
-                rid = _reasoning_key(evt.get("reasoning_id"))
-                if rid not in reasoning_segments:
+                part = part_builder.reasoning_end(
+                    evt.get("reasoning_id"),
+                    dict(evt.get("metadata") or {}),
+                )
+                if part is None:
                     return None
-                return {
-                    "type": "message.part.updated",
-                    "data": {
-                        "part": {
-                            "id": _reasoning_part_id(rid),
-                            "session_id": session_id,
-                            "message_id": message_id,
-                            "type": "reasoning",
-                            "text": reasoning_segments.get(rid, ""),
-                            "metadata": dict(evt.get("metadata") or {}),
-                        }
-                    },
-                }
+                return {"type": "message.part.updated", "data": {"part": part}}
             elif kind == "step_start":
+                part = part_builder.step_start(evt.get("snapshot"))
                 return {
                     "type": "message.part.updated",
-                    "data": {
-                        "part": {
-                            "id": _next_part_id(),
-                            "session_id": session_id,
-                            "message_id": message_id,
-                            "type": "step-start",
-                            "snapshot": evt.get("snapshot"),
-                        }
-                    },
+                    "data": {"part": part},
                 }
             elif kind == "step_finish":
+                part = part_builder.step_finish(
+                    reason=str(evt.get("reason") or "completed"),
+                    snapshot=evt.get("snapshot"),
+                    tokens=dict(evt.get("tokens") or {}),
+                    cost=float(evt.get("cost") or 0.0),
+                )
                 return {
                     "type": "message.part.updated",
-                    "data": {
-                        "part": {
-                            "id": _next_part_id(),
-                            "session_id": session_id,
-                            "message_id": message_id,
-                            "type": "step-finish",
-                            "reason": str(evt.get("reason") or "completed"),
-                            "snapshot": evt.get("snapshot"),
-                            "tokens": dict(evt.get("tokens") or {}),
-                            "cost": float(evt.get("cost") or 0.0),
-                        }
-                    },
+                    "data": {"part": part},
                 }
             elif kind == "patch":
+                part = part_builder.patch(
+                    patch_hash=str(evt.get("hash") or ""),
+                    files=list(evt.get("files") or []),
+                )
                 return {
                     "type": "message.part.updated",
-                    "data": {
-                        "part": {
-                            "id": _next_part_id(),
-                            "session_id": session_id,
-                            "message_id": message_id,
-                            "type": "patch",
-                            "hash": str(evt.get("hash") or ""),
-                            "files": list(evt.get("files") or []),
-                        }
-                    },
+                    "data": {"part": part},
                 }
             return None
 
@@ -762,6 +659,10 @@ class SDKContext:
                         "id": model_id,
                         "name": model.name,
                         "api_id": model.api_id,
+                        "limit": {
+                            "context": int(getattr(model.limit, "context", 0) or 0),
+                            "output": int(getattr(model.limit, "output", 0) or 0),
+                        },
                     }
                     for model_id, model in p.models.items()
                 }

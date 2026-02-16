@@ -16,6 +16,7 @@ from .commands import CommandRegistry, create_default_commands
 from .context import use_kv, use_local, use_route, use_sdk, use_sync
 from .context.route import HomeRoute, PromptInfo, SessionRoute
 from .dialogs import InputDialog, PermissionDialog, SelectDialog
+from .header_usage import compute_session_header_usage
 from .input_parsing import enrich_content_with_file_references
 from .widgets import (
     AppFooter,
@@ -620,26 +621,12 @@ class SessionScreen(Screen):
         if self.session_id:
             sync = use_sync()
             messages = sync.get_messages(self.session_id)
-            total_tokens = 0
-            total_cost = 0.0
-            for msg in messages:
-                if msg.get("role") == "assistant":
-                    info = msg.get("info", {})
-                    if isinstance(info, dict):
-                        tokens = info.get("tokens", {})
-                        if isinstance(tokens, dict):
-                            total_tokens += int(tokens.get("input", 0) or 0)
-                            total_tokens += int(tokens.get("output", 0) or 0)
-                            total_tokens += int(tokens.get("reasoning", 0) or 0)
-                        total_cost += float(info.get("cost", 0.0) or 0.0)
-            if total_tokens > 0:
-                header.context_info = f"{total_tokens:,}"
-            else:
-                header.context_info = ""
-            if total_cost > 0:
-                header.cost = f"${total_cost:.4f}"
-            else:
-                header.cost = ""
+            usage = compute_session_header_usage(
+                messages=messages,
+                providers=sync.data.providers,
+            )
+            header.context_info = usage.context_info
+            header.cost = usage.cost
         else:
             header.context_info = ""
             header.cost = ""

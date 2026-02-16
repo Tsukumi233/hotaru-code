@@ -48,3 +48,31 @@ async def test_agent_tools_and_legacy_maxsteps_are_applied(monkeypatch: pytest.M
     assert review.options.get("reasoningEffort") == "high"
 
     Agent.reset()
+
+
+@pytest.mark.anyio
+async def test_agent_tools_ls_maps_to_list_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    Agent.reset()
+    _patch_config(
+        monkeypatch,
+        {
+            "agent": {
+                "review": {
+                    "description": "Review-only subagent",
+                    "mode": "subagent",
+                    "tools": {
+                        "ls": False,
+                    },
+                }
+            }
+        },
+    )
+
+    review = await Agent.get("review")
+    assert review is not None
+    ruleset = Permission.from_config_list(review.permission)
+
+    list_rule = Permission.evaluate("list", "src", ruleset)
+    assert list_rule.action == PermissionAction.DENY
+
+    Agent.reset()

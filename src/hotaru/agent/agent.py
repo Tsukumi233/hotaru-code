@@ -142,7 +142,7 @@ class Agent:
                 permission_name = (
                     "edit"
                     if tool_name in {"write", "edit", "patch", "apply_patch", "multiedit"}
-                    else tool_name
+                    else ("list" if tool_name == "ls" else tool_name)
                 )
                 rules.append({
                     "permission": permission_name,

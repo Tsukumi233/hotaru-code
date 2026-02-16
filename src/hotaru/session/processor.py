@@ -25,6 +25,8 @@ _MAX_STEPS_PROMPT_PATH = Path(__file__).parent / "prompt" / "max-steps.txt"
 _MAX_STEPS_PROMPT = _MAX_STEPS_PROMPT_PATH.read_text(encoding="utf-8").strip()
 _BUILD_SWITCH_PROMPT_PATH = Path(__file__).parent / "prompt" / "build-switch.txt"
 _BUILD_SWITCH_PROMPT = _BUILD_SWITCH_PROMPT_PATH.read_text(encoding="utf-8").strip()
+_PLAN_REMINDER_PROMPT_PATH = Path(__file__).parent / "prompt" / "plan-reminder.txt"
+_PLAN_REMINDER_PROMPT = _PLAN_REMINDER_PROMPT_PATH.read_text(encoding="utf-8").strip()
 _STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
 
 
@@ -513,40 +515,7 @@ class SessionProcessor:
             if exists
             else f"No plan file exists yet. You should create your plan at {plan_path} using the write tool."
         )
-        return f"""<system-reminder>
-Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supersedes any other instructions you have received.
-
-## Plan File Info:
-{plan_info}
-You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
-
-## Plan Workflow
-
-### Phase 1: Initial Understanding
-Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the explore subagent type.
-
-1. Focus on understanding the user's request and the code associated with their request.
-2. Launch up to 3 explore agents in parallel only when scope is uncertain; otherwise use one.
-3. After exploration, use question tool to clarify ambiguities.
-
-### Phase 2: Design
-Goal: Design an implementation approach.
-Use general agent(s) to draft the implementation strategy based on exploration results.
-
-### Phase 3: Review
-Goal: Ensure alignment with user intentions.
-Read critical files identified by agents and ask follow-up questions where needed.
-
-### Phase 4: Final Plan
-Goal: Write the final plan to the plan file.
-Include critical file paths, concrete implementation steps, and an end-to-end verification section.
-
-### Phase 5: Call plan_exit
-At the end of planning, call plan_exit to request switching back to build mode.
-Your turn should only end by either asking a question or calling plan_exit.
-
-NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
-</system-reminder>"""
+        return _PLAN_REMINDER_PROMPT.replace("{plan_info}", plan_info)
 
     def _apply_mode_switch_metadata(self, metadata: Dict[str, Any]) -> None:
         mode_switch = metadata.get("mode_switch")

@@ -566,11 +566,12 @@ class Permission:
             Set of disabled tool names
         """
         edit_tools = {"edit", "write", "patch", "apply_patch", "multiedit"}
+        permission_aliases = {"ls": "list"}
         result = set()
 
         for tool in tools:
             # Map edit-related tools to "edit" permission
-            permission = "edit" if tool in edit_tools else tool
+            permission = "edit" if tool in edit_tools else permission_aliases.get(tool, tool)
 
             # Find matching rule
             for rule in reversed(ruleset):

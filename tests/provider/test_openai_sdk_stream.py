@@ -153,3 +153,47 @@ async def test_openai_stream_emits_reasoning_events(monkeypatch: pytest.MonkeyPa
     assert "reasoning_end" in event_types
     delta = next(chunk for chunk in seen if chunk.type == "reasoning_delta")
     assert delta.reasoning_text == "First thought."
+
+
+@pytest.mark.anyio
+async def test_openai_stream_maps_reasoning_and_cache_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    chunks = [
+        _chunk(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="ok", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ]
+        ),
+        _chunk(
+            choices=[],
+            usage=SimpleNamespace(
+                prompt_tokens=20,
+                completion_tokens=11,
+                completion_tokens_details=SimpleNamespace(reasoning_tokens=7),
+                prompt_tokens_details=SimpleNamespace(cached_tokens=9),
+            ),
+        ),
+    ]
+
+    class _FakeCompletions:
+        async def create(self, **_kwargs):
+            return _AsyncStream(chunks)
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(completions=_FakeCompletions())
+
+    monkeypatch.setattr("hotaru.provider.sdk.openai.AsyncOpenAI", _FakeClient)
+
+    sdk = OpenAISDK(api_key="test-key")
+    seen = [chunk async for chunk in sdk.stream(model="gpt-5", messages=[{"role": "user", "content": "hi"}])]
+    usage = [c for c in seen if c.type == "message_delta" and c.usage]
+
+    assert usage[-1].usage == {
+        "input_tokens": 20,
+        "output_tokens": 11,
+        "reasoning_tokens": 7,
+        "cache_read_tokens": 9,
+    }

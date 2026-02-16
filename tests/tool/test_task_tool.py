@@ -53,6 +53,8 @@ async def test_task_description_respects_task_permission_rules(
 
     assert "- general:" in description
     assert "- explore:" not in description
+    assert "When NOT to use the Task tool:" in description
+    assert "should be used proactively" in description
 
 
 def test_extract_subagent_mention() -> None:

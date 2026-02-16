@@ -15,17 +15,29 @@ def _model(model_id: str, provider_id: str = "openai", family: str | None = None
 
 def test_for_model_gpt5_path() -> None:
     prompts = SystemPrompt.for_model(_model("gpt-5"))
-    assert len(prompts) >= 2
-    assert "GPT-5 family" in prompts[1]
+    assert len(prompts) == 1
+    assert "When doing file search, prefer using the Task tool" in prompts[0]
 
 
 def test_for_model_gemini_path() -> None:
     prompts = SystemPrompt.for_model(_model("gemini-2.5-pro", provider_id="google"))
-    assert len(prompts) >= 2
-    assert "Gemini family" in prompts[1]
+    assert len(prompts) == 1
+    assert "Primary Workflows" in prompts[0]
 
 
 def test_for_model_claude_path() -> None:
     prompts = SystemPrompt.for_model(_model("claude-sonnet-4", provider_id="anthropic", api_type="anthropic"))
-    assert len(prompts) >= 2
-    assert "Claude family" in prompts[1]
+    assert len(prompts) == 1
+    assert "When doing file search, prefer to use the Task tool" in prompts[0]
+
+
+def test_for_model_qwen_path() -> None:
+    prompts = SystemPrompt.for_model(_model("qwen2.5-coder", provider_id="aliyun"))
+    assert len(prompts) == 1
+    assert "When doing file search, prefer to use the Task tool" in prompts[0]
+
+
+def test_for_model_fallback_path() -> None:
+    prompts = SystemPrompt.for_model(_model("custom-model-1", provider_id="custom"))
+    assert len(prompts) == 1
+    assert "You are Hotaru Code, an AI-powered coding assistant." in prompts[0]

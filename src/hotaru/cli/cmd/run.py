@@ -9,11 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from rich.console import Console
-from rich.live import Live
-from rich.markdown import Markdown
-from rich.panel import Panel
 from rich.prompt import Prompt
-from rich.text import Text
 
 from ...agent import Agent
 from ...command import (
@@ -22,11 +18,13 @@ from ...command import (
     publish_command_executed,
 )
 from ...core.bus import Bus
+from ...core.id import Identifier
 from ...permission import Permission, PermissionAsked, PermissionReply
 from ...question import Question, QuestionAsked
 from ...project import Instance, Project
 from ...provider import Provider
 from ...session import Session, SessionPrompt, SystemPrompt
+from ...session.stream_parts import PartStreamBuilder
 from ...tool import ToolRegistry
 from ...util.log import Log
 
@@ -189,51 +187,169 @@ async def run_command(
         is_git=project.vcs == "git",
     )
 
-    # Track response text
-    response_text = ""
-    text_buffer = Text()
+    assistant_message_id = Identifier.ascending("message")
+    part_builder = PartStreamBuilder(session_id=session.id, message_id=assistant_message_id)
+    text_parts: Dict[str, Dict[str, Any]] = {}
+    reasoning_parts: Dict[str, Dict[str, Any]] = {}
+    active_text_part_id: Optional[str] = None
+    active_reasoning_part_id: Optional[str] = None
+    emitted_tool_calls: set[str] = set()
+    prompt_result: Optional[Any] = None
 
-    # Callbacks for streaming output
-    def on_text(text: str):
-        nonlocal response_text
-        response_text += text
-        if not json_output:
-            text_buffer.append(text)
+    def _emit_json(event_type: str, payload: Dict[str, Any]) -> None:
+        print(
+            json.dumps(
+                {
+                    "type": event_type,
+                    "timestamp": int(time.time() * 1000),
+                    "session_id": session.id,
+                    **payload,
+                }
+            ),
+            flush=True,
+        )
 
-    def on_tool_start(tool_name: str, tool_id: str, input_args: Optional[Dict[str, Any]] = None):
+    def _render_text_part(part: Dict[str, Any]) -> None:
+        text = str(part.get("text") or "").strip()
+        if not text:
+            return
         if json_output:
-            event = {
-                "type": "tool_start",
-                "timestamp": int(time.time() * 1000),
-                "session_id": session.id,
-                "tool": tool_name,
-                "tool_id": tool_id,
-            }
-            print(json.dumps(event), flush=True)
-        else:
-            console.print(f"\n[dim]> {tool_name}[/dim]", end="")
+            _emit_json("text", {"part": part})
+            return
+        console.print()
+        console.print(text)
+        console.print()
 
-    def on_tool_end(
-        tool_name: str, tool_id: str,
-        output: Optional[str], error: Optional[str],
-        title: str = "", metadata: Optional[Dict[str, Any]] = None,
-    ):
+    def _render_reasoning_part(part: Dict[str, Any]) -> None:
+        if not show_thinking:
+            return
+        text = str(part.get("text") or "").strip()
+        if not text:
+            return
         if json_output:
-            event = {
-                "type": "tool_end",
-                "timestamp": int(time.time() * 1000),
-                "session_id": session.id,
-                "tool": tool_name,
-                "tool_id": tool_id,
-                "output": output[:500] if output else None,
-                "error": error,
-            }
-            print(json.dumps(event), flush=True)
+            _emit_json("reasoning", {"part": part})
+            return
+        console.print()
+        console.print(f"[dim][italic]Thinking: {text}[/italic][/dim]")
+        console.print()
+
+    def _render_tool_part(part: Dict[str, Any]) -> None:
+        if json_output:
+            _emit_json("tool_use", {"part": part})
+            return
+        tool_name = str(part.get("tool") or "tool")
+        state = part.get("state") if isinstance(part.get("state"), dict) else {}
+        status = str(state.get("status") or "")
+        if status == "error":
+            console.print(f"\n[dim]> {tool_name}[/dim] [red]error[/red]")
         else:
-            if error:
-                console.print(f" [red]error[/red]")
-            else:
-                console.print(f" [green]done[/green]")
+            console.print(f"\n[dim]> {tool_name}[/dim] [green]done[/green]")
+
+    def _flush_text() -> None:
+        nonlocal active_text_part_id
+        if not active_text_part_id:
+            return
+        part = text_parts.get(active_text_part_id)
+        active_text_part_id = None
+        if part:
+            _render_text_part(part)
+
+    def _flush_reasoning() -> None:
+        nonlocal active_reasoning_part_id
+        if not active_reasoning_part_id:
+            return
+        part = reasoning_parts.get(active_reasoning_part_id)
+        active_reasoning_part_id = None
+        if part:
+            _render_reasoning_part(part)
+
+    def _handle_part(part: Dict[str, Any]) -> None:
+        nonlocal active_text_part_id
+        nonlocal active_reasoning_part_id
+
+        part_type = str(part.get("type") or "")
+        if part_type != "text":
+            _flush_text()
+        if part_type != "reasoning":
+            _flush_reasoning()
+
+        if part_type == "text":
+            part_id = str(part.get("id") or "")
+            if not part_id:
+                return
+            if active_text_part_id and active_text_part_id != part_id:
+                _flush_text()
+            text_parts[part_id] = dict(part)
+            active_text_part_id = part_id
+            return
+
+        if part_type == "reasoning":
+            part_id = str(part.get("id") or "")
+            if not part_id:
+                return
+            if active_reasoning_part_id and active_reasoning_part_id != part_id:
+                _flush_reasoning()
+            reasoning_parts[part_id] = dict(part)
+            active_reasoning_part_id = part_id
+            return
+
+        if part_type == "tool":
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            status = str(state.get("status") or "")
+            if status not in {"completed", "error"}:
+                return
+            dedupe_key = str(part.get("call_id") or part.get("id") or "")
+            if dedupe_key and dedupe_key in emitted_tool_calls:
+                return
+            if dedupe_key:
+                emitted_tool_calls.add(dedupe_key)
+            _render_tool_part(part)
+            return
+
+        if json_output and part_type == "step-start":
+            _emit_json("step_start", {"part": part})
+            return
+        if json_output and part_type == "step-finish":
+            _emit_json("step_finish", {"part": part})
+
+    def on_text(text: str) -> None:
+        part = part_builder.text_delta(text)
+        if part:
+            _handle_part(part)
+
+    def on_tool_update(tool_state: Dict[str, Any]) -> None:
+        _handle_part(part_builder.tool_update(tool_state))
+
+    async def on_reasoning_start(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> None:
+        part = part_builder.reasoning_start(reasoning_id, metadata)
+        if part:
+            _handle_part(part)
+
+    async def on_reasoning_delta(
+        reasoning_id: Optional[str],
+        delta: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        _handle_part(part_builder.reasoning_delta(reasoning_id, delta, metadata))
+
+    async def on_reasoning_end(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> None:
+        part = part_builder.reasoning_end(reasoning_id, metadata)
+        if part:
+            _handle_part(part)
+
+    def on_step_start(snapshot: Optional[str]) -> None:
+        _handle_part(part_builder.step_start(snapshot))
+
+    def on_step_finish(
+        reason: str,
+        snapshot: Optional[str],
+        tokens: Optional[Dict[str, Any]] = None,
+        cost: float = 0.0,
+    ) -> None:
+        _handle_part(part_builder.step_finish(reason=reason, snapshot=snapshot, tokens=tokens, cost=cost))
+
+    def on_patch(patch_hash: Optional[str], files_changed: Optional[List[str]] = None) -> None:
+        _handle_part(part_builder.patch(patch_hash=patch_hash, files=files_changed))
 
     # Permission handling — auto-approve with --yes, otherwise terminal prompt
     async def on_permission_asked(payload):
@@ -362,74 +478,41 @@ async def run_command(
     unsub_question = Bus.subscribe(QuestionAsked, on_question_asked)
 
     try:
-        if json_output:
-            # JSON output mode
-            prompt_result = await SessionPrompt.prompt(
-                session_id=session.id,
-                content=message,
-                provider_id=provider_id,
-                model_id=model_id,
-                agent=agent_name,
-                cwd=cwd,
-                worktree=sandbox,
-                system_prompt=system_prompt,
-                on_text=on_text,
-                on_tool_start=on_tool_start,
-                on_tool_end=on_tool_end,
-                resume_history=is_resuming,
-            )
-            result = prompt_result.result
+        prompt_result = await SessionPrompt.prompt(
+            session_id=session.id,
+            content=message,
+            provider_id=provider_id,
+            model_id=model_id,
+            agent=agent_name,
+            cwd=cwd,
+            worktree=sandbox,
+            system_prompt=system_prompt,
+            on_text=on_text,
+            on_tool_update=on_tool_update,
+            on_reasoning_start=on_reasoning_start,
+            on_reasoning_delta=on_reasoning_delta,
+            on_reasoning_end=on_reasoning_end,
+            on_step_start=on_step_start,
+            on_step_finish=on_step_finish,
+            on_patch=on_patch,
+            resume_history=is_resuming,
+            assistant_message_id=assistant_message_id,
+        )
+        result = prompt_result.result
 
-            # Emit final text
-            if response_text:
-                event = {
-                    "type": "text",
-                    "timestamp": int(time.time() * 1000),
-                    "session_id": session.id,
-                    "text": response_text,
-                }
-                print(json.dumps(event), flush=True)
+        _flush_text()
+        _flush_reasoning()
 
-            if result.error:
-                event = {
-                    "type": "error",
-                    "timestamp": int(time.time() * 1000),
-                    "session_id": session.id,
-                    "error": result.error,
-                }
-                print(json.dumps(event), flush=True)
-        else:
-            # Interactive mode with live display
-            with Live(text_buffer, console=console, refresh_per_second=10, transient=True) as live:
-                prompt_result = await SessionPrompt.prompt(
-                    session_id=session.id,
-                    content=message,
-                    provider_id=provider_id,
-                    model_id=model_id,
-                    agent=agent_name,
-                    cwd=cwd,
-                    worktree=sandbox,
-                    system_prompt=system_prompt,
-                    on_text=lambda t: (on_text(t), live.update(text_buffer)),
-                    on_tool_start=on_tool_start,
-                    on_tool_end=on_tool_end,
-                    resume_history=is_resuming,
-                )
-                result = prompt_result.result
-
-            # Print final response
-            if response_text:
-                console.print(response_text)
-
-            if result.error:
+        if result.error:
+            if json_output:
+                _emit_json("error", {"error": result.error})
+            else:
                 console.print(f"\n[red]Error:[/red] {result.error}")
 
-            # Print usage stats
-            if result.usage:
-                input_tokens = result.usage.get("input_tokens", 0)
-                output_tokens = result.usage.get("output_tokens", 0)
-                console.print(f"\n[dim]Tokens: {input_tokens} in / {output_tokens} out[/dim]")
-
+        if not json_output and result.usage:
+            input_tokens = result.usage.get("input_tokens", 0)
+            output_tokens = result.usage.get("output_tokens", 0)
+            console.print(f"\n[dim]Tokens: {input_tokens} in / {output_tokens} out[/dim]")
             console.print()
 
     except Exception as e:
@@ -445,7 +528,7 @@ async def run_command(
             project_id=project.id,
             arguments=init_arguments,
             session_id=session.id,
-            message_id=prompt_result.assistant_message_id,
+            message_id=getattr(prompt_result, "assistant_message_id", assistant_message_id),
         )
 
     log.info("run completed", {"session_id": session.id})

@@ -199,3 +199,11 @@ ListTool = Tool.define(
     execute_fn=list_execute,
     auto_truncate=False,
 )
+
+LsTool = Tool.define(
+    tool_id="ls",
+    description="Unix-style alias for the list tool.",
+    parameters_type=ListParams,
+    execute_fn=list_execute,
+    auto_truncate=False,
+)

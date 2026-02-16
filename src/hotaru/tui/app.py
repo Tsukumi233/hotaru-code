@@ -557,6 +557,10 @@ class TuiApp(App):
                         "id": model_id,
                         "name": model.name,
                         "api_id": model.api_id,
+                        "limit": {
+                            "context": int(getattr(model.limit, "context", 0) or 0),
+                            "output": int(getattr(model.limit, "output", 0) or 0),
+                        },
                     }
                     for model_id, model in provider.models.items()
                 },
