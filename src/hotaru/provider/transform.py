@@ -244,6 +244,16 @@ class ProviderTransform:
                     continue
 
             msg = cls._apply_interleaved_reasoning(msg, interleaved_field=interleaved_field)
+            if (
+                interleaved_field
+                and msg.get("role") == "assistant"
+                and isinstance(msg.get("tool_calls"), list)
+                and msg.get("tool_calls")
+                and interleaved_field not in msg
+            ):
+                # Keep interleaved reasoning key stable for tool-call turns
+                # even when no reasoning text is emitted.
+                msg[interleaved_field] = ""
             out.append(msg)
 
             # Some OpenAI-compatible Mistral gateways reject tool->user adjacency.

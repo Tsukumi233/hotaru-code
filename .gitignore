@@ -11,5 +11,4 @@ wheels/
 
 .claude/
 CLAUDE.md
-AGENTS.md
-_debug.txt
+session-ses*

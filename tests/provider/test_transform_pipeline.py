@@ -63,6 +63,32 @@ def test_message_keeps_non_interleaved_model_unchanged() -> None:
     assert transformed[0]["content"] == [{"type": "reasoning", "text": "x"}]
 
 
+def test_message_sets_empty_interleaved_field_for_assistant_tool_calls() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }
+            ],
+        }
+    ]
+
+    transformed = ProviderTransform.message(
+        messages,
+        model=_model(),
+        provider_id="moonshot",
+        model_id="kimi-k2.5",
+        api_type="openai",
+    )
+
+    assert transformed[0]["reasoning_content"] == ""
+
+
 def test_resolve_variant_reads_model_variants() -> None:
     model = _model(
         provider_id="demo",
