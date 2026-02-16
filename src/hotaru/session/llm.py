@@ -19,12 +19,15 @@ log = Log.create({"service": "llm"})
 @dataclass
 class StreamChunk:
     """Unified stream chunk across providers."""
-    type: str  # "text", "tool_call_start", "tool_call_delta", "tool_call_end", "message_start", "message_end", "error"
+    type: str  # "text", "tool_call_*", "reasoning_*", "message_*", "error"
     text: Optional[str] = None
     tool_call: Optional[ToolCall] = None
     tool_call_id: Optional[str] = None
     tool_call_name: Optional[str] = None
     tool_call_input_delta: Optional[str] = None
+    reasoning_id: Optional[str] = None
+    reasoning_text: Optional[str] = None
+    provider_metadata: Optional[Dict[str, Any]] = None
     usage: Optional[Dict[str, int]] = None
     stop_reason: Optional[str] = None
     error: Optional[str] = None
@@ -260,6 +263,9 @@ class LLM:
                 tool_call_id=chunk.tool_call_id,
                 tool_call_name=chunk.tool_call_name,
                 tool_call_input_delta=chunk.tool_call_input_delta,
+                reasoning_id=chunk.reasoning_id,
+                reasoning_text=chunk.reasoning_text,
+                provider_metadata=chunk.provider_metadata,
                 usage=chunk.usage,
                 stop_reason=chunk.stop_reason,
             )
@@ -303,6 +309,9 @@ class LLM:
                 tool_call_id=chunk.tool_call_id,
                 tool_call_name=chunk.tool_call_name,
                 tool_call_input_delta=chunk.tool_call_input_delta,
+                reasoning_id=chunk.reasoning_id,
+                reasoning_text=chunk.reasoning_text,
+                provider_metadata=chunk.provider_metadata,
                 usage=chunk.usage,
                 stop_reason=chunk.stop_reason,
             )

@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List
 from ..session.message_store import (
     CompactionPart,
     FilePart,
+    PatchPart,
     ReasoningPart,
     StepFinishPart,
     StepStartPart,
@@ -134,6 +135,16 @@ def _part_to_tui(part: Any) -> Dict[str, Any]:
             "snapshot": part.snapshot,
             "cost": float(part.cost or 0.0),
             "tokens": part.tokens.model_dump(mode="json"),
+        }
+
+    if isinstance(part, PatchPart):
+        return {
+            "id": part.id,
+            "session_id": part.session_id,
+            "message_id": part.message_id,
+            "type": part.type,
+            "hash": part.hash,
+            "files": list(part.files or []),
         }
 
     if isinstance(part, CompactionPart):

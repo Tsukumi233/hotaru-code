@@ -27,12 +27,15 @@ class ToolCall:
 @dataclass
 class StreamChunk:
     """A chunk from the streaming response."""
-    type: str  # "text", "tool_call_start", "tool_call_delta", "tool_call_end", "message_start", "message_end"
+    type: str  # "text", "tool_call_*", "reasoning_*", "message_*"
     text: Optional[str] = None
     tool_call: Optional[ToolCall] = None
     tool_call_id: Optional[str] = None
     tool_call_name: Optional[str] = None
     tool_call_input_delta: Optional[str] = None
+    reasoning_id: Optional[str] = None
+    reasoning_text: Optional[str] = None
+    provider_metadata: Optional[Dict[str, Any]] = None
     usage: Optional[Dict[str, int]] = None
     stop_reason: Optional[str] = None
 
@@ -60,6 +63,29 @@ class OpenAISDK:
             api_key=api_key,
             base_url=base_url,
         )
+
+    @staticmethod
+    def _extract_reasoning_text(delta: Any) -> str:
+        for key in ("reasoning", "reasoning_content"):
+            value = getattr(delta, key, None)
+            if isinstance(value, str) and value:
+                return value
+        details = getattr(delta, "reasoning_details", None)
+        if isinstance(details, str) and details:
+            return details
+        if isinstance(details, list):
+            chunks: List[str] = []
+            for item in details:
+                if isinstance(item, str):
+                    chunks.append(item)
+                elif isinstance(item, dict):
+                    for field in ("text", "content", "reasoning"):
+                        text = item.get(field)
+                        if isinstance(text, str) and text:
+                            chunks.append(text)
+                            break
+            return "".join(chunks)
+        return ""
 
     async def stream(
         self,
@@ -128,6 +154,8 @@ class OpenAISDK:
 
         # Track tool calls being built (OpenAI sends them incrementally)
         tool_calls_in_progress: Dict[int, Dict[str, Any]] = {}
+        reasoning_active = False
+        reasoning_id = "reasoning_0"
 
         stream = await self.client.chat.completions.create(**params)
 
@@ -152,6 +180,20 @@ class OpenAISDK:
             # Handle text content
             if delta.content:
                 yield StreamChunk(type="text", text=delta.content)
+
+            reasoning_delta = self._extract_reasoning_text(delta)
+            if reasoning_delta:
+                if not reasoning_active:
+                    reasoning_active = True
+                    yield StreamChunk(
+                        type="reasoning_start",
+                        reasoning_id=reasoning_id,
+                    )
+                yield StreamChunk(
+                    type="reasoning_delta",
+                    reasoning_id=reasoning_id,
+                    reasoning_text=reasoning_delta,
+                )
 
             # Handle tool calls
             if delta.tool_calls:
@@ -192,6 +234,12 @@ class OpenAISDK:
 
             # Handle finish reason
             if choice.finish_reason:
+                if reasoning_active:
+                    yield StreamChunk(
+                        type="reasoning_end",
+                        reasoning_id=reasoning_id,
+                    )
+                    reasoning_active = False
                 # Emit completed tool calls
                 for idx in sorted(tool_calls_in_progress.keys()):
                     tc_data = tool_calls_in_progress[idx]
@@ -214,6 +262,12 @@ class OpenAISDK:
                     type="message_delta",
                     stop_reason=choice.finish_reason,
                 )
+
+        if reasoning_active:
+            yield StreamChunk(
+                type="reasoning_end",
+                reasoning_id=reasoning_id,
+            )
 
         yield StreamChunk(type="message_end")
 

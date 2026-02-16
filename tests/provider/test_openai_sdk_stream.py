@@ -107,3 +107,49 @@ async def test_openai_stream_assembles_multiple_tool_calls(monkeypatch: pytest.M
     assert ends[0].tool_call.input == {"filePath": "README.md"}
     assert ends[1].tool_call.id == "call_2"
     assert usage[-1].usage == {"input_tokens": 10, "output_tokens": 4}
+
+
+@pytest.mark.anyio
+async def test_openai_stream_emits_reasoning_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    chunks = [
+        _chunk(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=None,
+                        reasoning="First thought.",
+                    ),
+                    finish_reason=None,
+                )
+            ]
+        ),
+        _chunk(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=None, tool_calls=None),
+                    finish_reason="stop",
+                )
+            ]
+        ),
+    ]
+
+    class _FakeCompletions:
+        async def create(self, **_kwargs):
+            return _AsyncStream(chunks)
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(completions=_FakeCompletions())
+
+    monkeypatch.setattr("hotaru.provider.sdk.openai.AsyncOpenAI", _FakeClient)
+
+    sdk = OpenAISDK(api_key="test-key")
+    seen = [chunk async for chunk in sdk.stream(model="gpt-5", messages=[{"role": "user", "content": "hi"}])]
+
+    event_types = [chunk.type for chunk in seen]
+    assert "reasoning_start" in event_types
+    assert "reasoning_delta" in event_types
+    assert "reasoning_end" in event_types
+    delta = next(chunk for chunk in seen if chunk.type == "reasoning_delta")
+    assert delta.reasoning_text == "First thought."

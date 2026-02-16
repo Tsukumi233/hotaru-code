@@ -37,12 +37,15 @@ class ToolCall:
 @dataclass
 class StreamChunk:
     """A chunk from the streaming response."""
-    type: str  # "text", "tool_call_start", "tool_call_delta", "tool_call_end", "message_start", "message_end"
+    type: str  # "text", "tool_call_*", "reasoning_*", "message_*"
     text: Optional[str] = None
     tool_call: Optional[ToolCall] = None
     tool_call_id: Optional[str] = None
     tool_call_name: Optional[str] = None
     tool_call_input_delta: Optional[str] = None
+    reasoning_id: Optional[str] = None
+    reasoning_text: Optional[str] = None
+    provider_metadata: Optional[Dict[str, Any]] = None
     usage: Optional[Dict[str, int]] = None
     stop_reason: Optional[str] = None
 
@@ -136,10 +139,9 @@ class AnthropicSDK:
 
         log.info("streaming", {"model": model, "message_count": len(messages)})
 
-        # Track current tool call being built
-        current_tool_id: Optional[str] = None
-        current_tool_name: Optional[str] = None
-        current_tool_input: str = ""
+        block_kind_by_index: Dict[int, str] = {}
+        tool_state_by_index: Dict[int, Dict[str, Any]] = {}
+        reasoning_id_by_index: Dict[int, str] = {}
 
         async with self.client.messages.stream(**params) as stream:
             async for event in stream:
@@ -155,47 +157,103 @@ class AnthropicSDK:
                     )
 
                 elif isinstance(event, ContentBlockStartEvent):
+                    index = int(getattr(event, "index", 0) or 0)
                     if isinstance(event.content_block, TextBlock):
-                        pass  # Text will come in deltas
+                        block_kind_by_index[index] = "text"
                     elif isinstance(event.content_block, ToolUseBlock):
-                        current_tool_id = event.content_block.id
-                        current_tool_name = event.content_block.name
-                        current_tool_input = json.dumps(event.content_block.input or {})
+                        block_kind_by_index[index] = "tool"
+                        tool_state_by_index[index] = {
+                            "id": event.content_block.id,
+                            "name": event.content_block.name,
+                            "input_json": json.dumps(event.content_block.input or {}),
+                        }
                         yield StreamChunk(
                             type="tool_call_start",
-                            tool_call_id=current_tool_id,
-                            tool_call_name=current_tool_name,
+                            tool_call_id=event.content_block.id,
+                            tool_call_name=event.content_block.name,
                         )
+                    else:
+                        block_type = str(getattr(event.content_block, "type", "") or "")
+                        if block_type in {"thinking", "reasoning"}:
+                            reasoning_id = str(
+                                getattr(event.content_block, "id", "") or f"reasoning_{index}"
+                            )
+                            block_kind_by_index[index] = "reasoning"
+                            reasoning_id_by_index[index] = reasoning_id
+                            metadata = {"index": index, "block_type": block_type}
+                            yield StreamChunk(
+                                type="reasoning_start",
+                                reasoning_id=reasoning_id,
+                                provider_metadata=metadata,
+                            )
+                            initial = getattr(event.content_block, "thinking", None)
+                            if isinstance(initial, str) and initial:
+                                yield StreamChunk(
+                                    type="reasoning_delta",
+                                    reasoning_id=reasoning_id,
+                                    reasoning_text=initial,
+                                    provider_metadata=metadata,
+                                )
 
                 elif isinstance(event, ContentBlockDeltaEvent):
-                    if hasattr(event.delta, "text"):
-                        yield StreamChunk(type="text", text=event.delta.text)
-                    elif hasattr(event.delta, "partial_json"):
-                        current_tool_input += event.delta.partial_json
-                        yield StreamChunk(
-                            type="tool_call_delta",
-                            tool_call_id=current_tool_id,
-                            tool_call_input_delta=event.delta.partial_json,
-                        )
+                    index = int(getattr(event, "index", 0) or 0)
+                    kind = block_kind_by_index.get(index)
+                    if kind == "text":
+                        text = getattr(event.delta, "text", None)
+                        if isinstance(text, str) and text:
+                            yield StreamChunk(type="text", text=text)
+                    elif kind == "tool":
+                        partial = getattr(event.delta, "partial_json", None)
+                        state = tool_state_by_index.get(index)
+                        if isinstance(partial, str) and partial and state:
+                            state["input_json"] = str(state.get("input_json") or "") + partial
+                            yield StreamChunk(
+                                type="tool_call_delta",
+                                tool_call_id=str(state.get("id") or ""),
+                                tool_call_input_delta=partial,
+                            )
+                    elif kind == "reasoning":
+                        delta_text = getattr(event.delta, "thinking", None)
+                        if not isinstance(delta_text, str) or not delta_text:
+                            candidate = getattr(event.delta, "text", None)
+                            delta_text = candidate if isinstance(candidate, str) else ""
+                        if delta_text:
+                            reasoning_id = reasoning_id_by_index.get(index) or f"reasoning_{index}"
+                            yield StreamChunk(
+                                type="reasoning_delta",
+                                reasoning_id=reasoning_id,
+                                reasoning_text=delta_text,
+                                provider_metadata={
+                                    "index": index,
+                                    "delta_type": str(getattr(event.delta, "type", "") or ""),
+                                },
+                            )
 
                 elif isinstance(event, ContentBlockStopEvent):
-                    if current_tool_id and current_tool_name:
+                    index = int(getattr(event, "index", 0) or 0)
+                    kind = block_kind_by_index.pop(index, None)
+                    if kind == "tool":
+                        state = tool_state_by_index.pop(index, None) or {}
+                        raw_input = str(state.get("input_json") or "")
                         try:
-                            tool_input = json.loads(current_tool_input) if current_tool_input else {}
+                            tool_input = json.loads(raw_input) if raw_input else {}
                         except json.JSONDecodeError:
                             tool_input = {}
-
                         yield StreamChunk(
                             type="tool_call_end",
                             tool_call=ToolCall(
-                                id=current_tool_id,
-                                name=current_tool_name,
+                                id=str(state.get("id") or ""),
+                                name=str(state.get("name") or ""),
                                 input=tool_input,
                             ),
                         )
-                        current_tool_id = None
-                        current_tool_name = None
-                        current_tool_input = ""
+                    elif kind == "reasoning":
+                        reasoning_id = reasoning_id_by_index.pop(index, None) or f"reasoning_{index}"
+                        yield StreamChunk(
+                            type="reasoning_end",
+                            reasoning_id=reasoning_id,
+                            provider_metadata={"index": index},
+                        )
 
                 elif isinstance(event, MessageDeltaEvent):
                     yield StreamChunk(
@@ -205,6 +263,28 @@ class AnthropicSDK:
                     )
 
                 elif isinstance(event, MessageStopEvent):
+                    for index, state in list(tool_state_by_index.items()):
+                        raw_input = str(state.get("input_json") or "")
+                        try:
+                            tool_input = json.loads(raw_input) if raw_input else {}
+                        except json.JSONDecodeError:
+                            tool_input = {}
+                        yield StreamChunk(
+                            type="tool_call_end",
+                            tool_call=ToolCall(
+                                id=str(state.get("id") or ""),
+                                name=str(state.get("name") or ""),
+                                input=tool_input,
+                            ),
+                        )
+                        tool_state_by_index.pop(index, None)
+                    for index, reasoning_id in list(reasoning_id_by_index.items()):
+                        yield StreamChunk(
+                            type="reasoning_end",
+                            reasoning_id=reasoning_id,
+                            provider_metadata={"index": index},
+                        )
+                        reasoning_id_by_index.pop(index, None)
                     yield StreamChunk(type="message_end")
 
     async def complete(

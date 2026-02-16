@@ -79,3 +79,67 @@ async def test_llm_anthropic_tool_roundtrip_and_finish_reason_normalized(
     assert result.tool_calls[0].name == "read"
     assert captured["tool_choice"] == "required"
     assert captured["messages"][0]["role"] == "user"
+
+
+@pytest.mark.anyio
+async def test_llm_passes_through_reasoning_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = ProviderInfo(
+        id="anthropic",
+        name="Anthropic",
+        env=[],
+        key="test-key",
+        models={
+            "claude-sonnet": ProcessedModelInfo(
+                id="claude-sonnet",
+                provider_id="anthropic",
+                name="claude-sonnet",
+                api_id="claude-sonnet",
+                api_type="anthropic",
+            )
+        },
+    )
+
+    async def fake_get_provider(cls, provider_id: str):
+        if provider_id == "anthropic":
+            return provider
+        return None
+
+    async def fake_anthropic_stream(
+        cls,
+        *,
+        api_key,
+        model,
+        messages,
+        base_url=None,
+        system=None,
+        tools=None,
+        tool_choice=None,
+        max_tokens=4096,
+        temperature=None,
+        top_p=None,
+        options=None,
+    ):
+        yield StreamChunk(type="reasoning_start", reasoning_id="r1")
+        yield StreamChunk(type="reasoning_delta", reasoning_id="r1", reasoning_text="plan")
+        yield StreamChunk(type="reasoning_end", reasoning_id="r1")
+        yield StreamChunk(type="message_delta", stop_reason="stop")
+
+    monkeypatch.setattr("hotaru.provider.provider.Provider.get", classmethod(fake_get_provider))
+    monkeypatch.setattr(LLM, "_stream_anthropic", classmethod(fake_anthropic_stream))
+
+    seen = [
+        chunk
+        async for chunk in LLM.stream(
+            StreamInput(
+                session_id="s1",
+                provider_id="anthropic",
+                model_id="claude-sonnet",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+        )
+    ]
+
+    types = [chunk.type for chunk in seen]
+    assert types.count("reasoning_start") == 1
+    assert types.count("reasoning_delta") == 1
+    assert types.count("reasoning_end") == 1

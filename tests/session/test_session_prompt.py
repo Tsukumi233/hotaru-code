@@ -1,4 +1,6 @@
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 
@@ -11,7 +13,12 @@ from hotaru.provider.sdk.anthropic import ToolCall
 from hotaru.session import Session, SessionPrompt
 from hotaru.session.compaction import SessionCompaction
 from hotaru.session.llm import LLM, StreamChunk
-from hotaru.session.message_store import CompactionPart, MessageInfo, MessageTime, ModelRef
+from hotaru.session.message_store import (
+    CompactionPart,
+    MessageInfo,
+    MessageTime,
+    ModelRef,
+)
 from hotaru.storage import Storage
 
 
@@ -57,6 +64,201 @@ async def test_session_prompt_writes_structured_messages(monkeypatch: pytest.Mon
     assert structured[1].info.role == "assistant"
     assert structured[1].info.tokens.input == 9
     assert structured[1].info.tokens.output == 3
+    part_types = [getattr(part, "type", "") for part in structured[1].parts]
+    assert "step-start" in part_types
+    assert "step-finish" in part_types
+
+
+@pytest.mark.anyio
+async def test_session_prompt_persists_reasoning_parts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _setup_storage(monkeypatch, tmp_path)
+
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="reasoning_start", reasoning_id="r1")
+        yield StreamChunk(type="reasoning_delta", reasoning_id="r1", reasoning_text="think ")
+        yield StreamChunk(type="reasoning_delta", reasoning_id="r1", reasoning_text="done  ")
+        yield StreamChunk(type="reasoning_end", reasoning_id="r1")
+        yield StreamChunk(type="text", text="answer")
+        yield StreamChunk(type="message_delta", usage={"input_tokens": 4, "output_tokens": 2})
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
+    await SessionPrompt.prompt(
+        session_id=session.id,
+        content="hello",
+        provider_id="openai",
+        model_id="gpt-5",
+        agent="build",
+        cwd=str(tmp_path),
+        worktree=str(tmp_path),
+        resume_history=True,
+        auto_compaction=False,
+    )
+
+    structured = await Session.messages(session_id=session.id)
+    assistant = next(msg for msg in structured if msg.info.role == "assistant")
+    reasoning_parts = [part for part in assistant.parts if getattr(part, "type", "") == "reasoning"]
+    assert len(reasoning_parts) == 1
+    assert reasoning_parts[0].text == "think done"
+    assert reasoning_parts[0].time.end is not None
+
+
+@pytest.mark.anyio
+async def test_session_prompt_non_git_workspace_skips_patch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _setup_storage(monkeypatch, tmp_path)
+
+    target = tmp_path / "hello.txt"
+
+    async def fake_stream(cls, _stream_input):
+        target.write_text("world")
+        yield StreamChunk(type="text", text="done")
+        yield StreamChunk(type="message_delta", usage={"input_tokens": 2, "output_tokens": 1})
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
+    await SessionPrompt.prompt(
+        session_id=session.id,
+        content="write file",
+        provider_id="openai",
+        model_id="gpt-5",
+        agent="build",
+        cwd=str(tmp_path),
+        worktree=str(tmp_path),
+        resume_history=True,
+        auto_compaction=False,
+    )
+
+    structured = await Session.messages(session_id=session.id)
+    assistant = next(msg for msg in structured if msg.info.role == "assistant")
+    step_start = next(part for part in assistant.parts if getattr(part, "type", "") == "step-start")
+    step_finish = next(part for part in assistant.parts if getattr(part, "type", "") == "step-finish")
+    assert step_start.snapshot is None
+    assert step_finish.snapshot is None
+    assert not any(getattr(part, "type", "") == "patch" for part in assistant.parts)
+
+
+@pytest.mark.anyio
+async def test_session_prompt_git_workspace_records_patch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _setup_storage(monkeypatch, tmp_path)
+    if not shutil.which("git"):
+        pytest.skip("git is not available")
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    target = tmp_path / "hello.txt"
+    target.write_text("before")
+
+    async def fake_stream(cls, _stream_input):
+        target.write_text("after")
+        yield StreamChunk(type="text", text="done")
+        yield StreamChunk(type="message_delta", usage={"input_tokens": 2, "output_tokens": 1})
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
+    await SessionPrompt.prompt(
+        session_id=session.id,
+        content="write file",
+        provider_id="openai",
+        model_id="gpt-5",
+        agent="build",
+        cwd=str(tmp_path),
+        worktree=str(tmp_path),
+        resume_history=True,
+        auto_compaction=False,
+    )
+
+    structured = await Session.messages(session_id=session.id)
+    assistant = next(msg for msg in structured if msg.info.role == "assistant")
+    patch_parts = [part for part in assistant.parts if getattr(part, "type", "") == "patch"]
+    assert len(patch_parts) == 1
+    assert str(target.resolve()) in patch_parts[0].files
+
+
+@pytest.mark.anyio
+async def test_session_prompt_computes_step_and_message_cost(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _setup_storage(monkeypatch, tmp_path)
+
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="text", text="priced")
+        yield StreamChunk(
+            type="message_delta",
+            usage={
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "reasoning_tokens": 50,
+                "cache_read_tokens": 300,
+                "cache_write_tokens": 100,
+            },
+        )
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    async def fake_get_model(cls, provider_id: str, model_id: str):
+        return ProcessedModelInfo(
+            id=model_id,
+            provider_id=provider_id,
+            name=model_id,
+            api_id=model_id,
+            cost={
+                "input": 1.0,
+                "output": 2.0,
+                "cache_read": 0.5,
+                "cache_write": 1.5,
+            },
+            limit=ModelLimit(context=128_000, output=4096),
+        )
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
+
+    session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
+    await SessionPrompt.prompt(
+        session_id=session.id,
+        content="hello",
+        provider_id="openai",
+        model_id="gpt-5",
+        agent="build",
+        cwd=str(tmp_path),
+        worktree=str(tmp_path),
+        resume_history=True,
+        auto_compaction=False,
+    )
+
+    structured = await Session.messages(session_id=session.id)
+    assistant = next(msg for msg in structured if msg.info.role == "assistant")
+    expected = (
+        (1000 * 1.0)
+        + (200 * 2.0)
+        + (300 * 0.5)
+        + (100 * 1.5)
+        + (50 * 2.0)
+    ) / 1_000_000
+    assert assistant.info.cost == pytest.approx(expected)
+    step_finish = next(part for part in assistant.parts if getattr(part, "type", "") == "step-finish")
+    assert step_finish.cost == pytest.approx(expected)
 
 
 @pytest.mark.anyio

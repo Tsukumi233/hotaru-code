@@ -460,6 +460,16 @@ class SessionScreen(Screen):
                         classes="message assistant-message",
                     )
                 )
+            elif part_type == "patch":
+                files = part.get("files")
+                file_count = len(files) if isinstance(files, list) else 0
+                await container.mount(
+                    AssistantTextPart(
+                        content=f"[Patch changed {file_count} file(s)]",
+                        part_id=f"history-{message.get('id', '')}-{idx}",
+                        classes="message assistant-message",
+                    )
+                )
 
     def _extract_text(self, message: Dict[str, Any]) -> str:
         parts = message.get("parts", [])

@@ -121,6 +121,18 @@ def _format_part(part: Dict[str, Any], options: TranscriptOptions) -> List[str]:
         lines.append("")
         return lines
 
+    if part_type == "patch":
+        files = part.get("files")
+        if not isinstance(files, list):
+            files = []
+        lines = [f"_Patch changed {len(files)} file(s)._"]
+        if options.tool_details and files:
+            lines.append("")
+            for item in files:
+                lines.append(f"- `{str(item)}`")
+        lines.append("")
+        return lines
+
     if part_type == "compaction":
         auto = bool(part.get("auto"))
         mode = "auto" if auto else "manual"

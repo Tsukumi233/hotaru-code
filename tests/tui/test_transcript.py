@@ -106,6 +106,11 @@ def test_transcript_supports_structured_tool_and_step_parts() -> None:
                     "reason": "stop",
                     "tokens": {"input": 20, "output": 8, "reasoning": 3},
                 },
+                {
+                    "type": "patch",
+                    "hash": "abc123",
+                    "files": ["/tmp/a.py", "/tmp/b.py"],
+                },
             ],
         },
     ]
@@ -121,3 +126,4 @@ def test_transcript_supports_structured_tool_and_step_parts() -> None:
     assert "**Tool: bash (completed)**" in transcript
     assert "pytest -q" in transcript
     assert "_Step finished: stop._" in transcript
+    assert "_Patch changed 2 file(s)._" in transcript

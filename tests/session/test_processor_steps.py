@@ -394,3 +394,41 @@ async def test_processor_can_continue_loop_on_deny_when_config_enabled(
     assert result.status == "continue"
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].status == "error"
+
+
+@pytest.mark.anyio
+async def test_processor_emits_reasoning_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="reasoning_start", reasoning_id="r1")
+        yield StreamChunk(type="reasoning_delta", reasoning_id="r1", reasoning_text="hello")
+        yield StreamChunk(type="reasoning_end", reasoning_id="r1")
+        yield StreamChunk(type="text", text="done")
+        yield StreamChunk(type="message_delta", stop_reason="stop")
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    processor = SessionProcessor(
+        session_id="ses_reasoning",
+        model_id="model",
+        provider_id="provider",
+        agent="build",
+        cwd="/tmp",
+        worktree="/tmp",
+    )
+
+    events: list[tuple[str, str]] = []
+    await processor.process_step(
+        on_reasoning_start=lambda rid, _meta: events.append(("start", str(rid))),
+        on_reasoning_delta=lambda rid, text, _meta: events.append(("delta", f"{rid}:{text}")),
+        on_reasoning_end=lambda rid, _meta: events.append(("end", str(rid))),
+    )
+
+    assert events[0] == ("start", "r1")
+    assert ("delta", "r1:hello") in events
+    assert events[-1] == ("end", "r1")

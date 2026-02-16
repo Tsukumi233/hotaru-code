@@ -140,6 +140,9 @@ class SessionProcessor:
         on_tool_start: Optional[callable] = None,
         on_tool_end: Optional[callable] = None,
         on_tool_update: Optional[callable] = None,
+        on_reasoning_start: Optional[callable] = None,
+        on_reasoning_delta: Optional[callable] = None,
+        on_reasoning_end: Optional[callable] = None,
     ) -> ProcessorResult:
         """Compatibility entrypoint that runs the full loop."""
         from ..core.context import ContextNotFoundError
@@ -164,6 +167,9 @@ class SessionProcessor:
                     on_tool_start=on_tool_start,
                     on_tool_end=on_tool_end,
                     on_tool_update=on_tool_update,
+                    on_reasoning_start=on_reasoning_start,
+                    on_reasoning_delta=on_reasoning_delta,
+                    on_reasoning_end=on_reasoning_end,
                 ),
             )
 
@@ -189,6 +195,9 @@ class SessionProcessor:
                 on_tool_start=on_tool_start,
                 on_tool_end=on_tool_end,
                 on_tool_update=on_tool_update,
+                on_reasoning_start=on_reasoning_start,
+                on_reasoning_delta=on_reasoning_delta,
+                on_reasoning_end=on_reasoning_end,
             )
             result.text += turn_result.text
             result.tool_calls.extend(turn_result.tool_calls)
@@ -223,6 +232,9 @@ class SessionProcessor:
         on_tool_start: Optional[callable] = None,
         on_tool_end: Optional[callable] = None,
         on_tool_update: Optional[callable] = None,
+        on_reasoning_start: Optional[callable] = None,
+        on_reasoning_delta: Optional[callable] = None,
+        on_reasoning_end: Optional[callable] = None,
         tool_definitions: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         retries: int = 0,
@@ -361,6 +373,9 @@ class SessionProcessor:
             on_tool_start=on_tool_start,
             on_tool_end=on_tool_end,
             on_tool_update=on_tool_update,
+            on_reasoning_start=on_reasoning_start,
+            on_reasoning_delta=on_reasoning_delta,
+            on_reasoning_end=on_reasoning_end,
             assistant_message_id=assistant_message_id,
         )
         if turn_result.error:
@@ -653,6 +668,9 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
         on_tool_start: Optional[callable] = None,
         on_tool_end: Optional[callable] = None,
         on_tool_update: Optional[callable] = None,
+        on_reasoning_start: Optional[callable] = None,
+        on_reasoning_delta: Optional[callable] = None,
+        on_reasoning_end: Optional[callable] = None,
         assistant_message_id: Optional[str] = None,
     ) -> ProcessorResult:
         """Process a single turn of the conversation.
@@ -663,6 +681,9 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
             on_tool_start: Callback when tool starts
             on_tool_end: Callback when tool ends
             on_tool_update: Callback when a tool state changes
+            on_reasoning_start: Callback when reasoning block starts
+            on_reasoning_delta: Callback when reasoning delta arrives
+            on_reasoning_end: Callback when reasoning block ends
 
         Returns:
             ProcessorResult for this turn
@@ -743,6 +764,31 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                         if blocked:
                             result.status = "stop"
                             break
+
+                elif chunk.type == "reasoning_start":
+                    if on_reasoning_start:
+                        await self._call_callback(
+                            on_reasoning_start,
+                            chunk.reasoning_id,
+                            dict(chunk.provider_metadata or {}),
+                        )
+
+                elif chunk.type == "reasoning_delta":
+                    if on_reasoning_delta:
+                        await self._call_callback(
+                            on_reasoning_delta,
+                            chunk.reasoning_id,
+                            str(chunk.reasoning_text or ""),
+                            dict(chunk.provider_metadata or {}),
+                        )
+
+                elif chunk.type == "reasoning_end":
+                    if on_reasoning_end:
+                        await self._call_callback(
+                            on_reasoning_end,
+                            chunk.reasoning_id,
+                            dict(chunk.provider_metadata or {}),
+                        )
 
                 elif chunk.type == "message_delta" and chunk.usage:
                     result.usage.update(chunk.usage)

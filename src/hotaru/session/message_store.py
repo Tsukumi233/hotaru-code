@@ -124,6 +124,12 @@ class StepFinishPart(PartBase):
     tokens: TokenUsage = Field(default_factory=TokenUsage)
 
 
+class PatchPart(PartBase):
+    type: Literal["patch"] = "patch"
+    hash: str
+    files: List[str] = Field(default_factory=list)
+
+
 class ToolStateTime(BaseModel):
     start: int
     end: Optional[int] = None
@@ -171,6 +177,7 @@ Part = Union[
     FilePart,
     StepStartPart,
     StepFinishPart,
+    PatchPart,
     CompactionPart,
     SubtaskPart,
 ]

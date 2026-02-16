@@ -19,6 +19,7 @@ from ..core.id import Identifier
 from ..project import Instance
 from ..provider import Provider
 from ..provider.provider import ProcessedModelInfo
+from ..snapshot import SnapshotTracker
 from ..tool.registry import ToolRegistry
 from ..util.log import Log
 from .compaction import SessionCompaction
@@ -27,8 +28,12 @@ from .message_store import (
     MessageInfo,
     MessageTime,
     ModelRef,
+    PatchPart,
     PartTime,
     PathInfo,
+    ReasoningPart,
+    StepFinishPart,
+    StepStartPart,
     TextPart,
     TokenUsage,
     ToolPart,
@@ -93,6 +98,44 @@ def _accumulate_usage(total: Dict[str, int], delta: Dict[str, int]) -> None:
         total[key] = int(total.get(key, 0) or 0) + int(value or 0)
 
 
+def _usage_cost(*, tokens: TokenUsage, model: Optional[ProcessedModelInfo]) -> float:
+    if not model:
+        return 0.0
+    pricing = model.cost
+    input_cost = float(tokens.input or 0) * float(pricing.input or 0) / 1_000_000
+    output_cost = float(tokens.output or 0) * float(pricing.output or 0) / 1_000_000
+    cache_read_cost = float(tokens.cache_read or 0) * float(pricing.cache_read or 0) / 1_000_000
+    cache_write_cost = float(tokens.cache_write or 0) * float(pricing.cache_write or 0) / 1_000_000
+    # Follow existing OpenCode behavior: reasoning billed with output rate.
+    reasoning_cost = float(tokens.reasoning or 0) * float(pricing.output or 0) / 1_000_000
+    return max(input_cost + output_cost + cache_read_cost + cache_write_cost + reasoning_cost, 0.0)
+
+
+def _step_finish_reason(step: ProcessorResult) -> str:
+    if step.stop_reason:
+        return str(step.stop_reason)
+    if step.error:
+        return "error"
+    if step.status == "continue":
+        if step.tool_calls:
+            return "tool-calls"
+        return "continue"
+    if step.status in {"stop", "error"}:
+        return step.status
+    return "unknown"
+
+
+def _normalize_finish_reason(reason: Optional[str]) -> Optional[str]:
+    if not reason:
+        return None
+    value = str(reason).strip().lower()
+    if value in {"tool_calls", "tool-call", "tool_call", "tool-calls"}:
+        return "tool-calls"
+    if value in {"stop", "length", "content_filter", "unknown"}:
+        return value
+    return "unknown"
+
+
 async def _latest_user_id(session_id: str) -> Optional[str]:
     structured = await Session.messages(session_id=session_id)
     for msg in reversed(structured):
@@ -155,11 +198,13 @@ async def _persist_assistant_message(
     summary: bool = False,
     error: Optional[str] = None,
     structured_output: Optional[Any] = None,
+    cost: float = 0.0,
+    finish_reason: Optional[str] = None,
 ) -> None:
     now = _now_ms()
     tokens_structured = _usage_to_tokens(usage)
 
-    finish = "tool-calls" if tool_calls else "stop"
+    finish = _normalize_finish_reason(finish_reason) or ("tool-calls" if tool_calls else "stop")
     if error:
         finish = "unknown"
     await Session.update_message(
@@ -174,6 +219,7 @@ async def _persist_assistant_message(
             time=MessageTime(created=now, completed=now),
             finish=finish,
             error={"message": error} if error else None,
+            cost=float(cost or 0.0),
             tokens=tokens_structured,
             path=PathInfo(cwd=cwd, root=worktree),
             summary=True if summary else None,
@@ -393,12 +439,11 @@ class SessionPrompt:
         current_user_id = user_message_id or await _latest_user_id(session_id)
 
         main_model: Optional[ProcessedModelInfo] = None
-        if auto_compaction:
-            try:
-                main_model = await Provider.get_model(provider_id, model_id)
-            except Exception as e:
-                log.warn("failed to resolve model for compaction checks", {"error": str(e)})
-                main_model = None
+        try:
+            main_model = await Provider.get_model(provider_id, model_id)
+        except Exception as e:
+            log.warn("failed to resolve model for usage/cost checks", {"error": str(e)})
+            main_model = None
 
         while aggregate.status == "continue":
             pending_compaction = await cls._pending_compaction(session_id=session_id)
@@ -443,7 +488,12 @@ class SessionPrompt:
             if output_format and output_format.get("type") == "json_schema":
                 tool_choice = "required"
 
-            step = await processor.process_step(
+            step, step_tokens, step_cost = await cls._process_step_with_tracking(
+                processor=processor,
+                session_id=session_id,
+                model_info=main_model,
+                cwd=cwd,
+                worktree=worktree,
                 system_prompt=system_prompt,
                 on_text=on_text,
                 on_tool_start=on_tool_start,
@@ -473,6 +523,8 @@ class SessionPrompt:
                 mode=assistant_agent,
                 error=step.error,
                 structured_output=step.structured_output,
+                cost=step_cost,
+                finish_reason=step.stop_reason,
             )
             final_assistant_id = assistant_id_for_turn
 
@@ -507,7 +559,7 @@ class SessionPrompt:
             if auto_compaction and main_model is not None:
                 try:
                     should_compact = await SessionCompaction.is_overflow(
-                        tokens=_usage_to_tokens(step.usage),
+                        tokens=step_tokens,
                         model=main_model,
                     )
                 except Exception as e:
@@ -554,6 +606,228 @@ class SessionPrompt:
             user_message_id=str(user_message_id or ""),
             text=aggregate.text,
         )
+
+    @classmethod
+    async def _process_step_with_tracking(
+        cls,
+        *,
+        processor: SessionProcessor,
+        session_id: str,
+        model_info: Optional[ProcessedModelInfo],
+        cwd: str,
+        worktree: str,
+        system_prompt: Optional[str],
+        on_text: Optional[Callable[..., Any]],
+        on_tool_start: Optional[Callable[..., Any]],
+        on_tool_end: Optional[Callable[..., Any]],
+        on_tool_update: Optional[Callable[..., Any]],
+        tool_definitions: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Dict[str, Any] | str] = None,
+        retries: int = 0,
+        assistant_message_id: str,
+    ) -> tuple[ProcessorResult, TokenUsage, float]:
+        step_start_snapshot: Optional[str] = None
+        try:
+            step_start_snapshot = await SnapshotTracker.track(
+                session_id=session_id,
+                cwd=cwd,
+                worktree=worktree,
+            )
+        except Exception as e:
+            log.debug("step snapshot start failed", {"error": str(e)})
+
+        try:
+            await Session.update_part(
+                StepStartPart(
+                    id=Identifier.ascending("part"),
+                    session_id=session_id,
+                    message_id=assistant_message_id,
+                    snapshot=step_start_snapshot,
+                )
+            )
+        except Exception as e:
+            log.debug("failed to persist step-start", {"error": str(e)})
+
+        reasoning_parts: Dict[str, Dict[str, Any]] = {}
+        fallback_index = 0
+        anonymous_reasoning_key: Optional[str] = None
+
+        def _reasoning_key(raw_id: Optional[str], *, create: bool = True) -> str:
+            nonlocal fallback_index
+            nonlocal anonymous_reasoning_key
+            value = str(raw_id or "").strip()
+            if value:
+                return value
+            if anonymous_reasoning_key:
+                return anonymous_reasoning_key
+            if not create:
+                return ""
+            fallback_index += 1
+            anonymous_reasoning_key = f"reasoning_{fallback_index}"
+            return anonymous_reasoning_key
+
+        async def _close_reasoning(reasoning_id: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+            nonlocal anonymous_reasoning_key
+            state = reasoning_parts.get(reasoning_id)
+            if not state:
+                return
+            if state.get("closed"):
+                return
+            state["closed"] = True
+            if isinstance(metadata, dict) and metadata:
+                state["metadata"] = dict(metadata)
+            now = _now_ms()
+            try:
+                await Session.update_part(
+                    ReasoningPart(
+                        id=state["part_id"],
+                        session_id=session_id,
+                        message_id=assistant_message_id,
+                        text=str(state.get("text", "")).rstrip(),
+                        time=PartTime(
+                            start=int(state.get("start") or now),
+                            end=now,
+                        ),
+                        metadata=dict(state.get("metadata") or {}) or None,
+                    )
+                )
+            except Exception as e:
+                log.debug("failed to close reasoning part", {"error": str(e)})
+            if reasoning_id == anonymous_reasoning_key:
+                anonymous_reasoning_key = None
+
+        async def _on_reasoning_start(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> None:
+            key = _reasoning_key(reasoning_id)
+            if key in reasoning_parts:
+                return
+            now = _now_ms()
+            state = {
+                "part_id": Identifier.ascending("part"),
+                "text": "",
+                "start": now,
+                "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
+                "closed": False,
+            }
+            reasoning_parts[key] = state
+            try:
+                await Session.update_part(
+                    ReasoningPart(
+                        id=state["part_id"],
+                        session_id=session_id,
+                        message_id=assistant_message_id,
+                        text="",
+                        time=PartTime(start=now),
+                        metadata=dict(state["metadata"] or {}) or None,
+                    )
+                )
+            except Exception as e:
+                log.debug("failed to persist reasoning start", {"error": str(e)})
+
+        async def _on_reasoning_delta(
+            reasoning_id: Optional[str],
+            delta: str,
+            metadata: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            key = _reasoning_key(reasoning_id)
+            if key not in reasoning_parts:
+                await _on_reasoning_start(reasoning_id=key, metadata=metadata)
+            state = reasoning_parts.get(key)
+            if not state:
+                return
+            if isinstance(metadata, dict) and metadata:
+                state["metadata"] = dict(metadata)
+            piece = str(delta or "")
+            if not piece:
+                return
+            state["text"] = str(state.get("text", "")) + piece
+            try:
+                await Session.update_part_delta(
+                    session_id=session_id,
+                    message_id=assistant_message_id,
+                    part_id=state["part_id"],
+                    field="text",
+                    delta=piece,
+                )
+            except Exception as e:
+                log.debug("failed to persist reasoning delta", {"error": str(e)})
+
+        async def _on_reasoning_end(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> None:
+            key = _reasoning_key(reasoning_id, create=False)
+            if not key:
+                return
+            await _close_reasoning(key, metadata=metadata)
+
+        try:
+            step = await processor.process_step(
+                system_prompt=system_prompt,
+                on_text=on_text,
+                on_tool_start=on_tool_start,
+                on_tool_end=on_tool_end,
+                on_tool_update=on_tool_update,
+                on_reasoning_start=_on_reasoning_start,
+                on_reasoning_delta=_on_reasoning_delta,
+                on_reasoning_end=_on_reasoning_end,
+                tool_definitions=tool_definitions,
+                tool_choice=tool_choice,
+                retries=retries,
+                assistant_message_id=assistant_message_id,
+            )
+        except Exception as e:
+            log.error("step processing failed", {"error": str(e)})
+            step = ProcessorResult(status="error", error=str(e))
+
+        for rid in list(reasoning_parts.keys()):
+            await _close_reasoning(rid)
+
+        tokens = _usage_to_tokens(step.usage)
+        cost = _usage_cost(tokens=tokens, model=model_info)
+        step_end_snapshot: Optional[str] = None
+        try:
+            step_end_snapshot = await SnapshotTracker.track(
+                session_id=session_id,
+                cwd=cwd,
+                worktree=worktree,
+            )
+        except Exception as e:
+            log.debug("step snapshot end failed", {"error": str(e)})
+
+        try:
+            await Session.update_part(
+                StepFinishPart(
+                    id=Identifier.ascending("part"),
+                    session_id=session_id,
+                    message_id=assistant_message_id,
+                    reason=_step_finish_reason(step),
+                    snapshot=step_end_snapshot,
+                    cost=cost,
+                    tokens=tokens,
+                )
+            )
+        except Exception as e:
+            log.debug("failed to persist step-finish", {"error": str(e)})
+
+        if step_start_snapshot:
+            try:
+                patch = await SnapshotTracker.patch(
+                    session_id=session_id,
+                    base_hash=step_start_snapshot,
+                    cwd=cwd,
+                    worktree=worktree,
+                )
+                if patch.files:
+                    await Session.update_part(
+                        PatchPart(
+                            id=Identifier.ascending("part"),
+                            session_id=session_id,
+                            message_id=assistant_message_id,
+                            hash=patch.hash,
+                            files=patch.files,
+                        )
+                    )
+            except Exception as e:
+                log.debug("failed to persist step patch", {"error": str(e)})
+
+        return step, tokens, cost
 
     @classmethod
     async def resolve_tools(
@@ -699,12 +973,26 @@ class SessionPrompt:
         )
         compact_processor.messages = list(processor.messages)
 
+        compact_model: Optional[ProcessedModelInfo] = None
+        try:
+            compact_model = await Provider.get_model(compact_provider_id, compact_model_id)
+        except Exception as e:
+            log.warn("failed to resolve compaction model for usage/cost", {"error": str(e)})
+            compact_model = None
+
         summary_id = Identifier.ascending("message")
-        result = await compact_processor.process_step(
+        result, _tokens, step_cost = await cls._process_step_with_tracking(
+            processor=compact_processor,
+            session_id=session_id,
+            model_info=compact_model,
+            cwd=cwd,
+            worktree=worktree,
             system_prompt=compact_system_prompt,
             on_text=None,
             on_tool_start=None,
             on_tool_end=None,
+            on_tool_update=None,
+            retries=0,
             assistant_message_id=summary_id,
         )
 
@@ -723,6 +1011,8 @@ class SessionPrompt:
             mode="compaction",
             summary=True,
             error=result.error,
+            cost=step_cost,
+            finish_reason=result.stop_reason,
         )
 
         if result.error:
