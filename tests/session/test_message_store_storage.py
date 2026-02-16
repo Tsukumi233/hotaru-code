@@ -8,6 +8,8 @@ from hotaru.session.message_store import (
     CompactionPart,
     MessageInfo,
     MessageTime,
+    PartTime,
+    ReasoningPart,
     TextPart,
     ToolPart,
     ToolState,
@@ -215,3 +217,31 @@ def test_to_model_messages_compacted_tool_result_uses_placeholder() -> None:
     assert model_messages[1]["role"] == "assistant"
     assert model_messages[2]["role"] == "tool"
     assert model_messages[2]["content"] == "[Old tool result content cleared]"
+
+
+def test_to_model_messages_includes_interleaved_reasoning_field() -> None:
+    messages = [
+        WithParts(
+            info=MessageInfo(id="m1", session_id="s1", role="assistant", time=MessageTime(created=1)),
+            parts=[
+                ReasoningPart(
+                    id="p1",
+                    session_id="s1",
+                    message_id="m1",
+                    text="reasoning path",
+                    time=PartTime(start=1, end=2),
+                ),
+                TextPart(
+                    id="p2",
+                    session_id="s1",
+                    message_id="m1",
+                    text="final text",
+                ),
+            ],
+        )
+    ]
+
+    model_messages = to_model_messages(messages, interleaved_field="reasoning_content")
+    assert model_messages[0]["role"] == "assistant"
+    assert model_messages[0]["content"] == "final text"
+    assert model_messages[0]["reasoning_content"] == "reasoning path"

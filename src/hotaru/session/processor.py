@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Union
 from ..core.id import Identifier
 from ..permission import RejectedError, CorrectedError, DeniedError
 from ..question.question import RejectedError as QuestionRejectedError
+from ..provider.transform import ProviderTransform
 from ..tool import ToolContext
 from ..tool.registry import ToolRegistry
 from ..util.log import Log
@@ -54,6 +55,7 @@ class ProcessorResult:
     usage: Dict[str, int] = field(default_factory=dict)
     stop_reason: Optional[str] = None
     structured_output: Optional[Any] = None
+    reasoning_text: str = ""
 
 
 class SessionProcessor:
@@ -105,6 +107,8 @@ class SessionProcessor:
         self._allowed_tools: Optional[Set[str]] = None
         self._structured_output: Optional[Any] = None
         self._continue_loop_on_deny = False
+        self._interleaved_field: Optional[str] = None
+        self._interleaved_field_resolved: bool = False
 
     async def load_history(self) -> None:
         """Load prior conversation history from persisted messages.
@@ -118,7 +122,8 @@ class SessionProcessor:
 
         stored_structured = await Session.messages(session_id=self.session_id)
         filtered = filter_compacted(stored_structured)
-        self.messages = to_model_messages(filtered)
+        interleaved_field = await self._resolve_interleaved_field()
+        self.messages = to_model_messages(filtered, interleaved_field=interleaved_field)
 
         for msg in reversed(filtered):
             if msg.info.role != "assistant":
@@ -131,6 +136,22 @@ class SessionProcessor:
             "message_count": len(self.messages),
             "source": "message_store",
         })
+
+    async def _resolve_interleaved_field(self) -> Optional[str]:
+        """Resolve interleaved reasoning field from the active model."""
+        if self._interleaved_field_resolved:
+            return self._interleaved_field
+
+        self._interleaved_field_resolved = True
+        try:
+            from ..provider import Provider
+
+            model = await Provider.get_model(self.provider_id, self.model_id)
+            self._interleaved_field = ProviderTransform.interleaved_field(model)
+        except Exception as e:
+            self._interleaved_field = None
+            log.debug("failed to resolve interleaved field", {"error": str(e)})
+        return self._interleaved_field
 
     async def process(
         self,
@@ -365,6 +386,7 @@ class SessionProcessor:
             temperature=agent_info.temperature if agent_info else None,
             top_p=agent_info.top_p if agent_info else None,
             options=(agent_info.options or None) if agent_info else None,
+            variant=agent_info.variant if agent_info else None,
         )
 
         turn_result = await self._process_turn(
@@ -393,6 +415,10 @@ class SessionProcessor:
             turn_result.status = "stop"
             return turn_result
 
+        interleaved_field: Optional[str] = None
+        if turn_result.reasoning_text:
+            interleaved_field = await self._resolve_interleaved_field()
+
         assistant_message: Dict[str, Any] = {"role": "assistant"}
         assistant_message["content"] = turn_result.text if turn_result.text else None
         assistant_message["tool_calls"] = [
@@ -403,6 +429,8 @@ class SessionProcessor:
             }
             for tc in turn_result.tool_calls
         ]
+        if interleaved_field and turn_result.reasoning_text:
+            assistant_message[interleaved_field] = turn_result.reasoning_text
         self.messages.append(assistant_message)
 
         for tc in turn_result.tool_calls:
@@ -691,6 +719,7 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
         result = ProcessorResult(status="continue")
         current_tool_calls: Dict[str, ToolCallState] = {}
         blocked = False
+        reasoning_fragments: List[str] = []
 
         try:
             async for chunk in LLM.stream(stream_input):
@@ -774,11 +803,14 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
                         )
 
                 elif chunk.type == "reasoning_delta":
+                    piece = str(chunk.reasoning_text or "")
+                    if piece:
+                        reasoning_fragments.append(piece)
                     if on_reasoning_delta:
                         await self._call_callback(
                             on_reasoning_delta,
                             chunk.reasoning_id,
-                            str(chunk.reasoning_text or ""),
+                            piece,
                             dict(chunk.provider_metadata or {}),
                         )
 
@@ -807,6 +839,7 @@ NOTE: Ask questions whenever intent is unclear. Avoid large assumptions.
             result.status = "error"
             result.error = str(e)
 
+        result.reasoning_text = "".join(reasoning_fragments)
         return result
 
     async def _execute_tool(

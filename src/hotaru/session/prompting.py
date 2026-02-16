@@ -19,6 +19,7 @@ from ..core.id import Identifier
 from ..project import Instance
 from ..provider import Provider
 from ..provider.provider import ProcessedModelInfo
+from ..provider.transform import ProviderTransform
 from ..snapshot import SnapshotTracker
 from ..tool.registry import ToolRegistry
 from ..util.log import Log
@@ -439,11 +440,14 @@ class SessionPrompt:
         current_user_id = user_message_id or await _latest_user_id(session_id)
 
         main_model: Optional[ProcessedModelInfo] = None
+        main_interleaved_field: Optional[str] = None
         try:
             main_model = await Provider.get_model(provider_id, model_id)
+            main_interleaved_field = ProviderTransform.interleaved_field(main_model)
         except Exception as e:
             log.warn("failed to resolve model for usage/cost checks", {"error": str(e)})
             main_model = None
+            main_interleaved_field = None
 
         while aggregate.status == "continue":
             pending_compaction = await cls._pending_compaction(session_id=session_id)
@@ -530,7 +534,10 @@ class SessionPrompt:
 
             # process_step persists assistant/tool records in-memory only when tools were called.
             if not step.tool_calls:
-                processor.messages.append({"role": "assistant", "content": step.text or None})
+                assistant_message: Dict[str, Any] = {"role": "assistant", "content": step.text or None}
+                if main_interleaved_field and step.reasoning_text:
+                    assistant_message[main_interleaved_field] = step.reasoning_text
+                processor.messages.append(assistant_message)
 
             aggregate.text += step.text
             aggregate.tool_calls.extend(step.tool_calls)

@@ -3,7 +3,12 @@ from types import SimpleNamespace
 import pytest
 from textual.widgets import ListView
 
-from hotaru.tui.app import _parse_model_ids, _validate_base_url, _validate_provider_id
+from hotaru.tui.app import (
+    _parse_model_ids,
+    _resolve_provider_preset,
+    _validate_base_url,
+    _validate_provider_id,
+)
 from hotaru.tui.dialogs import ModelSelectDialog
 
 
@@ -70,3 +75,12 @@ def test_parse_model_ids_rejects_whitespace_and_deduplicates() -> None:
     ]
     with pytest.raises(ValueError):
         _parse_model_ids("claude sonnet-4.5")
+
+
+def test_moonshot_provider_preset_defaults() -> None:
+    preset = _resolve_provider_preset("moonshot")
+    assert preset is not None
+    assert preset.provider_type == "openai"
+    assert preset.provider_id == "moonshot"
+    assert preset.base_url == "https://api.moonshot.cn/v1"
+    assert preset.default_models == "kimi-k2.5"

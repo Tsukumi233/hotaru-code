@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..core.config import ConfigManager, ProviderConfig
 from ..util.log import Log
 from .auth import ProviderAuth
+from .transform import ProviderTransform
 from .models import (
     ModelCapabilities,
     ModelCost,
@@ -138,7 +139,7 @@ def _process_model(provider: ProviderDef, model: ModelInfo) -> ProcessedModelInf
     # Determine API type from provider ID
     api_type = "anthropic" if provider.id == "anthropic" else "openai"
 
-    return ProcessedModelInfo(
+    processed = ProcessedModelInfo(
         id=model.id,
         provider_id=provider.id,
         name=model.name,
@@ -155,6 +156,12 @@ def _process_model(provider: ProviderDef, model: ModelInfo) -> ProcessedModelInf
         headers=model.headers or {},
         variants=model.variants or {},
     )
+    generated_variants = ProviderTransform.variants(processed)
+    if generated_variants:
+        merged = dict(generated_variants)
+        merged.update(processed.variants)
+        processed.variants = merged
+    return processed
 
 
 def _process_provider(provider_def: ProviderDef) -> ProviderInfo:
@@ -203,7 +210,7 @@ def _create_custom_provider(provider_id: str, config: ProviderConfig) -> Optiona
         model_options = model_config.options if model_config else {}
         model_headers = model_config.headers if model_config else {}
 
-        models[model_id] = ProcessedModelInfo(
+        processed = ProcessedModelInfo(
             id=model_id,
             provider_id=provider_id,
             name=model_name or model_id,
@@ -228,6 +235,12 @@ def _create_custom_provider(provider_id: str, config: ProviderConfig) -> Optiona
             options=model_options or {},
             headers={**headers, **(model_headers or {})},
         )
+        generated_variants = ProviderTransform.variants(processed)
+        if generated_variants:
+            merged = dict(generated_variants)
+            merged.update(processed.variants)
+            processed.variants = merged
+        models[model_id] = processed
 
     # Determine env var name for API key
     env_var = f"{provider_id.upper().replace('-', '_')}_API_KEY"

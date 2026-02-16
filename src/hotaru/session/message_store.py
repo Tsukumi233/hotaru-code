@@ -205,7 +205,19 @@ def _openai_text_from_parts(parts: Sequence[Part]) -> str:
     return "".join(chunks)
 
 
-def to_openai_messages(messages: Iterable[WithParts]) -> List[Dict[str, Any]]:
+def _reasoning_text_from_parts(parts: Sequence[Part]) -> str:
+    chunks: List[str] = []
+    for part in parts:
+        if isinstance(part, ReasoningPart) and part.text:
+            chunks.append(part.text)
+    return "".join(chunks)
+
+
+def to_openai_messages(
+    messages: Iterable[WithParts],
+    *,
+    interleaved_field: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Convert stored structured messages to OpenAI-compatible chat messages.
 
     This is used for providers that accept OpenAI Chat Completions style.
@@ -228,6 +240,10 @@ def to_openai_messages(messages: Iterable[WithParts]) -> List[Dict[str, Any]]:
         if role == "assistant":
             content = _openai_text_from_parts(msg.parts) or None
             assistant: Dict[str, Any] = {"role": "assistant", "content": content}
+            if interleaved_field:
+                reasoning_text = _reasoning_text_from_parts(msg.parts)
+                if reasoning_text:
+                    assistant[interleaved_field] = reasoning_text
 
             # Represent tool calls as OpenAI tool_calls field (if any tool parts exist).
             tool_calls: List[Dict[str, Any]] = []
@@ -289,9 +305,13 @@ def to_openai_messages(messages: Iterable[WithParts]) -> List[Dict[str, Any]]:
     return out
 
 
-def to_model_messages(messages: Iterable[WithParts]) -> List[Dict[str, Any]]:
+def to_model_messages(
+    messages: Iterable[WithParts],
+    *,
+    interleaved_field: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Alias used by the session loop when building provider input messages."""
-    return to_openai_messages(messages)
+    return to_openai_messages(messages, interleaved_field=interleaved_field)
 
 
 def filter_compacted(messages: Sequence[WithParts]) -> List[WithParts]:

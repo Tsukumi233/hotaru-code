@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from hotaru.agent.agent import AgentInfo, AgentMode
 from hotaru.permission import RejectedError
 from hotaru.project import Instance
+from hotaru.provider.models import ModelCapabilities
+from hotaru.provider.provider import ProcessedModelInfo
 from hotaru.provider.sdk.anthropic import ToolCall
 from hotaru.session.llm import LLM, StreamChunk
 from hotaru.session.processor import SessionProcessor
@@ -432,3 +434,61 @@ async def test_processor_emits_reasoning_callbacks(
     assert events[0] == ("start", "r1")
     assert ("delta", "r1:hello") in events
     assert events[-1] == ("end", "r1")
+
+
+@pytest.mark.anyio
+async def test_processor_includes_interleaved_reasoning_in_assistant_tool_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="reasoning_start", reasoning_id="r1")
+        yield StreamChunk(type="reasoning_delta", reasoning_id="r1", reasoning_text="plan step")
+        yield StreamChunk(type="reasoning_end", reasoning_id="r1")
+        yield StreamChunk(type="tool_call_start", tool_call_id="call_1", tool_call_name="unknown_tool")
+        yield StreamChunk(
+            type="tool_call_end",
+            tool_call=ToolCall(id="call_1", name="unknown_tool", input={}),
+        )
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    async def fake_get_model(cls, provider_id: str, model_id: str):
+        capabilities = ModelCapabilities()
+        capabilities.interleaved = {"field": "reasoning_content"}
+        return ProcessedModelInfo(
+            id=model_id,
+            provider_id=provider_id,
+            name=model_id,
+            api_id=model_id,
+            capabilities=capabilities,
+        )
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
+
+    processor = SessionProcessor(
+        session_id="ses_reasoning_tools",
+        model_id="model",
+        provider_id="provider",
+        agent="build",
+        cwd="/tmp",
+        worktree="/tmp",
+    )
+
+    await processor.process_step(
+        tool_definitions=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "unknown_tool",
+                    "description": "Unknown tool for failure path",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    assistant = next(msg for msg in processor.messages if msg.get("role") == "assistant")
+    assert assistant["reasoning_content"] == "plan step"

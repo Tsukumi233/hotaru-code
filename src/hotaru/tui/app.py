@@ -8,6 +8,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer
 from textual.command import CommandPalette, Provider, Hit, Hits
+from dataclasses import dataclass
 from copy import deepcopy
 from pathlib import Path
 import re
@@ -35,6 +36,28 @@ from ..command import render_init_prompt, publish_command_executed
 log = Log.create({"service": "tui.app"})
 
 _PROVIDER_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
+
+
+@dataclass(frozen=True)
+class _ProviderPreset:
+    preset_id: str
+    provider_type: str
+    provider_id: str
+    provider_name: str
+    base_url: str
+    default_models: str
+
+
+_PROVIDER_PRESETS: Dict[str, _ProviderPreset] = {
+    "moonshot": _ProviderPreset(
+        preset_id="moonshot",
+        provider_type="openai",
+        provider_id="moonshot",
+        provider_name="Moonshot",
+        base_url="https://api.moonshot.cn/v1",
+        default_models="kimi-k2.5",
+    ),
+}
 
 
 def _validate_provider_id(value: str) -> str:
@@ -75,6 +98,10 @@ def _parse_model_ids(value: str) -> List[str]:
     if not model_ids:
         raise ValueError("Please provide at least one model ID.")
     return model_ids
+
+
+def _resolve_provider_preset(preset_id: str) -> Optional[_ProviderPreset]:
+    return _PROVIDER_PRESETS.get(str(preset_id or "").strip().lower())
 
 
 class HotaruCommandProvider(Provider):
@@ -951,56 +978,86 @@ class TuiApp(App):
         from ..provider.auth import ProviderAuth
         from .dialogs import InputDialog, SelectDialog
 
-        provider_type = await self.push_screen_wait(
+        preset_choice = await self.push_screen_wait(
             SelectDialog(
-                title="Provider protocol",
+                title="Provider preset",
                 options=[
-                    ("OpenAI-compatible API", "openai"),
-                    ("Anthropic-compatible API", "anthropic"),
+                    ("Moonshot (Kimi)", "moonshot"),
+                    ("Custom provider", "custom"),
                 ],
             )
         )
-        if provider_type is None:
+        if preset_choice is None:
             return
 
-        provider_id = await self.push_screen_wait(
-            InputDialog(
-                title="Provider ID",
-                placeholder="my-provider",
-                submit_label="Next",
+        preset = _resolve_provider_preset(str(preset_choice))
+        using_preset = preset is not None
+
+        if preset:
+            provider_type = preset.provider_type
+            provider_id = preset.provider_id
+            provider_name = preset.provider_name
+            base_url = preset.base_url
+            default_models = preset.default_models
+        else:
+            provider_type = await self.push_screen_wait(
+                SelectDialog(
+                    title="Provider protocol",
+                    options=[
+                        ("OpenAI-compatible API", "openai"),
+                        ("Anthropic-compatible API", "anthropic"),
+                    ],
+                )
             )
-        )
-        if provider_id is None:
-            return
+            if provider_type is None:
+                return
+
+            provider_id_raw = await self.push_screen_wait(
+                InputDialog(
+                    title="Provider ID",
+                    placeholder="my-provider",
+                    submit_label="Next",
+                )
+            )
+            if provider_id_raw is None:
+                return
+            try:
+                provider_id = _validate_provider_id(str(provider_id_raw))
+            except ValueError as exc:
+                self.notify(str(exc), severity="error")
+                return
+
+            provider_name_raw = await self.push_screen_wait(
+                InputDialog(
+                    title="Provider display name",
+                    placeholder="Optional (defaults to provider ID)",
+                    default_value=provider_id,
+                    submit_label="Next",
+                )
+            )
+            if provider_name_raw is None:
+                return
+            provider_name = provider_name_raw.strip() or provider_id
+
+            base_url_raw = await self.push_screen_wait(
+                InputDialog(
+                    title="Base URL",
+                    placeholder="https://api.example.com/v1",
+                    submit_label="Next",
+                )
+            )
+            if base_url_raw is None:
+                return
+            try:
+                base_url = _validate_base_url(str(base_url_raw))
+            except ValueError as exc:
+                self.notify(str(exc), severity="error")
+                return
+            default_models = ""
+
         try:
-            provider_id = _validate_provider_id(str(provider_id))
-        except ValueError as exc:
-            self.notify(str(exc), severity="error")
-            return
-
-        provider_name = await self.push_screen_wait(
-            InputDialog(
-                title="Provider display name",
-                placeholder="Optional (defaults to provider ID)",
-                default_value=provider_id,
-                submit_label="Next",
-            )
-        )
-        if provider_name is None:
-            return
-        provider_name = provider_name.strip() or provider_id
-
-        base_url = await self.push_screen_wait(
-            InputDialog(
-                title="Base URL",
-                placeholder="https://api.example.com/v1",
-                submit_label="Next",
-            )
-        )
-        if base_url is None:
-            return
-        try:
-            base_url = _validate_base_url(str(base_url))
+            provider_id = _validate_provider_id(provider_id)
+            base_url = _validate_base_url(base_url)
         except ValueError as exc:
             self.notify(str(exc), severity="error")
             return
@@ -1024,6 +1081,7 @@ class TuiApp(App):
             InputDialog(
                 title="Model IDs",
                 placeholder="gpt-4o-mini, claude-sonnet-4-5",
+                default_value=default_models,
                 submit_label="Connect",
             )
         )
@@ -1064,7 +1122,10 @@ class TuiApp(App):
             self.notify(f"Failed to connect provider: {exc}", severity="error")
             return
 
-        self.notify(f"Connected provider '{provider_id}'.")
+        if using_preset:
+            self.notify(f"Connected provider '{provider_id}' via preset.")
+        else:
+            self.notify(f"Connected provider '{provider_id}'.")
         self.action_model_list(provider_filter=provider_id)
 
     def action_agent_list(self) -> None:

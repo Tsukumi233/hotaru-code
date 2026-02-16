@@ -4,6 +4,7 @@ from .models import ModelsDev, ModelInfo, ModelCost, ModelLimit, ModelCapabiliti
 from .auth import ProviderAuth
 from .provider import Provider, ProviderInfo, ModelNotFoundError
 from .transform import (
+    ProviderTransform,
     anthropic_messages,
     anthropic_tools,
     apply_cache_controls,
@@ -22,6 +23,7 @@ __all__ = [
     "Provider",
     "ProviderInfo",
     "ModelNotFoundError",
+    "ProviderTransform",
     "anthropic_messages",
     "anthropic_tools",
     "normalize_tool_call_id",

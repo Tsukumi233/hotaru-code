@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Union
 
 from ..provider import Provider
-from ..provider.transform import anthropic_messages, anthropic_tools, normalize_messages
+from ..provider.transform import ProviderTransform
 from ..provider.sdk.anthropic import AnthropicSDK, ToolCall
 from ..provider.sdk.openai import OpenAISDK
 from ..util.log import Log
@@ -48,6 +48,7 @@ class StreamInput:
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     options: Optional[Dict[str, Any]] = None
+    variant: Optional[str] = None
 
 
 @dataclass
@@ -57,6 +58,22 @@ class StreamResult:
     tool_calls: List[ToolCall] = field(default_factory=list)
     usage: Dict[str, int] = field(default_factory=dict)
     stop_reason: Optional[str] = None
+
+
+@dataclass
+class _PreparedStreamRequest:
+    """Prepared provider request payload."""
+
+    model_api_id: str
+    base_url: Optional[str]
+    api_type: str
+    messages: List[Dict[str, Any]]
+    tools: Optional[List[Dict[str, Any]]]
+    system: Optional[str]
+    options: Optional[Dict[str, Any]]
+    max_tokens: int
+    temperature: Optional[float]
+    top_p: Optional[float]
 
 
 class LLM:
@@ -130,6 +147,106 @@ class LLM:
         return None
 
     @classmethod
+    def _deep_merge(cls, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        merged: Dict[str, Any] = dict(base)
+        for key, value in override.items():
+            if (
+                isinstance(value, dict)
+                and isinstance(merged.get(key), dict)
+            ):
+                merged[key] = cls._deep_merge(dict(merged[key]), value)
+            else:
+                merged[key] = value
+        return merged
+
+    @classmethod
+    def _merge_options(cls, *parts: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            merged = cls._deep_merge(merged, part)
+        return merged
+
+    @classmethod
+    def _prepare_request(
+        cls,
+        *,
+        stream_input: StreamInput,
+        provider: Any,
+        model: Any,
+        api_type: str,
+    ) -> _PreparedStreamRequest:
+        tools = cls._tool_list(stream_input.tools)
+        messages = ProviderTransform.message(
+            stream_input.messages,
+            model=model,
+            provider_id=stream_input.provider_id,
+            model_id=stream_input.model_id,
+            api_type=api_type,
+            provider_options=provider.options,
+        )
+
+        base_options = ProviderTransform.options(
+            model=model,
+            session_id=stream_input.session_id,
+            provider_options=provider.options,
+        )
+        variant_options = ProviderTransform.resolve_variant(
+            model=model,
+            variant=stream_input.variant,
+        )
+
+        merged_options = cls._merge_options(
+            base_options,
+            getattr(model, "options", None),
+            variant_options,
+            stream_input.options,
+        )
+
+        max_tokens = int(stream_input.max_tokens or 0)
+        if max_tokens <= 0:
+            from_options = merged_options.pop("max_tokens", None)
+            if isinstance(from_options, int) and from_options > 0:
+                max_tokens = from_options
+        if max_tokens <= 0:
+            max_tokens = ProviderTransform.max_output_tokens(model)
+
+        temperature = stream_input.temperature
+        if temperature is None:
+            from_options = merged_options.pop("temperature", None)
+            if isinstance(from_options, (int, float)):
+                temperature = float(from_options)
+        if temperature is None:
+            temperature = ProviderTransform.temperature(model)
+
+        top_p = stream_input.top_p
+        if top_p is None:
+            from_options = merged_options.pop("top_p", None)
+            if isinstance(from_options, (int, float)):
+                top_p = float(from_options)
+        if top_p is None:
+            top_p = ProviderTransform.top_p(model)
+
+        # OpenAI-compatible backends may accept top_k as an option-only field.
+        top_k = ProviderTransform.top_k(model)
+        if top_k is not None and "top_k" not in merged_options:
+            merged_options["top_k"] = top_k
+
+        return _PreparedStreamRequest(
+            model_api_id=model.api_id,
+            base_url=model.api_url or provider.options.get("baseURL"),
+            api_type=api_type,
+            messages=messages,
+            tools=tools,
+            system=cls._join_system_prompt(stream_input.system),
+            options=merged_options or None,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
+
+    @classmethod
     async def stream(cls, input: StreamInput) -> AsyncIterator[StreamChunk]:
         """Stream a chat completion.
 
@@ -167,38 +284,34 @@ class LLM:
             "session_id": input.session_id,
         })
 
-        # Get base URL from model or provider options
-        base_url = model.api_url or provider.options.get("baseURL")
-
-        # Determine API type from model or provider options
-        api_type = getattr(model, 'api_type', None) or provider.options.get("type", "openai")
-
-        retries = max(int(input.retries or 0), 0)
-        tool_list = cls._tool_list(input.tools)
-        normalized_messages = normalize_messages(
-            input.messages,
-            provider_id=input.provider_id,
-            model_id=input.model_id,
-            api_type=str(api_type),
+        # Determine API type from model or provider options.
+        api_type = str(getattr(model, "api_type", None) or provider.options.get("type", "openai"))
+        prepared = cls._prepare_request(
+            stream_input=input,
+            provider=provider,
+            model=model,
+            api_type=api_type,
         )
+        retries = max(int(input.retries or 0), 0)
+
         for attempt in range(retries + 1):
             try:
-                if api_type == "anthropic":
+                if prepared.api_type == "anthropic":
                     # Use Anthropic SDK
-                    prepared_messages = anthropic_messages(normalized_messages)
-                    prepared_tools = anthropic_tools(tool_list)
+                    prepared_messages = ProviderTransform.anthropic_messages(prepared.messages)
+                    prepared_tools = ProviderTransform.anthropic_tools(prepared.tools)
                     async for chunk in cls._stream_anthropic(
                         api_key=api_key,
-                        model=model.api_id,
+                        model=prepared.model_api_id,
                         messages=prepared_messages,
-                        base_url=base_url,
-                        system=cls._join_system_prompt(input.system),
+                        base_url=prepared.base_url,
+                        system=prepared.system,
                         tools=prepared_tools,
                         tool_choice=input.tool_choice,
-                        max_tokens=input.max_tokens,
-                        temperature=input.temperature,
-                        top_p=input.top_p,
-                        options=input.options,
+                        max_tokens=prepared.max_tokens,
+                        temperature=prepared.temperature,
+                        top_p=prepared.top_p,
+                        options=prepared.options,
                     ):
                         chunk.stop_reason = cls._normalize_finish_reason(chunk.stop_reason)
                         yield chunk
@@ -206,16 +319,16 @@ class LLM:
                     # Default to OpenAI-compatible (works for most providers)
                     async for chunk in cls._stream_openai(
                         api_key=api_key,
-                        base_url=base_url,
-                        model=model.api_id,
-                        messages=normalized_messages,
-                        system=cls._join_system_prompt(input.system),
-                        tools=tool_list,
+                        base_url=prepared.base_url,
+                        model=prepared.model_api_id,
+                        messages=prepared.messages,
+                        system=prepared.system,
+                        tools=prepared.tools,
                         tool_choice=input.tool_choice,
-                        max_tokens=input.max_tokens,
-                        temperature=input.temperature,
-                        top_p=input.top_p,
-                        options=input.options,
+                        max_tokens=prepared.max_tokens,
+                        temperature=prepared.temperature,
+                        top_p=prepared.top_p,
+                        options=prepared.options,
                     ):
                         chunk.stop_reason = cls._normalize_finish_reason(chunk.stop_reason)
                         yield chunk
