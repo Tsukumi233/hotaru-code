@@ -38,6 +38,12 @@ def test_transcript_commands_are_enabled() -> None:
     assert registry.get("session.share").enabled is True
     assert registry.get("session.toggle.actions").enabled is True
     assert registry.get("session.toggle.actions").slash_name == "actions"
+    assert registry.get("session.toggle.thinking").enabled is True
+    assert registry.get("session.toggle.thinking").slash_name == "thinking"
+    assert registry.get("session.toggle.assistant_metadata").enabled is True
+    assert registry.get("session.toggle.assistant_metadata").slash_name == "assistant-metadata"
+    assert registry.get("session.toggle.timestamps").enabled is True
+    assert registry.get("session.toggle.timestamps").slash_name == "timestamps"
     assert registry.get("project.init").enabled is True
     assert registry.get("project.init").slash_name == "init"
     assert registry.get("provider.connect").enabled is True

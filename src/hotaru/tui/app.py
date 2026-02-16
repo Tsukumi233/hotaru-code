@@ -355,6 +355,18 @@ class TuiApp(App):
                 command.on_select = (
                     lambda source="palette", argument=None: self.action_session_toggle_actions()
                 )
+            elif command.id == "session.toggle.thinking":
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_toggle_thinking()
+                )
+            elif command.id == "session.toggle.assistant_metadata":
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_toggle_assistant_metadata()
+                )
+            elif command.id == "session.toggle.timestamps":
+                command.on_select = (
+                    lambda source="palette", argument=None: self.action_session_toggle_timestamps()
+                )
             elif command.id == "provider.connect":
                 command.on_select = (
                     lambda source="palette", argument=None: self.action_provider_connect()
@@ -1196,6 +1208,44 @@ class TuiApp(App):
         if isinstance(screen, SessionScreen):
             screen.set_tool_details_visibility(visible)
 
+    def action_session_toggle_thinking(self) -> None:
+        """Toggle thinking visibility in the session timeline."""
+        visible = bool(self.kv_ctx.toggle("thinking_visibility", True))
+        label = "shown" if visible else "hidden"
+        self.notify(f"Thinking {label}.")
+        try:
+            screen = self.screen
+        except Exception:
+            return
+        if isinstance(screen, SessionScreen):
+            screen.set_thinking_visibility(visible)
+
+    def action_session_toggle_assistant_metadata(self) -> None:
+        """Toggle assistant metadata visibility in the session timeline."""
+        visible = bool(self.kv_ctx.toggle("assistant_metadata_visibility", True))
+        label = "shown" if visible else "hidden"
+        self.notify(f"Assistant metadata {label}.")
+        try:
+            screen = self.screen
+        except Exception:
+            return
+        if isinstance(screen, SessionScreen):
+            screen.set_assistant_metadata_visibility(visible)
+
+    def action_session_toggle_timestamps(self) -> None:
+        """Toggle timestamps visibility in the session timeline."""
+        current = str(self.kv_ctx.get("timestamps", "hide"))
+        next_value = "show" if current != "show" else "hide"
+        self.kv_ctx.set("timestamps", next_value)
+        label = "shown" if next_value == "show" else "hidden"
+        self.notify(f"Timestamps {label}.")
+        try:
+            screen = self.screen
+        except Exception:
+            return
+        if isinstance(screen, SessionScreen):
+            screen.set_timestamps_visibility(next_value == "show")
+
     async def _copy_session_transcript(self) -> None:
         session_id = self._active_session_id()
         if not session_id:
@@ -1322,9 +1372,9 @@ class TuiApp(App):
             return None
 
         options = TranscriptOptions(
-            thinking=False,
+            thinking=bool(self.kv_ctx.get("thinking_visibility", True)),
             tool_details=bool(self.kv_ctx.get("tool_details_visibility", True)),
-            assistant_metadata=True,
+            assistant_metadata=bool(self.kv_ctx.get("assistant_metadata_visibility", True)),
         )
         return format_transcript(session, messages, options)
 

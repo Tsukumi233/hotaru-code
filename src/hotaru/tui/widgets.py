@@ -465,8 +465,12 @@ class MessageBubble(Static):
         theme = ThemeManager.get_theme()
 
         if self.role == "user":
+            body = Text(self.content)
+            if self.timestamp:
+                body.append("\n")
+                body.append(self.timestamp, style=theme.text_muted)
             return Panel(
-                Text(self.content),
+                body,
                 title="You",
                 title_align="left",
                 border_style=theme.accent,
@@ -476,7 +480,10 @@ class MessageBubble(Static):
         # Assistant messages: render without Panel for clean text selection
         text = Text()
         title = self.agent or "Assistant"
-        text.append(f"{title}\n", style=f"bold {theme.primary}")
+        text.append(title, style=f"bold {theme.primary}")
+        if self.timestamp:
+            text.append(f" · {self.timestamp}", style=theme.text_muted)
+        text.append("\n")
         if self.content:
             text.append(self.content)
         return text

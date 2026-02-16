@@ -131,6 +131,8 @@ class SDKContext:
         part_id_counter = [0]  # mutable counter for generating unique part IDs
         response_text = ""
         tool_part_ids: Dict[str, str] = {}
+        reasoning_part_ids: Dict[str, str] = {}
+        reasoning_segments: Dict[str, str] = {}
 
         def _next_part_id() -> str:
             part_id_counter[0] += 1
@@ -142,6 +144,21 @@ class SDKContext:
                 return existing
             generated = _next_part_id()
             tool_part_ids[tool_id] = generated
+            return generated
+
+        def _reasoning_key(reasoning_id: Optional[str]) -> str:
+            value = str(reasoning_id or "").strip()
+            if value:
+                return value
+            return "__anonymous_reasoning__"
+
+        def _reasoning_part_id(reasoning_id: Optional[str]) -> str:
+            key = _reasoning_key(reasoning_id)
+            existing = reasoning_part_ids.get(key)
+            if existing:
+                return existing
+            generated = _next_part_id()
+            reasoning_part_ids[key] = generated
             return generated
 
         # Yield message created event
@@ -186,6 +203,71 @@ class SDKContext:
                 }
             )
 
+        async def on_reasoning_start(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None):
+            event_queue.put_nowait(
+                {
+                    "kind": "reasoning_start",
+                    "reasoning_id": reasoning_id,
+                    "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
+                }
+            )
+
+        async def on_reasoning_delta(
+            reasoning_id: Optional[str],
+            delta: str,
+            metadata: Optional[Dict[str, Any]] = None,
+        ):
+            event_queue.put_nowait(
+                {
+                    "kind": "reasoning_delta",
+                    "reasoning_id": reasoning_id,
+                    "delta": str(delta or ""),
+                    "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
+                }
+            )
+
+        async def on_reasoning_end(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None):
+            event_queue.put_nowait(
+                {
+                    "kind": "reasoning_end",
+                    "reasoning_id": reasoning_id,
+                    "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
+                }
+            )
+
+        def on_step_start(snapshot: Optional[str]):
+            event_queue.put_nowait(
+                {
+                    "kind": "step_start",
+                    "snapshot": snapshot,
+                }
+            )
+
+        def on_step_finish(
+            reason: str,
+            snapshot: Optional[str],
+            tokens: Optional[Dict[str, Any]] = None,
+            cost: float = 0.0,
+        ):
+            event_queue.put_nowait(
+                {
+                    "kind": "step_finish",
+                    "reason": reason,
+                    "snapshot": snapshot,
+                    "tokens": dict(tokens or {}),
+                    "cost": float(cost or 0.0),
+                }
+            )
+
+        def on_patch(patch_hash: Optional[str], files: Optional[List[str]] = None):
+            event_queue.put_nowait(
+                {
+                    "kind": "patch",
+                    "hash": str(patch_hash or ""),
+                    "files": list(files or []),
+                }
+            )
+
         # Process with streaming text/tool updates
         # We need to yield events as they come in
         event_queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
@@ -213,6 +295,12 @@ class SDKContext:
                     on_tool_start=on_tool_start,
                     on_tool_end=on_tool_end,
                     on_tool_update=on_tool_update,
+                    on_reasoning_start=on_reasoning_start,
+                    on_reasoning_delta=on_reasoning_delta,
+                    on_reasoning_end=on_reasoning_end,
+                    on_step_start=on_step_start,
+                    on_step_finish=on_step_finish,
+                    on_patch=on_patch,
                     resume_history=True,
                     assistant_message_id=message_id,
                 )
@@ -305,6 +393,87 @@ class SDKContext:
                             "tool": state.get("name") or "tool",
                             "call_id": tool_id,
                             "state": normalized_state,
+                        }
+                    },
+                }
+            elif kind == "reasoning_start":
+                rid = _reasoning_key(evt.get("reasoning_id"))
+                reasoning_segments.setdefault(rid, "")
+                return None
+            elif kind == "reasoning_delta":
+                rid = _reasoning_key(evt.get("reasoning_id"))
+                delta = str(evt.get("delta") or "")
+                reasoning_segments[rid] = reasoning_segments.get(rid, "") + delta
+                return {
+                    "type": "message.part.updated",
+                    "data": {
+                        "part": {
+                            "id": _reasoning_part_id(rid),
+                            "session_id": session_id,
+                            "message_id": message_id,
+                            "type": "reasoning",
+                            "text": reasoning_segments[rid],
+                            "metadata": dict(evt.get("metadata") or {}),
+                        }
+                    },
+                }
+            elif kind == "reasoning_end":
+                rid = _reasoning_key(evt.get("reasoning_id"))
+                if rid not in reasoning_segments:
+                    return None
+                return {
+                    "type": "message.part.updated",
+                    "data": {
+                        "part": {
+                            "id": _reasoning_part_id(rid),
+                            "session_id": session_id,
+                            "message_id": message_id,
+                            "type": "reasoning",
+                            "text": reasoning_segments.get(rid, ""),
+                            "metadata": dict(evt.get("metadata") or {}),
+                        }
+                    },
+                }
+            elif kind == "step_start":
+                return {
+                    "type": "message.part.updated",
+                    "data": {
+                        "part": {
+                            "id": _next_part_id(),
+                            "session_id": session_id,
+                            "message_id": message_id,
+                            "type": "step-start",
+                            "snapshot": evt.get("snapshot"),
+                        }
+                    },
+                }
+            elif kind == "step_finish":
+                return {
+                    "type": "message.part.updated",
+                    "data": {
+                        "part": {
+                            "id": _next_part_id(),
+                            "session_id": session_id,
+                            "message_id": message_id,
+                            "type": "step-finish",
+                            "reason": str(evt.get("reason") or "completed"),
+                            "snapshot": evt.get("snapshot"),
+                            "tokens": dict(evt.get("tokens") or {}),
+                            "cost": float(evt.get("cost") or 0.0),
+                        }
+                    },
+                }
+            elif kind == "patch":
+                return {
+                    "type": "message.part.updated",
+                    "data": {
+                        "part": {
+                            "id": _next_part_id(),
+                            "session_id": session_id,
+                            "message_id": message_id,
+                            "type": "patch",
+                            "hash": str(evt.get("hash") or ""),
+                            "files": list(evt.get("files") or []),
                         }
                     },
                 }

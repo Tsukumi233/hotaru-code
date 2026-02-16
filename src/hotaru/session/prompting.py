@@ -7,6 +7,7 @@ Persists structured message records.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 from dataclasses import dataclass
@@ -298,6 +299,12 @@ class SessionPrompt:
         on_tool_start: Optional[Callable[..., Any]] = None,
         on_tool_end: Optional[Callable[..., Any]] = None,
         on_tool_update: Optional[Callable[..., Any]] = None,
+        on_reasoning_start: Optional[Callable[..., Any]] = None,
+        on_reasoning_delta: Optional[Callable[..., Any]] = None,
+        on_reasoning_end: Optional[Callable[..., Any]] = None,
+        on_step_start: Optional[Callable[..., Any]] = None,
+        on_step_finish: Optional[Callable[..., Any]] = None,
+        on_patch: Optional[Callable[..., Any]] = None,
         resume_history: bool = True,
         assistant_message_id: Optional[str] = None,
         auto_compaction: bool = True,
@@ -351,6 +358,12 @@ class SessionPrompt:
                 on_tool_start=on_tool_start,
                 on_tool_end=on_tool_end,
                 on_tool_update=on_tool_update,
+                on_reasoning_start=on_reasoning_start,
+                on_reasoning_delta=on_reasoning_delta,
+                on_reasoning_end=on_reasoning_end,
+                on_step_start=on_step_start,
+                on_step_finish=on_step_finish,
+                on_patch=on_patch,
                 resume_history=resume_history,
                 initial_user_content=content,
                 user_message_id=user_message_id,
@@ -384,6 +397,12 @@ class SessionPrompt:
         on_tool_start: Optional[Callable[..., Any]] = None,
         on_tool_end: Optional[Callable[..., Any]] = None,
         on_tool_update: Optional[Callable[..., Any]] = None,
+        on_reasoning_start: Optional[Callable[..., Any]] = None,
+        on_reasoning_delta: Optional[Callable[..., Any]] = None,
+        on_reasoning_end: Optional[Callable[..., Any]] = None,
+        on_step_start: Optional[Callable[..., Any]] = None,
+        on_step_finish: Optional[Callable[..., Any]] = None,
+        on_patch: Optional[Callable[..., Any]] = None,
         resume_history: bool = True,
         initial_user_content: Optional[str] = None,
         user_message_id: Optional[str] = None,
@@ -503,6 +522,12 @@ class SessionPrompt:
                 on_tool_start=on_tool_start,
                 on_tool_end=on_tool_end,
                 on_tool_update=on_tool_update,
+                on_reasoning_start=on_reasoning_start,
+                on_reasoning_delta=on_reasoning_delta,
+                on_reasoning_end=on_reasoning_end,
+                on_step_start=on_step_start,
+                on_step_finish=on_step_finish,
+                on_patch=on_patch,
                 tool_definitions=resolved_tools,
                 tool_choice=tool_choice,
                 retries=2,
@@ -628,11 +653,31 @@ class SessionPrompt:
         on_tool_start: Optional[Callable[..., Any]],
         on_tool_end: Optional[Callable[..., Any]],
         on_tool_update: Optional[Callable[..., Any]],
+        on_reasoning_start: Optional[Callable[..., Any]],
+        on_reasoning_delta: Optional[Callable[..., Any]],
+        on_reasoning_end: Optional[Callable[..., Any]],
+        on_step_start: Optional[Callable[..., Any]],
+        on_step_finish: Optional[Callable[..., Any]],
+        on_patch: Optional[Callable[..., Any]],
         tool_definitions: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Dict[str, Any] | str] = None,
         retries: int = 0,
         assistant_message_id: str,
     ) -> tuple[ProcessorResult, TokenUsage, float]:
+        async def _emit_callback(
+            callback: Optional[Callable[..., Any]],
+            *args: Any,
+            label: str,
+        ) -> None:
+            if not callback:
+                return
+            try:
+                result = callback(*args)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as e:
+                log.debug(f"failed to invoke {label} callback", {"error": str(e)})
+
         step_start_snapshot: Optional[str] = None
         try:
             step_start_snapshot = await SnapshotTracker.track(
@@ -654,6 +699,11 @@ class SessionPrompt:
             )
         except Exception as e:
             log.debug("failed to persist step-start", {"error": str(e)})
+        await _emit_callback(
+            on_step_start,
+            step_start_snapshot,
+            label="step-start",
+        )
 
         reasoning_parts: Dict[str, Dict[str, Any]] = {}
         fallback_index = 0
@@ -729,6 +779,12 @@ class SessionPrompt:
                 )
             except Exception as e:
                 log.debug("failed to persist reasoning start", {"error": str(e)})
+            await _emit_callback(
+                on_reasoning_start,
+                key,
+                dict(state["metadata"] or {}),
+                label="reasoning-start",
+            )
 
         async def _on_reasoning_delta(
             reasoning_id: Optional[str],
@@ -757,12 +813,26 @@ class SessionPrompt:
                 )
             except Exception as e:
                 log.debug("failed to persist reasoning delta", {"error": str(e)})
+            await _emit_callback(
+                on_reasoning_delta,
+                key,
+                piece,
+                dict(state.get("metadata") or {}),
+                label="reasoning-delta",
+            )
 
         async def _on_reasoning_end(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> None:
             key = _reasoning_key(reasoning_id, create=False)
             if not key:
                 return
             await _close_reasoning(key, metadata=metadata)
+            state = reasoning_parts.get(key) or {}
+            await _emit_callback(
+                on_reasoning_end,
+                key,
+                dict(state.get("metadata") or {}),
+                label="reasoning-end",
+            )
 
         try:
             step = await processor.process_step(
@@ -812,6 +882,14 @@ class SessionPrompt:
             )
         except Exception as e:
             log.debug("failed to persist step-finish", {"error": str(e)})
+        await _emit_callback(
+            on_step_finish,
+            _step_finish_reason(step),
+            step_end_snapshot,
+            tokens.model_dump(mode="json"),
+            cost,
+            label="step-finish",
+        )
 
         if step_start_snapshot:
             try:
@@ -830,6 +908,12 @@ class SessionPrompt:
                             hash=patch.hash,
                             files=patch.files,
                         )
+                    )
+                    await _emit_callback(
+                        on_patch,
+                        patch.hash,
+                        list(patch.files),
+                        label="patch",
                     )
             except Exception as e:
                 log.debug("failed to persist step patch", {"error": str(e)})
@@ -999,6 +1083,12 @@ class SessionPrompt:
             on_tool_start=None,
             on_tool_end=None,
             on_tool_update=None,
+            on_reasoning_start=None,
+            on_reasoning_delta=None,
+            on_reasoning_end=None,
+            on_step_start=None,
+            on_step_finish=None,
+            on_patch=None,
             retries=0,
             assistant_message_id=summary_id,
         )

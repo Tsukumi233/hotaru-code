@@ -319,6 +319,27 @@ def create_default_commands() -> List[Command]:
             slash_name="actions",
             slash_aliases=["toggle-actions"],
         ),
+        Command(
+            id="session.toggle.thinking",
+            title="Toggle thinking",
+            category=CommandCategory.SESSION,
+            slash_name="thinking",
+            slash_aliases=["toggle-thinking"],
+        ),
+        Command(
+            id="session.toggle.assistant_metadata",
+            title="Toggle assistant metadata",
+            category=CommandCategory.SESSION,
+            slash_name="assistant-metadata",
+            slash_aliases=["toggle-assistant-metadata"],
+        ),
+        Command(
+            id="session.toggle.timestamps",
+            title="Toggle timestamps",
+            category=CommandCategory.SESSION,
+            slash_name="timestamps",
+            slash_aliases=["toggle-timestamps"],
+        ),
 
         # Agent commands
         Command(
