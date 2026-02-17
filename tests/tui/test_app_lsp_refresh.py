@@ -4,7 +4,7 @@ import pytest
 
 from hotaru.core.bus import Bus
 from hotaru.lsp import LSP
-from hotaru.lsp.lsp import LSPUpdated, LSPUpdatedProps
+from hotaru.lsp.lsp import LSPStatus, LSPUpdated, LSPUpdatedProps
 from hotaru.mcp import MCP
 from hotaru.tui.app import TuiApp
 
@@ -93,3 +93,31 @@ async def test_on_unmount_unsubscribes_lsp_runtime_listener(monkeypatch: pytest.
     await asyncio.sleep(0)
 
     assert calls == []
+
+
+@pytest.mark.anyio
+async def test_refresh_lsp_status_runs_in_instance_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = TuiApp()
+    expected_cwd = app.sdk_ctx.cwd
+
+    async def fake_status(cls):
+        del cls
+        from hotaru.project.instance import Instance
+
+        # Must be called within the app's working instance context.
+        assert Instance.directory() == expected_cwd
+        return [
+            LSPStatus(
+                id="pyright",
+                name="pyright",
+                root=".",
+                status="connected",
+            )
+        ]
+
+    monkeypatch.setattr(LSP, "status", classmethod(fake_status))
+
+    await app._refresh_lsp_status()
+
+    assert len(app.sync_ctx.data.lsp) == 1
+    assert app.sync_ctx.data.lsp[0]["id"] == "pyright"

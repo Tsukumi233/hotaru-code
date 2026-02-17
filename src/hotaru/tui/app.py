@@ -597,8 +597,12 @@ class TuiApp(App):
         """Refresh only LSP runtime status in sync context."""
         try:
             from ..lsp import LSP
+            from ..project.instance import Instance
 
-            lsp_status = await LSP.status()
+            lsp_status = await Instance.provide(
+                directory=self.sdk_ctx.cwd,
+                fn=LSP.status,
+            )
             self.sync_ctx.set_lsp_status([item.model_dump() for item in lsp_status])
         except Exception as e:
             log.warning("failed to load LSP status", {"error": str(e)})
