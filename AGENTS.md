@@ -4,15 +4,14 @@
 - This repo is a python translation of the OpenCode project(at ../opencode).
 - This is not a toy project; it is intended to be a production-quality codebase for a real-world agent framework.
 - Core package code lives under `src/hotaru/` with domain modules such as `cli/`, `tui/`, `session/`, `tool/`, `provider/`, and `mcp/`.
-- CLI entrypoint is `src/hotaru/cli/main.py`; packaged command is `hotaru` (defined in `pyproject.toml`).
-- Keep tests in `tests/`. Mirror package paths when possible (for example, `tests/session/test_processor.py`).
-- Runtime/project config is in `hotaru.json`; developer notes and architecture context are in `CLAUDE.md`.
+- CLI entrypoint is `src/hotaru/cli/main.py`; packaged command is `hotaru`.
+- Keep tests in `tests/`. Mirror package paths when possible.
+- Runtime/project config is in `hotaru.json`.
 
 ## Build, Test, and Development Commands
 - `uv sync` - install/update dependencies from `pyproject.toml` and `uv.lock`.
 - `uv run hotaru` - launch the default TUI.
 - `uv run hotaru run -p "your prompt"` - execute a one-shot prompt.
-- `uv build` - create source/wheel distributions via Hatchling.
 - `uv run pytest tests` - run tests (use as tests are added).
 
 ## Coding Style & Naming Conventions
@@ -20,7 +19,6 @@
 - Keep minimal technical debt. If there's breaking changes or refactors, no need to preserve API or compatibility; prioritize clean implementations.
 - Target Python 3.12+, use 4-space indentation, type hints, and `async`/`await` for I/O paths.
 - Follow existing naming: `snake_case` for modules/functions, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants.
-- Prefer small, focused modules under the relevant domain package (for example, new tool logic in `src/hotaru/tool/`).
 - Architecture & debugging discipline (no “shitsnowball” patches):
   - Any bugfix/refactor must prioritize root-cause fixes over symptom patches.
   - Do not add ad-hoc conditionals in upper layers (`session/`, `tui/`, `cli/`, generic core flow) for lower-layer quirks.
@@ -33,6 +31,7 @@
 - There is no formal coverage gate yet; include meaningful coverage for all changed code paths.
 
 ## Commit Message Guidelines
+- We use release-please-action for automated semantic versioning and changelog generation. Follow the Conventional Commits format.
 - Do not mention OpenCode in commit messages.
 
 ## Security & Configuration Tips
