@@ -6,7 +6,7 @@ connections and accessing their features.
 
 import asyncio
 import os
-from typing import Any, Dict, List, Literal, Optional, Set
+from typing import Any, Callable, Dict, List, Literal, Optional, Set
 from pydantic import BaseModel
 
 from ..core.bus import Bus, BusEvent
@@ -476,6 +476,61 @@ class LSP:
 
         return results
 
+    @staticmethod
+    def _flatten_response(result: Any) -> List[Any]:
+        if not result:
+            return []
+        if isinstance(result, list):
+            return [item for item in result if item]
+        return [result]
+
+    @classmethod
+    async def _position_request(
+        cls,
+        file: str,
+        line: int,
+        character: int,
+        method: str,
+        *,
+        extra_params: Optional[Dict[str, Any]] = None,
+    ) -> List[Any]:
+        clients = await cls._get_clients(file)
+        results: List[Any] = []
+
+        for client in clients:
+            params: Dict[str, Any] = {
+                "textDocument": {"uri": client._path_to_uri(file)},
+                "position": {"line": line, "character": character},
+            }
+            if extra_params:
+                params.update(extra_params)
+            try:
+                response = await client._send_request(method, params)
+            except Exception:
+                continue
+            results.extend(cls._flatten_response(response))
+
+        return results
+
+    @classmethod
+    async def _file_request(
+        cls,
+        file: str,
+        method: str,
+        params_factory: Callable[[LSPClient], Dict[str, Any]],
+    ) -> List[Any]:
+        clients = await cls._get_clients(file)
+        results: List[Any] = []
+
+        for client in clients:
+            try:
+                response = await client._send_request(method, params_factory(client))
+            except Exception:
+                continue
+            results.extend(cls._flatten_response(response))
+
+        return results
+
     @classmethod
     async def hover(
         cls,
@@ -493,21 +548,7 @@ class LSP:
         Returns:
             List of hover results from all applicable servers
         """
-        clients = await cls._get_clients(file)
-        results = []
-
-        for client in clients:
-            try:
-                result = await client._send_request("textDocument/hover", {
-                    "textDocument": {"uri": client._path_to_uri(file)},
-                    "position": {"line": line, "character": character},
-                })
-                if result:
-                    results.append(result)
-            except Exception:
-                pass
-
-        return results
+        return await cls._position_request(file, line, character, "textDocument/hover")
 
     @classmethod
     async def definition(
@@ -526,24 +567,7 @@ class LSP:
         Returns:
             List of definition locations
         """
-        clients = await cls._get_clients(file)
-        results = []
-
-        for client in clients:
-            try:
-                result = await client._send_request("textDocument/definition", {
-                    "textDocument": {"uri": client._path_to_uri(file)},
-                    "position": {"line": line, "character": character},
-                })
-                if result:
-                    if isinstance(result, list):
-                        results.extend(result)
-                    else:
-                        results.append(result)
-            except Exception:
-                pass
-
-        return results
+        return await cls._position_request(file, line, character, "textDocument/definition")
 
     @classmethod
     async def references(
@@ -562,20 +586,109 @@ class LSP:
         Returns:
             List of reference locations
         """
+        return await cls._position_request(
+            file,
+            line,
+            character,
+            "textDocument/references",
+            extra_params={"context": {"includeDeclaration": True}},
+        )
+
+    @classmethod
+    async def implementation(
+        cls,
+        file: str,
+        line: int,
+        character: int,
+    ) -> List[Any]:
+        """Get implementation locations for a symbol."""
+        return await cls._position_request(file, line, character, "textDocument/implementation")
+
+    @classmethod
+    async def prepare_call_hierarchy(
+        cls,
+        file: str,
+        line: int,
+        character: int,
+    ) -> List[Any]:
+        """Get call hierarchy items at a position."""
+        return await cls._position_request(file, line, character, "textDocument/prepareCallHierarchy")
+
+    @classmethod
+    async def incoming_calls(
+        cls,
+        file: str,
+        line: int,
+        character: int,
+    ) -> List[Any]:
+        """Get incoming calls for the symbol at a given position."""
         clients = await cls._get_clients(file)
-        results = []
+        results: List[Any] = []
 
         for client in clients:
             try:
-                result = await client._send_request("textDocument/references", {
-                    "textDocument": {"uri": client._path_to_uri(file)},
-                    "position": {"line": line, "character": character},
-                    "context": {"includeDeclaration": True},
-                })
-                if result:
-                    results.extend(result)
+                items = await client._send_request(
+                    "textDocument/prepareCallHierarchy",
+                    {
+                        "textDocument": {"uri": client._path_to_uri(file)},
+                        "position": {"line": line, "character": character},
+                    },
+                )
             except Exception:
-                pass
+                continue
+
+            hierarchy_items = cls._flatten_response(items)
+            if not hierarchy_items:
+                continue
+
+            try:
+                response = await client._send_request(
+                    "callHierarchy/incomingCalls",
+                    {"item": hierarchy_items[0]},
+                )
+            except Exception:
+                continue
+
+            results.extend(cls._flatten_response(response))
+
+        return results
+
+    @classmethod
+    async def outgoing_calls(
+        cls,
+        file: str,
+        line: int,
+        character: int,
+    ) -> List[Any]:
+        """Get outgoing calls for the symbol at a given position."""
+        clients = await cls._get_clients(file)
+        results: List[Any] = []
+
+        for client in clients:
+            try:
+                items = await client._send_request(
+                    "textDocument/prepareCallHierarchy",
+                    {
+                        "textDocument": {"uri": client._path_to_uri(file)},
+                        "position": {"line": line, "character": character},
+                    },
+                )
+            except Exception:
+                continue
+
+            hierarchy_items = cls._flatten_response(items)
+            if not hierarchy_items:
+                continue
+
+            try:
+                response = await client._send_request(
+                    "callHierarchy/outgoingCalls",
+                    {"item": hierarchy_items[0]},
+                )
+            except Exception:
+                continue
+
+            results.extend(cls._flatten_response(response))
 
         return results
 
@@ -626,20 +739,11 @@ class LSP:
         if os.name == "nt" and file.startswith("/"):
             file = file[1:]
 
-        clients = await cls._get_clients(file)
-        results = []
-
-        for client in clients:
-            try:
-                result = await client._send_request("textDocument/documentSymbol", {
-                    "textDocument": {"uri": uri}
-                })
-                if result:
-                    results.extend(result)
-            except Exception:
-                pass
-
-        return [r for r in results if r]
+        return await cls._file_request(
+            file,
+            "textDocument/documentSymbol",
+            lambda _client: {"textDocument": {"uri": uri}},
+        )
 
     @classmethod
     async def shutdown(cls) -> None:

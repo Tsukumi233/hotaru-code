@@ -1,5 +1,6 @@
 """Read tool for reading file contents."""
 
+import asyncio
 import mimetypes
 import os
 from base64 import b64encode
@@ -65,6 +66,16 @@ def _is_binary_file(filepath: Path) -> bool:
         pass
 
     return False
+
+
+async def _warm_lsp(file_path: str) -> None:
+    """Best-effort LSP warmup after a successful text read."""
+    try:
+        from ..lsp import LSP
+
+        await LSP.touch_file(file_path, wait_for_diagnostics=False)
+    except Exception as e:
+        log.warning("failed to warm LSP on read", {"file": file_path, "error": str(e)})
 
 
 async def read_execute(params: ReadParams, ctx: ToolContext) -> ToolResult:
@@ -235,6 +246,7 @@ async def read_execute(params: ReadParams, ctx: ToolContext) -> ToolResult:
         output += f"\n\n(End of file - total {total_lines} lines)"
 
     output += "\n</content>"
+    asyncio.create_task(_warm_lsp(str(filepath)))
 
     return ToolResult(
         title=title,

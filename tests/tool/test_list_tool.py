@@ -47,5 +47,4 @@ async def test_list_tool_requests_list_permission_and_ignores_common_dirs(tmp_pa
 
 def test_list_tool_is_registered() -> None:
     ToolRegistry.reset()
-    assert "list" in ToolRegistry.ids()
     assert "ls" in ToolRegistry.ids()

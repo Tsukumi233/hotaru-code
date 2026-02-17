@@ -500,29 +500,33 @@ class LSPClient:
         """Shutdown the LSP client."""
         log.info("shutting down", {"server_id": self.server_id})
 
-        if self._reader_task:
-            if self._stream_reader:
-                try:
-                    self._stream_reader.close()
-                except Exception:
-                    pass
-            self._reader_task.cancel()
-            try:
-                await asyncio.wait_for(self._reader_task, timeout=1.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
-
         if self._stream_writer:
             try:
                 self._stream_writer.close()
             except Exception:
                 pass
 
-        # Kill the server process
+        # Terminate the server process first to unblock reader threads.
         self.server.process.terminate()
         try:
-            self.server.process.wait(timeout=5)
+            await asyncio.to_thread(self.server.process.wait, 5)
         except subprocess.TimeoutExpired:
             self.server.process.kill()
+            try:
+                await asyncio.to_thread(self.server.process.wait, 1)
+            except Exception:
+                pass
+
+        if self._reader_task:
+            self._reader_task.cancel()
+            try:
+                await asyncio.wait_for(self._reader_task, timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+
+        for future in self._pending_requests.values():
+            if not future.done():
+                future.cancel()
+        self._pending_requests.clear()
 
         log.info("shutdown complete", {"server_id": self.server_id})

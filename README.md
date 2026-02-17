@@ -144,6 +144,13 @@ hotaru agent list
 hotaru agent create --description "Review Python code and propose safe refactors" --mode primary
 ```
 
+### 4. LSP 调试命令
+
+```bash
+# 查询某个文件的 LSP diagnostics（JSON 输出）
+hotaru debug lsp diagnostics src/main.py
+```
+
 ## 配置说明
 
 Hotaru 会合并多来源配置（后者覆盖前者）：

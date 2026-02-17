@@ -4,6 +4,7 @@ This module provides the main Textual application class for the
 Hotaru Code terminal user interface.
 """
 
+import asyncio
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer
@@ -13,7 +14,7 @@ from copy import deepcopy
 from pathlib import Path
 import re
 from urllib.parse import urlparse
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from pydantic import ValidationError
 
 from .screens import HomeScreen, SessionScreen
@@ -227,6 +228,8 @@ class TuiApp(App):
         self.command_registry = CommandRegistry()
         self._register_default_commands()
         self._redo_turns: Dict[str, List[List[Dict[str, Any]]]] = {}
+        self._runtime_unsubscribers: List[Callable[[], None]] = []
+        self._lsp_refresh_task: Optional[asyncio.Task[None]] = None
 
         # Load theme preference
         ThemeManager.load_preference()
@@ -408,6 +411,7 @@ class TuiApp(App):
     async def on_mount(self) -> None:
         """Handle application mount — runs async bootstrap then shows screen."""
         await self._bootstrap()
+        self._start_runtime_subscriptions()
 
         # Determine initial screen
         if self.session_id:
@@ -427,6 +431,8 @@ class TuiApp(App):
 
     async def on_unmount(self) -> None:
         """Release runtime resources before the app exits."""
+        await self._stop_runtime_subscriptions()
+
         try:
             from ..mcp import MCP
             await MCP.shutdown()
@@ -585,6 +591,10 @@ class TuiApp(App):
             log.warning("failed to load MCP status", {"error": str(e)})
             self.sync_ctx.set_mcp_status({})
 
+        await self._refresh_lsp_status()
+
+    async def _refresh_lsp_status(self) -> None:
+        """Refresh only LSP runtime status in sync context."""
         try:
             from ..lsp import LSP
 
@@ -593,6 +603,52 @@ class TuiApp(App):
         except Exception as e:
             log.warning("failed to load LSP status", {"error": str(e)})
             self.sync_ctx.set_lsp_status([])
+
+    def _start_runtime_subscriptions(self) -> None:
+        """Subscribe to runtime events needed by the TUI."""
+        if self._runtime_unsubscribers:
+            return
+
+        from ..core.bus import Bus, EventPayload
+        from ..lsp.lsp import LSPUpdated
+
+        def on_lsp_updated(_event: EventPayload) -> None:
+            self._schedule_lsp_refresh()
+
+        self._runtime_unsubscribers.append(Bus.subscribe(LSPUpdated, on_lsp_updated))
+
+    def _schedule_lsp_refresh(self) -> None:
+        """Coalesce LSP refreshes so only one refresh runs at a time."""
+        task = self._lsp_refresh_task
+        if task and not task.done():
+            return
+
+        new_task = asyncio.create_task(self._refresh_lsp_status())
+        self._lsp_refresh_task = new_task
+
+        def clear_refresh_task(done: asyncio.Task[None]) -> None:
+            if self._lsp_refresh_task is done:
+                self._lsp_refresh_task = None
+
+        new_task.add_done_callback(clear_refresh_task)
+
+    async def _stop_runtime_subscriptions(self) -> None:
+        """Unsubscribe runtime event listeners and stop inflight refresh tasks."""
+        while self._runtime_unsubscribers:
+            unsubscribe = self._runtime_unsubscribers.pop()
+            try:
+                unsubscribe()
+            except Exception as e:
+                log.warning("failed to unsubscribe runtime listener", {"error": str(e)})
+
+        task = self._lsp_refresh_task
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._lsp_refresh_task = None
 
     def _build_screen_for_route(self, route):
         """Build a screen instance for a route."""

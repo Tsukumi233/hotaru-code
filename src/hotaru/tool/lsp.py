@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
@@ -49,6 +50,12 @@ def _to_file_uri(file_path: str) -> str:
     return "file://" + quote(path, safe="/:.")
 
 
+def _json_default(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 async def lsp_execute(args: LspParams, ctx: ToolContext) -> ToolResult:
     cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
     worktree = Path(str(ctx.extra.get("worktree") or cwd))
@@ -80,6 +87,14 @@ async def lsp_execute(args: LspParams, ctx: ToolContext) -> ToolResult:
         result = await LSP.document_symbol(uri)
     elif args.operation == "workspaceSymbol":
         result = await LSP.workspace_symbol("")
+    elif args.operation == "goToImplementation":
+        result = await LSP.implementation(str(file_path), line, character)
+    elif args.operation == "prepareCallHierarchy":
+        result = await LSP.prepare_call_hierarchy(str(file_path), line, character)
+    elif args.operation == "incomingCalls":
+        result = await LSP.incoming_calls(str(file_path), line, character)
+    elif args.operation == "outgoingCalls":
+        result = await LSP.outgoing_calls(str(file_path), line, character)
     else:
         raise RuntimeError(f"LSP operation not yet implemented in hotaru: {args.operation}")
 
@@ -88,7 +103,11 @@ async def lsp_execute(args: LspParams, ctx: ToolContext) -> ToolResult:
     except ValueError:
         rel = str(file_path)
 
-    output = f"No results found for {args.operation}" if not result else str(result)
+    output = (
+        f"No results found for {args.operation}"
+        if not result
+        else json.dumps(result, indent=2, ensure_ascii=False, default=_json_default)
+    )
     return ToolResult(
         title=f"{args.operation} {rel}:{args.line}:{args.character}",
         output=output,
