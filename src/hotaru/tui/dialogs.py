@@ -12,6 +12,8 @@ from textual.binding import Binding
 from rich.text import Text
 from typing import Any, Dict, List, Optional, Tuple
 
+from .state.runtime_status import RuntimeStatusSnapshot
+
 
 class DialogBase(ModalScreen):
     """Base class for modal dialogs.
@@ -665,15 +667,21 @@ class StatusDialog(DialogBase):
         self,
         model: str,
         agent: str,
-        mcp: Dict[str, Dict[str, Any]],
-        lsp: List[Dict[str, Any]],
+        mcp: Optional[Dict[str, Dict[str, Any]]] = None,
+        lsp: Optional[List[Dict[str, Any]]] = None,
+        runtime: Optional[RuntimeStatusSnapshot] = None,
         **kwargs
     ) -> None:
         super().__init__(**kwargs)
         self.model = model
         self.agent = agent
-        self.mcp = mcp
-        self.lsp = lsp
+        self.runtime = runtime
+        if runtime is not None:
+            self.mcp = runtime.mcp
+            self.lsp = runtime.lsp
+        else:
+            self.mcp = mcp or {}
+            self.lsp = lsp or []
 
     def compose(self) -> ComposeResult:
         lines = []

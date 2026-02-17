@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from typing import Any, Callable, Dict, List, Optional
 from pydantic import ValidationError
 
-from .screens import HomeScreen, SessionScreen
+from .routes import HomeScreen, SessionScreen
 from .theme import ThemeManager
 from .commands import CommandRegistry, Command, create_default_commands
 from .transcript import TranscriptOptions, format_transcript
@@ -30,6 +30,7 @@ from .context import (
     LocalProvider,
     SyncProvider,
 )
+from .state import select_runtime_status
 from .context.route import PromptInfo
 from ..util.log import Log
 from ..command import render_init_prompt, publish_command_executed
@@ -615,11 +616,48 @@ class TuiApp(App):
 
         from ..core.bus import Bus, EventPayload
         from ..lsp.lsp import LSPUpdated
+        from ..permission import PermissionAsked, PermissionReplied
+        from ..question import QuestionAsked, QuestionRejected, QuestionReplied
 
         def on_lsp_updated(_event: EventPayload) -> None:
             self._schedule_lsp_refresh()
 
+        def on_permission_asked(event: EventPayload) -> None:
+            payload = event.properties
+            session_id = str(payload.get("session_id") or "")
+            if not session_id:
+                return
+            self.sync_ctx.add_permission(session_id, payload)
+
+        def on_permission_replied(event: EventPayload) -> None:
+            payload = event.properties
+            session_id = str(payload.get("session_id") or "")
+            request_id = str(payload.get("request_id") or "")
+            if not session_id or not request_id:
+                return
+            self.sync_ctx.remove_permission(session_id, request_id)
+
+        def on_question_asked(event: EventPayload) -> None:
+            payload = event.properties
+            session_id = str(payload.get("session_id") or "")
+            if not session_id:
+                return
+            self.sync_ctx.add_question(session_id, payload)
+
+        def on_question_resolved(event: EventPayload) -> None:
+            payload = event.properties
+            session_id = str(payload.get("session_id") or "")
+            request_id = str(payload.get("request_id") or "")
+            if not session_id or not request_id:
+                return
+            self.sync_ctx.remove_question(session_id, request_id)
+
         self._runtime_unsubscribers.append(Bus.subscribe(LSPUpdated, on_lsp_updated))
+        self._runtime_unsubscribers.append(Bus.subscribe(PermissionAsked, on_permission_asked))
+        self._runtime_unsubscribers.append(Bus.subscribe(PermissionReplied, on_permission_replied))
+        self._runtime_unsubscribers.append(Bus.subscribe(QuestionAsked, on_question_asked))
+        self._runtime_unsubscribers.append(Bus.subscribe(QuestionReplied, on_question_resolved))
+        self._runtime_unsubscribers.append(Bus.subscribe(QuestionRejected, on_question_resolved))
 
     def _schedule_lsp_refresh(self) -> None:
         """Coalesce LSP refreshes so only one refresh runs at a time."""
@@ -1238,6 +1276,7 @@ class TuiApp(App):
         from .dialogs import StatusDialog
 
         await self._refresh_runtime_status()
+        snapshot = select_runtime_status(sync=self.sync_ctx, route=self.route_ctx)
 
         current_model = self.local_ctx.model.current()
         model = "(auto)"
@@ -1249,8 +1288,7 @@ class TuiApp(App):
             StatusDialog(
                 model=model,
                 agent=agent,
-                mcp=self.sync_ctx.data.mcp,
-                lsp=self.sync_ctx.data.lsp,
+                runtime=snapshot,
             )
         )
         if result == "refresh":

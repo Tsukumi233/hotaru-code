@@ -15,6 +15,22 @@ from ..message_adapter import structured_messages_to_tui
 log = Log.create({"service": "tui.context.sync"})
 
 
+class SyncEvent:
+    """Canonical sync event names for runtime subscriptions."""
+
+    STATUS_UPDATED = "status.updated"
+    PROVIDERS_UPDATED = "providers.updated"
+    AGENTS_UPDATED = "agents.updated"
+    CONFIG_UPDATED = "config.updated"
+    SESSIONS_UPDATED = "sessions.updated"
+    SESSION_STATUS_UPDATED = "session.status.updated"
+    MESSAGES_UPDATED = "messages.updated"
+    PERMISSION_UPDATED = "permission.updated"
+    QUESTION_UPDATED = "question.updated"
+    MCP_UPDATED = "mcp.updated"
+    LSP_UPDATED = "lsp.updated"
+
+
 @dataclass
 class SyncData:
     """Synchronized data store.
@@ -98,12 +114,14 @@ class SyncContext:
         """
         self._data.status = status
         self._notify("status", status)
+        self._notify(SyncEvent.STATUS_UPDATED, status)
 
     # Provider methods
     def set_providers(self, providers: List[Dict[str, Any]]) -> None:
         """Set providers list."""
         self._data.providers = providers
         self._notify("providers", providers)
+        self._notify(SyncEvent.PROVIDERS_UPDATED, providers)
 
     def set_provider_defaults(self, defaults: Dict[str, str]) -> None:
         """Set provider defaults."""
@@ -114,12 +132,14 @@ class SyncContext:
         """Set agents list."""
         self._data.agents = agents
         self._notify("agents", agents)
+        self._notify(SyncEvent.AGENTS_UPDATED, agents)
 
     # Config methods
     def set_config(self, config: Dict[str, Any]) -> None:
         """Set configuration."""
         self._data.config = config
         self._notify("config", config)
+        self._notify(SyncEvent.CONFIG_UPDATED, config)
 
     # Session methods
     def set_sessions(self, sessions: List[Dict[str, Any]]) -> None:
@@ -130,6 +150,7 @@ class SyncContext:
             reverse=True,
         )
         self._notify("sessions", self._data.sessions)
+        self._notify(SyncEvent.SESSIONS_UPDATED, self._data.sessions)
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get a session by ID.
@@ -195,6 +216,7 @@ class SyncContext:
         """
         self._data.session_status[session_id] = status
         self._notify("session.status", {"session_id": session_id, "status": status})
+        self._notify(SyncEvent.SESSION_STATUS_UPDATED, {"session_id": session_id, "status": status})
 
     # Message methods
     def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
@@ -217,6 +239,7 @@ class SyncContext:
         """
         self._data.messages[session_id] = messages
         self._notify("messages", {"session_id": session_id, "messages": messages})
+        self._notify(SyncEvent.MESSAGES_UPDATED, {"session_id": session_id, "messages": messages})
 
     def add_message(self, session_id: str, message: Dict[str, Any]) -> None:
         """Add a message to a session.
@@ -294,6 +317,7 @@ class SyncContext:
             self._data.permissions[session_id] = []
         self._data.permissions[session_id].append(permission)
         self._notify("permission.asked", permission)
+        self._notify(SyncEvent.PERMISSION_UPDATED, {"session_id": session_id})
 
     def remove_permission(self, session_id: str, request_id: str) -> None:
         """Remove a permission request."""
@@ -303,6 +327,7 @@ class SyncContext:
                 if p.get("id") != request_id
             ]
             self._notify("permission.replied", {"session_id": session_id, "request_id": request_id})
+            self._notify(SyncEvent.PERMISSION_UPDATED, {"session_id": session_id})
 
     # Question methods
     def get_questions(self, session_id: str) -> List[Dict[str, Any]]:
@@ -315,6 +340,7 @@ class SyncContext:
             self._data.questions[session_id] = []
         self._data.questions[session_id].append(question)
         self._notify("question.asked", question)
+        self._notify(SyncEvent.QUESTION_UPDATED, {"session_id": session_id})
 
     def remove_question(self, session_id: str, request_id: str) -> None:
         """Remove a question request."""
@@ -323,18 +349,21 @@ class SyncContext:
                 q for q in self._data.questions[session_id]
                 if q.get("id") != request_id
             ]
+            self._notify(SyncEvent.QUESTION_UPDATED, {"session_id": session_id})
 
     # MCP methods
     def set_mcp_status(self, mcp: Dict[str, Dict[str, Any]]) -> None:
         """Set MCP status."""
         self._data.mcp = mcp
         self._notify("mcp", mcp)
+        self._notify(SyncEvent.MCP_UPDATED, mcp)
 
     # LSP methods
     def set_lsp_status(self, lsp: List[Dict[str, Any]]) -> None:
         """Set LSP status."""
         self._data.lsp = lsp
         self._notify("lsp", lsp)
+        self._notify(SyncEvent.LSP_UPDATED, lsp)
 
     # Path methods
     def set_paths(self, paths: Dict[str, str]) -> None:

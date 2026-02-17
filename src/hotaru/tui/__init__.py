@@ -51,7 +51,7 @@ from .dialogs import (
     SessionListDialog,
     HelpDialog,
 )
-from .screens import HomeScreen, SessionScreen
+from .routes import HomeScreen, SessionScreen
 
 # Context providers
 from .context import (

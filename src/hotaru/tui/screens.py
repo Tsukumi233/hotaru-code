@@ -13,11 +13,12 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from .commands import CommandRegistry, create_default_commands
-from .context import use_kv, use_local, use_route, use_sdk, use_sync
+from .context import SyncEvent, use_kv, use_local, use_route, use_sdk, use_sync
 from .context.route import HomeRoute, PromptInfo, SessionRoute
 from .dialogs import InputDialog, PermissionDialog, SelectDialog
 from .header_usage import compute_session_header_usage
 from .input_parsing import enrich_content_with_file_references
+from .state import ScreenSubscriptions, select_runtime_status
 from .widgets import (
     AppFooter,
     AssistantTextPart,
@@ -128,6 +129,7 @@ class HomeScreen(Screen):
     def __init__(self, initial_prompt: Optional[str] = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.initial_prompt = initial_prompt
+        self._subscriptions = ScreenSubscriptions()
         self._command_registry = CommandRegistry()
         for cmd in create_default_commands():
             self._command_registry.register(cmd)
@@ -161,15 +163,8 @@ class HomeScreen(Screen):
 
         # Footer bar
         sdk = use_sdk()
-        sync = use_sync()
-        mcp_data = sync.data.mcp
-        mcp_connected = sum(1 for v in mcp_data.values() if v.get("status") == "connected")
-        mcp_error = any(v.get("status") == "failed" for v in mcp_data.values())
-
         yield AppFooter(
             directory=sdk.cwd,
-            mcp_connected=mcp_connected,
-            mcp_error=mcp_error,
             version=__version__,
             id="home-footer",
         )
@@ -180,6 +175,20 @@ class HomeScreen(Screen):
         if self.initial_prompt:
             prompt.value = self.initial_prompt
         self._refresh_prompt_meta()
+        self._refresh_footer()
+        self._bind_subscriptions()
+
+    def on_unmount(self) -> None:
+        self._subscriptions.clear()
+
+    def _bind_subscriptions(self) -> None:
+        sync = use_sync()
+        local = use_local()
+
+        self._subscriptions.add(sync.on(SyncEvent.MCP_UPDATED, lambda _data: self._refresh_footer()))
+        self._subscriptions.add(sync.on(SyncEvent.LSP_UPDATED, lambda _data: self._refresh_footer()))
+        self._subscriptions.add(local.agent.on_change(lambda _name: self._refresh_prompt_meta()))
+        self._subscriptions.add(local.model.on_change(lambda _model: self._refresh_prompt_meta()))
 
     def _refresh_prompt_meta(self) -> None:
         local = use_local()
@@ -195,6 +204,11 @@ class HomeScreen(Screen):
             meta.model_name = ""
             meta.provider = ""
         meta.refresh()
+
+    def _refresh_footer(self) -> None:
+        snapshot = select_runtime_status(sync=use_sync(), route=use_route())
+        footer = self.query_one("#home-footer", AppFooter)
+        footer.apply_runtime_snapshot(snapshot, show_lsp=False)
 
     def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
         if self.app.execute_slash_command(event.value, source="slash"):
@@ -300,6 +314,7 @@ class SessionScreen(Screen):
         super().__init__(**kwargs)
         self.session_id = session_id
         self.initial_message = initial_message
+        self._subscriptions = ScreenSubscriptions()
         self._active_turn: Optional[AssistantTurnState] = None
         self._loading_spinner: Optional[Spinner] = None
         self._uses_tool_part_updates: bool = False
@@ -342,17 +357,8 @@ class SessionScreen(Screen):
 
         # Footer bar
         sdk = use_sdk()
-        sync = use_sync()
-        mcp_data = sync.data.mcp
-        mcp_connected = sum(1 for v in mcp_data.values() if v.get("status") == "connected")
-        mcp_error = any(v.get("status") == "failed" for v in mcp_data.values())
-        lsp_count = len(sync.data.lsp)
-
         yield AppFooter(
             directory=sdk.cwd,
-            mcp_connected=mcp_connected,
-            mcp_error=mcp_error,
-            lsp_count=lsp_count,
             show_lsp=True,
             version=__version__,
             id="session-footer",
@@ -361,13 +367,37 @@ class SessionScreen(Screen):
     def on_mount(self) -> None:
         prompt = self.query_one("#prompt-input", PromptInput)
         prompt.focus()
+        self._bind_subscriptions()
         self._refresh_header()
+        self._refresh_footer()
 
         if self.session_id:
             self.run_worker(self._load_session_history(), exclusive=False)
 
         if self.initial_message:
             self.call_after_refresh(lambda: self._send_message(self.initial_message or ""))
+
+    def on_unmount(self) -> None:
+        self._subscriptions.clear()
+
+    def _bind_subscriptions(self) -> None:
+        sync = use_sync()
+        local = use_local()
+
+        self._subscriptions.add(sync.on(SyncEvent.MCP_UPDATED, lambda _data: self._refresh_footer()))
+        self._subscriptions.add(sync.on(SyncEvent.LSP_UPDATED, lambda _data: self._refresh_footer()))
+        self._subscriptions.add(sync.on(SyncEvent.PERMISSION_UPDATED, lambda _data: self._refresh_footer()))
+        self._subscriptions.add(sync.on(SyncEvent.SESSION_STATUS_UPDATED, lambda _data: self._refresh_header()))
+        self._subscriptions.add(sync.on(SyncEvent.MESSAGES_UPDATED, self._on_messages_updated))
+        self._subscriptions.add(local.agent.on_change(lambda _name: self._refresh_prompt_meta()))
+        self._subscriptions.add(local.model.on_change(lambda _model: self._refresh_prompt_meta()))
+
+    def _on_messages_updated(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        if payload.get("session_id") != self.session_id:
+            return
+        self._refresh_header()
 
     async def _load_session_history(self) -> None:
         """Load and render historical messages for an existing session."""
@@ -633,6 +663,7 @@ class SessionScreen(Screen):
 
         header.refresh()
         self._refresh_prompt_meta()
+        self._refresh_footer()
 
     def _refresh_prompt_meta(self) -> None:
         """Refresh agent/model info below the prompt."""
@@ -649,6 +680,11 @@ class SessionScreen(Screen):
             meta.model_name = ""
             meta.provider = ""
         meta.refresh()
+
+    def _refresh_footer(self) -> None:
+        snapshot = select_runtime_status(sync=use_sync(), route=use_route())
+        footer = self.query_one("#session-footer", AppFooter)
+        footer.apply_runtime_snapshot(snapshot, show_lsp=True)
 
     def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
         if self.app.execute_slash_command(event.value, source="slash"):

@@ -22,6 +22,7 @@ from rich.console import Group
 from typing import Any, Dict, List, Optional, Callable
 
 from .theme import ThemeManager
+from .state.runtime_status import RuntimeStatusSnapshot
 from .util import FilteredList, fuzzy_match
 
 
@@ -1061,8 +1062,10 @@ class AppFooter(Static):
         mcp_connected: int = 0,
         mcp_error: bool = False,
         lsp_count: int = 0,
+        permission_count: int = 0,
         version: str = "",
         show_lsp: bool = False,
+        show_status_hint: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -1070,8 +1073,26 @@ class AppFooter(Static):
         self.mcp_connected = mcp_connected
         self.mcp_error = mcp_error
         self.lsp_count = lsp_count
+        self.permission_count = permission_count
         self.version = version
         self.show_lsp = show_lsp
+        self.show_status_hint = show_status_hint
+
+    def apply_runtime_snapshot(
+        self,
+        snapshot: RuntimeStatusSnapshot,
+        *,
+        show_lsp: Optional[bool] = None,
+    ) -> None:
+        """Apply a normalized runtime status snapshot and refresh."""
+        self.mcp_connected = snapshot.mcp_connected
+        self.mcp_error = snapshot.mcp_error
+        self.lsp_count = snapshot.lsp_count
+        self.permission_count = snapshot.permission_count
+        self.show_status_hint = snapshot.show_status_hint
+        if show_lsp is not None:
+            self.show_lsp = show_lsp
+        self.refresh()
 
     def render(self) -> Text:
         theme = ThemeManager.get_theme()
@@ -1082,6 +1103,13 @@ class AppFooter(Static):
 
         # Build right-side items
         right_parts: List[Text] = []
+
+        if self.permission_count > 0:
+            perm = Text()
+            perm.append("△", style=theme.warning)
+            suffix = "s" if self.permission_count != 1 else ""
+            perm.append(f" {self.permission_count} Permission{suffix}", style=theme.text)
+            right_parts.append(perm)
 
         if self.show_lsp:
             lsp = Text()
@@ -1097,8 +1125,9 @@ class AppFooter(Static):
             mcp.append(f" {self.mcp_connected} MCP", style=theme.text)
             right_parts.append(mcp)
 
-            status_hint = Text("/status", style=theme.text_muted)
-            right_parts.append(status_hint)
+        should_show_status_hint = self.show_status_hint or bool(right_parts)
+        if should_show_status_hint:
+            right_parts.append(Text("/status", style=theme.text_muted))
 
         if self.version:
             right_parts.append(Text(self.version, style=theme.text_muted))

@@ -7,7 +7,7 @@ contextvars and class-based state management.
 
 from .route import RouteContext, RouteProvider, Route, HomeRoute, SessionRoute, use_route
 from .local import LocalContext, LocalProvider, use_local
-from .sync import SyncContext, SyncProvider, use_sync
+from .sync import SyncContext, SyncEvent, SyncProvider, use_sync
 from .args import ArgsContext, ArgsProvider, Args, use_args
 from .kv import KVContext, KVProvider, use_kv
 from .sdk import SDKContext, SDKProvider, use_sdk
@@ -26,6 +26,7 @@ __all__ = [
     "use_local",
     # Sync
     "SyncContext",
+    "SyncEvent",
     "SyncProvider",
     "use_sync",
     # Args
