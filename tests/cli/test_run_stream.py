@@ -17,28 +17,22 @@ async def test_run_command_json_emits_reasoning_and_tool_use_in_part_order(
     async def fake_project_from_directory(cls, _cwd: str):
         return SimpleNamespace(id="project_1", vcs="git"), str(tmp_path)
 
-    async def fake_default_model(cls):
-        return ("openai", "gpt-5")
-
-    async def fake_get_model(cls, provider_id: str, model_id: str):
-        return ProcessedModelInfo(
-            id=model_id,
-            provider_id=provider_id,
-            name=model_id,
-            api_id=model_id,
+    async def fake_prepare_prompt_context(**_kwargs):
+        return SimpleNamespace(
+            provider_id="openai",
+            model_id="gpt-5",
+            model_info=ProcessedModelInfo(
+                id="gpt-5",
+                provider_id="openai",
+                name="gpt-5",
+                api_id="gpt-5",
+            ),
+            session=SimpleNamespace(id="session_1", agent="build"),
+            agent_name="build",
+            system_prompt="system prompt",
+            is_resuming=False,
+            warnings=[],
         )
-
-    async def fake_default_agent(cls):
-        return "build"
-
-    async def fake_session_create(cls, **_kwargs):
-        return SimpleNamespace(id="session_1", agent="build")
-
-    async def fake_session_update(cls, _session_id: str, **_kwargs):
-        return SimpleNamespace(id="session_1", agent="build")
-
-    async def fake_system_prompt(cls, **_kwargs):
-        return "system prompt"
 
     async def fake_prompt(cls, **kwargs):
         on_text = kwargs.get("on_text")
@@ -122,12 +116,7 @@ async def test_run_command_json_emits_reasoning_and_tool_use_in_part_order(
         )
 
     monkeypatch.setattr("hotaru.cli.cmd.run.Project.from_directory", classmethod(fake_project_from_directory))
-    monkeypatch.setattr("hotaru.cli.cmd.run.Provider.default_model", classmethod(fake_default_model))
-    monkeypatch.setattr("hotaru.cli.cmd.run.Provider.get_model", classmethod(fake_get_model))
-    monkeypatch.setattr("hotaru.cli.cmd.run.Agent.default_agent", classmethod(fake_default_agent))
-    monkeypatch.setattr("hotaru.cli.cmd.run.Session.create", classmethod(fake_session_create))
-    monkeypatch.setattr("hotaru.cli.cmd.run.Session.update", classmethod(fake_session_update))
-    monkeypatch.setattr("hotaru.cli.cmd.run.SystemPrompt.build_full_prompt", classmethod(fake_system_prompt))
+    monkeypatch.setattr("hotaru.cli.cmd.run.prepare_prompt_context", fake_prepare_prompt_context)
     monkeypatch.setattr("hotaru.cli.cmd.run.SessionPrompt.prompt", classmethod(fake_prompt))
     monkeypatch.setattr("hotaru.cli.cmd.run.Bus.subscribe", lambda *_args, **_kwargs: (lambda: None))
 
