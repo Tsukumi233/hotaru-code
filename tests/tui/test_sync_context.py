@@ -1,24 +1,5 @@
-from pathlib import Path
-
 import pytest
 
-from hotaru.core.global_paths import GlobalPath
-from hotaru.core.id import Identifier
-from hotaru.session import Session
-from hotaru.session.message_store import (
-    MessageInfo,
-    MessageTime,
-    ModelRef,
-    ReasoningPart,
-    StepFinishPart,
-    StepStartPart,
-    TextPart,
-    TokenUsage,
-    ToolPart,
-    ToolState,
-    ToolStateTime,
-)
-from hotaru.storage import Storage
 from hotaru.tui.context.sync import SyncContext
 
 
@@ -48,104 +29,48 @@ def test_update_session_keeps_recency_order() -> None:
     assert [item["id"] for item in ctx.data.sessions] == ["s1", "s2"]
 
 
-def _setup_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(GlobalPath, "data", classmethod(lambda cls: str(data_dir)))
-    Storage.reset()
+class _FakeSDK:
+    def __init__(self) -> None:
+        self.get_session_calls: list[str] = []
+        self.get_messages_calls: list[str] = []
+
+    async def get_session(self, session_id: str):
+        self.get_session_calls.append(session_id)
+        return {
+            "id": session_id,
+            "title": "Demo Session",
+            "agent": "build",
+            "time": {"created": 1, "updated": 2},
+        }
+
+    async def get_messages(self, session_id: str):
+        self.get_messages_calls.append(session_id)
+        return [
+            {"id": "m_user", "role": "user", "info": {"id": "m_user"}, "parts": [{"type": "text", "text": "hello"}]},
+            {
+                "id": "m_assistant",
+                "role": "assistant",
+                "info": {"id": "m_assistant"},
+                "metadata": {"usage": {"input_tokens": 10}},
+                "parts": [{"type": "reasoning"}, {"type": "tool"}],
+            },
+        ]
 
 
 @pytest.mark.anyio
-async def test_sync_session_prefers_structured_messages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _setup_storage(monkeypatch, tmp_path)
-
-    session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
-    user_id = Identifier.ascending("message")
-    assistant_id = Identifier.ascending("message")
-
-    await Session.update_message(
-        MessageInfo(
-            id=user_id,
-            session_id=session.id,
-            role="user",
-            agent="build",
-            model=ModelRef(provider_id="openai", model_id="gpt-5"),
-            time=MessageTime(created=1, completed=1),
-        )
-    )
-    await Session.update_part(
-        TextPart(
-            id=Identifier.ascending("part"),
-            session_id=session.id,
-            message_id=user_id,
-            text="hello",
-        )
-    )
-
-    await Session.update_message(
-        MessageInfo(
-            id=assistant_id,
-            session_id=session.id,
-            role="assistant",
-            agent="build",
-            model=ModelRef(provider_id="openai", model_id="gpt-5"),
-            time=MessageTime(created=2, completed=6),
-            tokens=TokenUsage(input=10, output=3, reasoning=2),
-            cost=0.12,
-            finish="stop",
-        )
-    )
-    await Session.update_part(
-        StepStartPart(
-            id=Identifier.ascending("part"),
-            session_id=session.id,
-            message_id=assistant_id,
-        )
-    )
-    await Session.update_part(
-        ReasoningPart(
-            id=Identifier.ascending("part"),
-            session_id=session.id,
-            message_id=assistant_id,
-            text="thinking",
-            time={"start": 2, "end": 3},
-        )
-    )
-    await Session.update_part(
-        ToolPart(
-            id=Identifier.ascending("part"),
-            session_id=session.id,
-            message_id=assistant_id,
-            tool="read",
-            call_id="call_1",
-            state=ToolState(
-                status="completed",
-                input={"filePath": "README.md"},
-                output="ok",
-                time=ToolStateTime(start=3, end=4),
-            ),
-        )
-    )
-    await Session.update_part(
-        StepFinishPart(
-            id=Identifier.ascending("part"),
-            session_id=session.id,
-            message_id=assistant_id,
-            reason="stop",
-            tokens=TokenUsage(input=10, output=3, reasoning=2),
-        )
-    )
-
+async def test_sync_session_uses_sdk_boundary_and_caches_results() -> None:
     ctx = SyncContext()
-    await ctx.sync_session(session.id, force=True)
-    messages = ctx.get_messages(session.id)
+    sdk = _FakeSDK()
+
+    await ctx.sync_session("session_1", sdk, force=True)
+    messages = ctx.get_messages("session_1")
 
     assert [msg["role"] for msg in messages] == ["user", "assistant"]
-    assistant = messages[1]
-    assert assistant["info"]["model"]["provider_id"] == "openai"
-    assert assistant["metadata"]["usage"]["input_tokens"] == 10
-    part_types = [part.get("type") for part in assistant.get("parts", [])]
-    assert "reasoning" in part_types
-    assert "tool" in part_types
-    assert "step-start" in part_types
-    assert "step-finish" in part_types
+    assert messages[1]["metadata"]["usage"]["input_tokens"] == 10
+    assert [part["type"] for part in messages[1]["parts"]] == ["reasoning", "tool"]
+    assert sdk.get_session_calls == ["session_1"]
+    assert sdk.get_messages_calls == ["session_1"]
+
+    await ctx.sync_session("session_1", sdk, force=False)
+    assert sdk.get_session_calls == ["session_1"]
+    assert sdk.get_messages_calls == ["session_1"]

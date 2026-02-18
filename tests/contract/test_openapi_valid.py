@@ -4,10 +4,15 @@ import yaml
 
 
 REQUIRED_PATHS: dict[str, set[str]] = {
+    "/v1/path": {"get"},
+    "/v1/skill": {"get"},
     "/v1/session": {"get", "post"},
-    "/v1/session/{id}": {"get"},
+    "/v1/session/{id}": {"get", "patch"},
+    "/v1/session/{id}/message": {"get"},
     "/v1/session/{id}/compact": {"post"},
     "/v1/session/{id}/message:stream": {"post"},
+    "/v1/session/{id}/message:delete": {"post"},
+    "/v1/session/{id}/message:restore": {"post"},
     "/v1/provider": {"get"},
     "/v1/provider/{id}/model": {"get"},
     "/v1/provider/connect": {"post"},

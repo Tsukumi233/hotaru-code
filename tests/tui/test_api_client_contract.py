@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from hotaru.api_client import HotaruAPIClient
+from hotaru.api_client import ApiClientError, HotaruAPIClient
 
 
 @pytest.mark.anyio
@@ -23,6 +23,14 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
             return httpx.Response(200, json=[{"id": "session_1"}])
         if route == ("GET", "/v1/session/session_1"):
             return httpx.Response(200, json={"id": "session_1"})
+        if route == ("PATCH", "/v1/session/session_1"):
+            return httpx.Response(200, json={"id": "session_1", "title": "Renamed"})
+        if route == ("GET", "/v1/session/session_1/message"):
+            return httpx.Response(200, json=[{"id": "message_1"}])
+        if route == ("POST", "/v1/session/session_1/message:delete"):
+            return httpx.Response(200, json={"deleted": 1})
+        if route == ("POST", "/v1/session/session_1/message:restore"):
+            return httpx.Response(200, json={"restored": 1})
         if route == ("POST", "/v1/session/session_1/message:stream"):
             return httpx.Response(
                 200,
@@ -31,6 +39,8 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
             )
         if route == ("POST", "/v1/session/session_1/compact"):
             return httpx.Response(200, json={"ok": True})
+        if route == ("GET", "/v1/path"):
+            return httpx.Response(200, json={"home": "/tmp", "state": "/tmp", "config": "/tmp", "cwd": "/tmp"})
         if route == ("GET", "/v1/provider"):
             return httpx.Response(200, json=[{"id": "openai", "name": "OpenAI", "models": {}}])
         if route == ("GET", "/v1/provider/openai/model"):
@@ -59,8 +69,13 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     await client.create_session({"agent": "build"})
     await client.list_sessions()
     await client.get_session("session_1")
+    await client.update_session("session_1", {"title": "Renamed"})
+    await client.list_messages("session_1")
+    await client.delete_messages("session_1", {"message_ids": ["message_1"]})
+    await client.restore_messages("session_1", {"messages": [{"id": "message_1"}]})
     events = [event async for event in client.stream_session_message("session_1", {"content": "hello"})]
     await client.compact_session("session_1")
+    await client.get_paths()
     await client.list_providers()
     await client.list_provider_models("openai")
     await client.connect_provider(
@@ -86,8 +101,13 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
         ("POST", "/v1/session"),
         ("GET", "/v1/session"),
         ("GET", "/v1/session/session_1"),
+        ("PATCH", "/v1/session/session_1"),
+        ("GET", "/v1/session/session_1/message"),
+        ("POST", "/v1/session/session_1/message:delete"),
+        ("POST", "/v1/session/session_1/message:restore"),
         ("POST", "/v1/session/session_1/message:stream"),
         ("POST", "/v1/session/session_1/compact"),
+        ("GET", "/v1/path"),
         ("GET", "/v1/provider"),
         ("GET", "/v1/provider/openai/model"),
         ("POST", "/v1/provider/connect"),
@@ -101,23 +121,21 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
 
 
 @pytest.mark.anyio
-async def test_api_client_uses_legacy_fallback_when_v1_route_missing() -> None:
-    calls: list[str] = []
+async def test_api_client_does_not_fallback_to_legacy_paths() -> None:
+    calls: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request.url.path)
+        calls.append((request.method, request.url.path))
         if request.url.path == "/v1/provider":
             return httpx.Response(404, json={"error": "missing"})
-        if request.url.path == "/provider":
-            return httpx.Response(200, json=[{"id": "demo", "name": "Demo"}])
         return httpx.Response(404, json={"error": "unexpected route"})
 
     client = HotaruAPIClient(
         base_url="http://hotaru.test",
         transport=httpx.MockTransport(handler),
     )
-    result = await client.list_providers()
+    with pytest.raises(ApiClientError):
+        await client.list_providers()
     await client.aclose()
 
-    assert result == [{"id": "demo", "name": "Demo"}]
-    assert calls == ["/v1/provider", "/provider"]
+    assert calls == [("GET", "/v1/provider")]
