@@ -409,8 +409,9 @@ class SessionScreen(Screen):
         self._show_timestamps = str(use_kv().get("timestamps", "hide")) == "show"
 
         sync = use_sync()
+        sdk = use_sdk()
         if not sync.is_session_synced(self.session_id):
-            await sync.sync_session(self.session_id)
+            await sync.sync_session(self.session_id, sdk)
 
         container = self.query_one("#messages-container", ScrollableContainer)
         container.remove_children()
@@ -991,7 +992,7 @@ class SessionScreen(Screen):
                 elif event_type == "message.completed":
                     self._active_turn = None
                     if self.session_id:
-                        await sync.sync_session(self.session_id, force=True)
+                        await sync.sync_session(self.session_id, sdk, force=True)
                         session_data = sync.get_session(self.session_id)
                         if session_data and isinstance(session_data.get("agent"), str):
                             local.agent.set(session_data["agent"])

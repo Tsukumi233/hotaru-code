@@ -130,6 +130,21 @@ class SDKContext:
             session["title"] = "Untitled"
         return session
 
+    async def update_session(self, session_id: str, *, title: str | None = None) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {}
+        if title is not None:
+            payload["title"] = str(title)
+        try:
+            session = await self._api_client.update_session(session_id, payload)
+        except ApiClientError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+
+        if "title" not in session:
+            session["title"] = "Untitled"
+        return session
+
     async def list_sessions(self, project_id: str | None = None) -> list[dict[str, Any]]:
         sessions = await self._api_client.list_sessions(project_id=project_id)
         for session in sessions:
@@ -148,8 +163,27 @@ class SDKContext:
                 return []
             raise
 
-    async def abort_message(self, session_id: str) -> None:
-        await self._api_client.abort_session(session_id)
+    async def delete_messages(self, session_id: str, message_ids: list[str]) -> int:
+        try:
+            return await self._api_client.delete_messages(
+                session_id,
+                {"message_ids": [str(item) for item in message_ids]},
+            )
+        except ApiClientError as exc:
+            if exc.status_code == 404:
+                return 0
+            raise
+
+    async def restore_messages(self, session_id: str, messages: list[dict[str, Any]]) -> int:
+        try:
+            return await self._api_client.restore_messages(
+                session_id,
+                {"messages": messages},
+            )
+        except ApiClientError as exc:
+            if exc.status_code == 404:
+                return 0
+            raise
 
     @staticmethod
     def _normalize_provider_models(models: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

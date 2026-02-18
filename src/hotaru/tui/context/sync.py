@@ -7,10 +7,8 @@ messages, providers, agents, and other data from the backend.
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Any, Callable, Set
 from contextvars import ContextVar
-import asyncio
 
 from ...util.log import Log
-from ..message_adapter import structured_messages_to_tui
 
 log = Log.create({"service": "tui.context.sync"})
 
@@ -371,43 +369,31 @@ class SyncContext:
         self._data.paths = paths
 
     # Session sync
-    async def sync_session(self, session_id: str, force: bool = False) -> None:
-        """Sync a session's full data (loads messages from disk).
+    async def sync_session(self, session_id: str, sdk: Any, force: bool = False) -> None:
+        """Sync a session's full data through the SDK/API boundary.
 
         Args:
             session_id: Session ID to sync
+            sdk: SDK context instance used for API-boundary reads
             force: If True, re-sync even if already synced
         """
         if not force and session_id in self._synced_sessions:
             return
 
-        from ...session import Session
-
-        # Load session info
-        session = await Session.get(session_id)
+        # Load session info via API boundary.
+        session = await sdk.get_session(session_id)
         if session:
-            self.update_session({
-                "id": session.id,
-                "title": session.title or "Untitled",
-                "agent": session.agent,
-                "parentID": session.parent_id,
-                "share": session.share.model_dump() if session.share else None,
-                "time": {
-                    "created": session.time.created,
-                    "updated": session.time.updated,
-                },
-            })
+            self.update_session(session)
 
-        # Load messages from structured message store.
-        stored_messages = await Session.messages(session_id=session_id)
-        msg_dicts = structured_messages_to_tui(stored_messages)
-        self.set_messages(session_id, msg_dicts)
+        # Load messages via API boundary.
+        messages = await sdk.get_messages(session_id)
+        self.set_messages(session_id, messages)
 
         # Mark as synced
         self._synced_sessions.add(session_id)
         log.debug("synced session", {
             "session_id": session_id,
-            "message_count": len(msg_dicts),
+            "message_count": len(messages),
         })
 
     def is_session_synced(self, session_id: str) -> bool:

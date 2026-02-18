@@ -12,6 +12,9 @@ from .types import (
     QuestionReplyPayload,
     SessionCompactPayload,
     SessionCreatePayload,
+    SessionDeleteMessagesPayload,
+    SessionRestoreMessagesPayload,
+    SessionUpdatePayload,
 )
 
 
@@ -58,12 +61,8 @@ class HotaruAPIClient:
         *,
         json_body: dict[str, Any] | list[Any] | None = None,
         params: dict[str, Any] | None = None,
-        fallback_path: str | None = None,
     ) -> Any:
         response = await self._client.request(method, path, json=json_body, params=params)
-
-        if response.status_code == 404 and fallback_path:
-            response = await self._client.request(method, fallback_path, json=json_body, params=params)
 
         self._raise_for_status(response)
         if response.status_code == 204 or not response.content:
@@ -81,15 +80,9 @@ class HotaruAPIClient:
         *,
         json_body: dict[str, Any] | list[Any] | None = None,
         params: dict[str, Any] | None = None,
-        fallback_path: str | None = None,
     ) -> httpx.Response:
         request = self._client.build_request(method, path, json=json_body, params=params)
         response = await self._client.send(request, stream=True)
-
-        if response.status_code == 404 and fallback_path:
-            await response.aclose()
-            request = self._client.build_request(method, fallback_path, json=json_body, params=params)
-            response = await self._client.send(request, stream=True)
 
         self._raise_for_status(response)
         return response
@@ -163,7 +156,6 @@ class HotaruAPIClient:
             "POST",
             "/v1/session",
             json_body=dict(payload or {}),
-            fallback_path="/session",
         )
         return result if isinstance(result, dict) else {}
 
@@ -173,7 +165,6 @@ class HotaruAPIClient:
             "GET",
             "/v1/session",
             params=params,
-            fallback_path="/session",
         )
         return result if isinstance(result, list) else []
 
@@ -181,7 +172,18 @@ class HotaruAPIClient:
         result = await self._request_json(
             "GET",
             f"/v1/session/{session_id}",
-            fallback_path=f"/session/{session_id}",
+        )
+        return result if isinstance(result, dict) else {}
+
+    async def update_session(
+        self,
+        session_id: str,
+        payload: SessionUpdatePayload | dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result = await self._request_json(
+            "PATCH",
+            f"/v1/session/{session_id}",
+            json_body=dict(payload or {}),
         )
         return result if isinstance(result, dict) else {}
 
@@ -189,16 +191,42 @@ class HotaruAPIClient:
         await self._request_json(
             "DELETE",
             f"/v1/session/{session_id}",
-            fallback_path=f"/session/{session_id}",
         )
 
     async def list_messages(self, session_id: str) -> list[dict[str, Any]]:
         result = await self._request_json(
             "GET",
             f"/v1/session/{session_id}/message",
-            fallback_path=f"/session/{session_id}/message",
         )
         return result if isinstance(result, list) else []
+
+    async def delete_messages(
+        self,
+        session_id: str,
+        payload: SessionDeleteMessagesPayload | dict[str, Any],
+    ) -> int:
+        result = await self._request_json(
+            "POST",
+            f"/v1/session/{session_id}/message:delete",
+            json_body=dict(payload),
+        )
+        if isinstance(result, dict):
+            return int(result.get("deleted", 0) or 0)
+        return 0
+
+    async def restore_messages(
+        self,
+        session_id: str,
+        payload: SessionRestoreMessagesPayload | dict[str, Any],
+    ) -> int:
+        result = await self._request_json(
+            "POST",
+            f"/v1/session/{session_id}/message:restore",
+            json_body=dict(payload),
+        )
+        if isinstance(result, dict):
+            return int(result.get("restored", 0) or 0)
+        return 0
 
     async def stream_session_message(
         self,
@@ -209,7 +237,6 @@ class HotaruAPIClient:
             "POST",
             f"/v1/session/{session_id}/message:stream",
             json_body=payload,
-            fallback_path=f"/session/{session_id}/message",
         )
 
         try:
@@ -227,22 +254,13 @@ class HotaruAPIClient:
             "POST",
             f"/v1/session/{session_id}/compact",
             json_body=dict(payload or {}),
-            fallback_path=f"/session/{session_id}/summarize",
         )
         return result if isinstance(result, dict) else {}
-
-    async def abort_session(self, session_id: str) -> None:
-        await self._request_json(
-            "POST",
-            f"/v1/session/{session_id}/abort",
-            fallback_path=f"/session/{session_id}/abort",
-        )
 
     async def list_providers(self) -> list[dict[str, Any]]:
         result = await self._request_json(
             "GET",
             "/v1/provider",
-            fallback_path="/provider",
         )
         return result if isinstance(result, list) else []
 
@@ -250,7 +268,6 @@ class HotaruAPIClient:
         result = await self._request_json(
             "GET",
             f"/v1/provider/{provider_id}/model",
-            fallback_path=f"/provider/{provider_id}/model",
         )
         return result if isinstance(result, list) else []
 
@@ -260,7 +277,6 @@ class HotaruAPIClient:
             "POST",
             "/v1/provider/connect",
             json_body=request_payload,
-            fallback_path="/provider/connect",
         )
         return result if isinstance(result, dict) else {"ok": bool(result)}
 
@@ -307,7 +323,6 @@ class HotaruAPIClient:
         result = await self._request_json(
             "GET",
             "/v1/agent",
-            fallback_path="/agent",
         )
         return result if isinstance(result, list) else []
 
@@ -315,7 +330,6 @@ class HotaruAPIClient:
         result = await self._request_json(
             "GET",
             "/v1/permission",
-            fallback_path="/permission",
         )
         return result if isinstance(result, list) else []
 
@@ -332,7 +346,6 @@ class HotaruAPIClient:
             "POST",
             f"/v1/permission/{request_id}/reply",
             json_body=payload,
-            fallback_path=f"/permission/{request_id}/reply",
         )
         return bool(result)
 
@@ -340,7 +353,6 @@ class HotaruAPIClient:
         result = await self._request_json(
             "GET",
             "/v1/question",
-            fallback_path="/question",
         )
         return result if isinstance(result, list) else []
 
@@ -350,7 +362,6 @@ class HotaruAPIClient:
             "POST",
             f"/v1/question/{request_id}/reply",
             json_body=payload,
-            fallback_path=f"/question/{request_id}/reply",
         )
         return bool(result)
 
@@ -358,7 +369,6 @@ class HotaruAPIClient:
         result = await self._request_json(
             "POST",
             f"/v1/question/{request_id}/reject",
-            fallback_path=f"/question/{request_id}/reject",
         )
         return bool(result)
 
@@ -366,6 +376,5 @@ class HotaruAPIClient:
         result = await self._request_json(
             "GET",
             "/v1/path",
-            fallback_path="/path",
         )
         return result if isinstance(result, dict) else {}

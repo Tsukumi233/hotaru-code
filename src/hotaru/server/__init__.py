@@ -15,14 +15,14 @@ Example:
 
 API Endpoints:
     GET /health - Health check
-    GET /path - Get path information
-    GET /provider - List providers
-    GET /provider/{id}/model - List models for a provider
-    GET /agent - List agents
-    GET /skill - List skills
-    GET /session - List sessions
-    GET /session/{id} - Get session details
-    GET /event - SSE event stream
+    GET /v1/path - Get path information
+    GET /v1/skill - List skills
+    GET /v1/provider - List providers
+    GET /v1/provider/{id}/model - List models for a provider
+    GET /v1/agent - List agents
+    GET /v1/session - List sessions
+    GET /v1/session/{id} - Get session details
+    GET /v1/event - SSE event stream
 """
 
 from .server import Server, ServerInfo

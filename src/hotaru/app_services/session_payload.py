@@ -1,8 +1,8 @@
-"""Adapters between structured session messages and TUI-friendly payloads."""
+"""Serialization helpers for session payloads exposed over API boundaries."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List
+from typing import Any
 
 from ..session.message_store import (
     CompactionPart,
@@ -18,15 +18,14 @@ from ..session.message_store import (
 )
 
 
-def structured_messages_to_tui(messages: Iterable[WithParts]) -> List[Dict[str, Any]]:
-    """Convert structured session messages into TUI message dictionaries."""
-    return [structured_message_to_tui(message) for message in messages]
+def structured_messages_to_payload(messages: list[WithParts]) -> list[dict[str, Any]]:
+    """Convert structured session messages into API-friendly dictionaries."""
+    return [structured_message_to_payload(message) for message in messages]
 
 
-def structured_message_to_tui(message: WithParts) -> Dict[str, Any]:
-    """Convert a single structured message into a TUI message dictionary."""
+def structured_message_to_payload(message: WithParts) -> dict[str, Any]:
     info = message.info
-    metadata: Dict[str, Any] = {
+    metadata: dict[str, Any] = {
         "time": {
             "created": info.time.created,
             "completed": info.time.completed,
@@ -34,7 +33,7 @@ def structured_message_to_tui(message: WithParts) -> Dict[str, Any]:
     }
 
     if info.role == "assistant":
-        assistant_meta: Dict[str, Any] = {}
+        assistant_meta: dict[str, Any] = {}
         if info.model:
             assistant_meta["provider_id"] = info.model.provider_id
             assistant_meta["model_id"] = info.model.model_id
@@ -64,11 +63,11 @@ def structured_message_to_tui(message: WithParts) -> Dict[str, Any]:
         "role": info.role,
         "info": info.model_dump(mode="json"),
         "metadata": metadata,
-        "parts": [_part_to_tui(part) for part in message.parts],
+        "parts": [_part_to_payload(part) for part in message.parts],
     }
 
 
-def _part_to_tui(part: Any) -> Dict[str, Any]:
+def _part_to_payload(part: Any) -> dict[str, Any]:
     if isinstance(part, TextPart):
         return {
             "id": part.id,
@@ -92,7 +91,6 @@ def _part_to_tui(part: Any) -> Dict[str, Any]:
         }
 
     if isinstance(part, ToolPart):
-        state = part.state.model_dump(mode="json")
         return {
             "id": part.id,
             "session_id": part.session_id,
@@ -100,7 +98,7 @@ def _part_to_tui(part: Any) -> Dict[str, Any]:
             "type": part.type,
             "tool": part.tool,
             "call_id": part.call_id,
-            "state": state,
+            "state": part.state.model_dump(mode="json"),
         }
 
     if isinstance(part, FilePart):
