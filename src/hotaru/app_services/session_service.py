@@ -69,7 +69,7 @@ class SessionService:
         if not isinstance(agent_name, str) or not agent_name.strip():
             raise ValueError("Field 'agent' must be a non-empty string")
 
-        directory = payload.get("directory") or cwd
+        directory = payload.get("directory") or payload.get("cwd") or cwd
         parent_id = payload.get("parent_id") or payload.get("parentID")
 
         session = await Session.create(

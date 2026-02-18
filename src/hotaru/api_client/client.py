@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -44,12 +45,28 @@ class HotaruAPIClient:
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = 30.0,
         client: httpx.AsyncClient | None = None,
+        headers: dict[str, str] | None = None,
+        directory: str | None = None,
     ) -> None:
+        request_headers: dict[str, str] = dict(headers or {})
+        if directory:
+            request_headers["x-hotaru-directory"] = self._encode_directory_header(directory)
+
         self._client = client or httpx.AsyncClient(
             base_url=base_url,
             transport=transport,
             timeout=timeout,
+            headers=request_headers or None,
         )
+
+        if client is not None and request_headers:
+            self._client.headers.update(request_headers)
+
+    @staticmethod
+    def _encode_directory_header(directory: str) -> str:
+        value = str(directory)
+        is_non_ascii = any(ord(ch) > 127 for ch in value)
+        return quote(value) if is_non_ascii else value
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -239,6 +256,17 @@ class HotaruAPIClient:
             json_body=payload,
         )
 
+        try:
+            async for event in self._iter_stream_events(response):
+                yield event
+        finally:
+            await response.aclose()
+
+    async def stream_events(self) -> AsyncIterator[dict[str, Any]]:
+        response = await self._stream_request(
+            "GET",
+            "/v1/event",
+        )
         try:
             async for event in self._iter_stream_events(response):
                 yield event

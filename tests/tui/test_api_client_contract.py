@@ -7,14 +7,18 @@ from hotaru.api_client import ApiClientError, HotaruAPIClient
 @pytest.mark.anyio
 async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     calls: list[tuple[str, str]] = []
+    directory_headers: list[str] = []
 
     stream_payload = (
         'data: {"type":"message.created","data":{"id":"message_1"}}\n\n'
         'data: {"type":"message.completed","data":{"id":"message_1","finish":"stop"}}\n\n'
     )
+    event_payload = 'data: {"type":"server.connected","data":{}}\n\n'
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append((request.method, request.url.path))
+        if request.url.path.startswith("/v1/"):
+            directory_headers.append(request.headers.get("x-hotaru-directory", ""))
         route = (request.method, request.url.path)
 
         if route == ("POST", "/v1/session"):
@@ -41,6 +45,12 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
             return httpx.Response(200, json={"ok": True})
         if route == ("GET", "/v1/path"):
             return httpx.Response(200, json={"home": "/tmp", "state": "/tmp", "config": "/tmp", "cwd": "/tmp"})
+        if route == ("GET", "/v1/event"):
+            return httpx.Response(
+                200,
+                text=event_payload,
+                headers={"content-type": "text/event-stream"},
+            )
         if route == ("GET", "/v1/provider"):
             return httpx.Response(200, json=[{"id": "openai", "name": "OpenAI", "models": {}}])
         if route == ("GET", "/v1/provider/openai/model"):
@@ -64,6 +74,7 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     client = HotaruAPIClient(
         base_url="http://hotaru.test",
         transport=httpx.MockTransport(handler),
+        directory="/tmp/workspace",
     )
 
     await client.create_session({"agent": "build"})
@@ -76,6 +87,7 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     events = [event async for event in client.stream_session_message("session_1", {"content": "hello"})]
     await client.compact_session("session_1")
     await client.get_paths()
+    global_events = [event async for event in client.stream_events()]
     await client.list_providers()
     await client.list_provider_models("openai")
     await client.connect_provider(
@@ -97,6 +109,8 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     await client.aclose()
 
     assert [evt["type"] for evt in events] == ["message.created", "message.completed"]
+    assert [evt["type"] for evt in global_events] == ["server.connected"]
+    assert all(value == "/tmp/workspace" for value in directory_headers)
     assert {
         ("POST", "/v1/session"),
         ("GET", "/v1/session"),
@@ -108,6 +122,7 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
         ("POST", "/v1/session/session_1/message:stream"),
         ("POST", "/v1/session/session_1/compact"),
         ("GET", "/v1/path"),
+        ("GET", "/v1/event"),
         ("GET", "/v1/provider"),
         ("GET", "/v1/provider/openai/model"),
         ("POST", "/v1/provider/connect"),

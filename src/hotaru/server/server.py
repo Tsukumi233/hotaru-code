@@ -28,6 +28,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import unquote
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -209,6 +210,32 @@ class Server:
         return payload
 
     @classmethod
+    def _decode_directory_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return unquote(text)
+        except Exception:
+            return text
+
+    @classmethod
+    def _resolve_request_directory(cls, request: Request) -> str:
+        for source, value in (
+            ("header", request.headers.get("x-hotaru-directory")),
+            ("query", request.query_params.get("directory")),
+        ):
+            resolved = cls._decode_directory_value(value)
+            if resolved:
+                log.debug("resolved request directory", {"source": source, "directory": resolved})
+                return resolved
+        fallback = str(Path.cwd())
+        log.debug("resolved request directory", {"source": "cwd", "directory": fallback})
+        return fallback
+
+    @classmethod
     def _sse_data(
         cls,
         event: dict[str, Any],
@@ -245,7 +272,7 @@ class Server:
     async def _v1_create_session(cls, request: Request) -> JSONResponse:
         try:
             payload = await cls._json_payload(request, required=False)
-            result = await SessionService.create(payload, str(Path.cwd()))
+            result = await SessionService.create(payload, cls._resolve_request_directory(request))
             return JSONResponse(result)
         except Exception as exc:
             return cls._error_from_exception(exc)
@@ -304,7 +331,7 @@ class Server:
         session_id = request.path_params["id"]
         try:
             payload = await cls._json_payload(request, required=False)
-            result = await SessionService.compact(session_id, payload, str(Path.cwd()))
+            result = await SessionService.compact(session_id, payload, cls._resolve_request_directory(request))
             return JSONResponse(result)
         except Exception as exc:
             return cls._error_from_exception(exc)
@@ -314,7 +341,11 @@ class Server:
         session_id = request.path_params["id"]
         try:
             payload = await cls._json_payload(request, required=True)
-            stream = SessionService.stream_message(session_id, payload, str(Path.cwd()))
+            stream = SessionService.stream_message(
+                session_id,
+                payload,
+                cls._resolve_request_directory(request),
+            )
         except Exception as exc:
             return cls._error_from_exception(exc)
 
@@ -435,14 +466,13 @@ class Server:
 
     @classmethod
     async def _v1_get_paths(cls, request: Request) -> JSONResponse:
-        import os
-
+        cwd = cls._resolve_request_directory(request)
         return JSONResponse(
             {
                 "home": str(GlobalPath.home()),
                 "state": str(GlobalPath.state()),
                 "config": str(GlobalPath.config()),
-                "cwd": os.getcwd(),
+                "cwd": cwd,
             }
         )
 

@@ -10,6 +10,9 @@ paths:
     get:
       operationId: v1.path.get
       summary: Get runtime paths
+      parameters:
+        - $ref: '#/components/parameters/RequestDirectoryHeader'
+        - $ref: '#/components/parameters/RequestDirectoryQuery'
       responses:
         '200':
           description: Path information
@@ -38,6 +41,9 @@ paths:
     post:
       operationId: v1.session.create
       summary: Create session
+      parameters:
+        - $ref: '#/components/parameters/RequestDirectoryHeader'
+        - $ref: '#/components/parameters/RequestDirectoryQuery'
       requestBody:
         required: true
         content:
@@ -160,6 +166,8 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: '#/components/parameters/RequestDirectoryHeader'
+        - $ref: '#/components/parameters/RequestDirectoryQuery'
       requestBody:
         required: false
         content:
@@ -247,6 +255,8 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: '#/components/parameters/RequestDirectoryHeader'
+        - $ref: '#/components/parameters/RequestDirectoryQuery'
       requestBody:
         required: true
         content:
@@ -459,6 +469,23 @@ paths:
         '500':
           $ref: '#/components/responses/ErrorResponse'
 components:
+  parameters:
+    RequestDirectoryHeader:
+      in: header
+      name: x-hotaru-directory
+      required: false
+      description: |
+        Optional workspace directory context for multi-workspace clients.
+        If provided, server routes resolve this value before query and process cwd.
+      schema:
+        type: string
+    RequestDirectoryQuery:
+      in: query
+      name: directory
+      required: false
+      description: Optional workspace directory context fallback when header is not provided.
+      schema:
+        type: string
   responses:
     ErrorResponse:
       description: Error response

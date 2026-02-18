@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from hotaru.api_client import ApiClientError
@@ -25,6 +27,26 @@ class _ApiClientStub:
 
     async def list_provider_models(self, _provider_id: str):
         return []
+
+
+class _ApiEventStreamStub:
+    def __init__(self) -> None:
+        self.closed = False
+        self.cancelled = False
+        self.started = 0
+
+    async def stream_events(self):
+        self.started += 1
+        yield {"type": "runtime", "data": {"state": "ready"}}
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 @pytest.mark.anyio
@@ -70,3 +92,19 @@ def test_event_subscription_and_emit_unsubscribe(tmp_path) -> None:
     sdk.emit_event("runtime", {"state": "stopped"})
 
     assert observed == [{"state": "ready"}]
+
+
+@pytest.mark.anyio
+async def test_event_stream_lifecycle_starts_and_stops_with_context(tmp_path) -> None:
+    api = _ApiEventStreamStub()
+    sdk = SDKContext(cwd=str(tmp_path), api_client=api)
+    observed: list[dict] = []
+
+    sdk.on_event("runtime", lambda data: observed.append(data))
+    await sdk.start_event_stream()
+    await asyncio.sleep(0.05)
+    await sdk.aclose()
+
+    assert observed == [{"state": "ready"}]
+    assert api.started == 1
+    assert api.cancelled is True
