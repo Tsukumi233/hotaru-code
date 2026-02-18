@@ -9,10 +9,10 @@
 - Runtime/project config is in `hotaru.json`.
 
 ## Build, Test, and Development Commands
-- `uv sync` - install/update dependencies from `pyproject.toml` and `uv.lock`.
-- `uv run hotaru` - launch the default TUI.
-- `uv run hotaru run -p "your prompt"` - execute a one-shot prompt.
-- `uv run pytest tests` - run tests (use as tests are added).
+- `uv sync`
+- `uv run hotaru`
+- `uv run hotaru run -p "your prompt"`
+- `uv run pytest tests`
 
 ## Coding Style & Naming Conventions
 - Follow modern software engineering practices with an emphasis on readability, maintainability, and modularity.

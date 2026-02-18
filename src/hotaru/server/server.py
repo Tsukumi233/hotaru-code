@@ -103,8 +103,8 @@ class Server:
             Route("/v1/session/{id}", cls._v1_get_session, methods=["GET"]),
             Route("/v1/session/{id}", cls._v1_update_session, methods=["PATCH"]),
             Route("/v1/session/{id}/message", cls._v1_list_messages, methods=["GET"]),
+            Route("/v1/session/{id}/message", cls._v1_message, methods=["POST"]),
             Route("/v1/session/{id}/compact", cls._v1_compact_session, methods=["POST"]),
-            Route("/v1/session/{id}/message:stream", cls._v1_message_stream, methods=["POST"]),
             Route("/v1/session/{id}/message:delete", cls._v1_delete_messages, methods=["POST"]),
             Route("/v1/session/{id}/message:restore", cls._v1_restore_messages, methods=["POST"]),
             Route("/v1/provider", cls._v1_list_providers, methods=["GET"]),
@@ -337,29 +337,18 @@ class Server:
             return cls._error_from_exception(exc)
 
     @classmethod
-    async def _v1_message_stream(cls, request: Request) -> StreamingResponse | JSONResponse:
+    async def _v1_message(cls, request: Request) -> JSONResponse:
         session_id = request.path_params["id"]
         try:
             payload = await cls._json_payload(request, required=True)
-            stream = SessionService.stream_message(
+            result = await SessionService.message(
                 session_id,
                 payload,
                 cls._resolve_request_directory(request),
             )
+            return JSONResponse(result)
         except Exception as exc:
             return cls._error_from_exception(exc)
-
-        async def event_generator():
-            try:
-                async for event in stream:
-                    yield cls._sse_data(event, session_id=session_id)
-            except Exception as exc:
-                yield cls._sse_data(
-                    {"type": "error", "data": {"error": str(exc)}},
-                    session_id=session_id,
-                )
-
-        return cls._sse_response(event_generator())
 
     @classmethod
     async def _v1_delete_messages(cls, request: Request) -> JSONResponse:

@@ -33,22 +33,20 @@ def test_request_directory_prefers_header_over_query(monkeypatch) -> None:  # ty
 def test_request_directory_uses_query_when_header_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, str] = {}
 
-    async def fake_stream(cls, session_id: str, payload: dict, cwd: str):
+    async def fake_message(cls, session_id: str, payload: dict, cwd: str):
         captured["cwd"] = cwd
-        yield {"type": "message.completed", "data": {"id": session_id}}
+        return {"ok": True, "assistant_message_id": session_id, "status": "stop", "error": None}
 
-    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.stream_message", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.message", classmethod(fake_message))
 
     app = Server._create_app()
     with TestClient(app) as client:
-        with client.stream(
-            "POST",
-            "/v1/session/ses_1/message:stream",
+        response = client.post(
+            "/v1/session/ses_1/message",
             params={"directory": "/query/path"},
             json={"content": "hello"},
-        ) as response:
-            assert response.status_code == 200
-            _ = list(response.iter_lines())
+        )
+        assert response.status_code == 200
 
     assert captured["cwd"] == "/query/path"
 

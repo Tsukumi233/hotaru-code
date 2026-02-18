@@ -202,6 +202,7 @@ async def _persist_assistant_message(
     structured_output: Optional[Any] = None,
     cost: float = 0.0,
     finish_reason: Optional[str] = None,
+    persist_parts: bool = True,
 ) -> None:
     now = _now_ms()
     tokens_structured = _usage_to_tokens(usage)
@@ -228,6 +229,8 @@ async def _persist_assistant_message(
             structured=structured_output,
         )
     )
+    if not persist_parts:
+        return
     if text:
         await Session.update_part(
             TextPart(
@@ -554,6 +557,7 @@ class SessionPrompt:
                 structured_output=step.structured_output,
                 cost=step_cost,
                 finish_reason=step.stop_reason,
+                persist_parts=False,
             )
             final_assistant_id = assistant_id_for_turn
 
@@ -708,6 +712,121 @@ class SessionPrompt:
         reasoning_parts: Dict[str, Dict[str, Any]] = {}
         fallback_index = 0
         anonymous_reasoning_key: Optional[str] = None
+        active_text: Optional[Dict[str, Any]] = None
+        tool_part_ids: Dict[str, str] = {}
+        tool_start_times: Dict[str, int] = {}
+
+        def _tool_status(value: Any) -> str:
+            status = str(value or "pending")
+            if status not in {"pending", "running", "completed", "error"}:
+                return "pending"
+            return status
+
+        async def _on_text(piece: str) -> None:
+            nonlocal active_text
+            delta = str(piece or "")
+            if not delta:
+                return
+
+            if active_text is None:
+                start = _now_ms()
+                active_text = {
+                    "part_id": Identifier.ascending("part"),
+                    "text": "",
+                    "start": start,
+                }
+                try:
+                    await Session.update_part(
+                        TextPart(
+                            id=active_text["part_id"],
+                            session_id=session_id,
+                            message_id=assistant_message_id,
+                            text="",
+                            time=PartTime(start=start),
+                        )
+                    )
+                except Exception as e:
+                    log.debug("failed to persist text start", {"error": str(e)})
+
+            active_text["text"] = str(active_text.get("text", "")) + delta
+            try:
+                await Session.update_part_delta(
+                    session_id=session_id,
+                    message_id=assistant_message_id,
+                    part_id=str(active_text["part_id"]),
+                    field="text",
+                    delta=delta,
+                )
+            except Exception as e:
+                log.debug("failed to persist text delta", {"error": str(e)})
+
+            await _emit_callback(
+                on_text,
+                delta,
+                label="text",
+            )
+
+        async def _on_tool_update(tool_state: Dict[str, Any]) -> None:
+            state = dict(tool_state or {})
+            tool_call_id = str(state.get("id") or "")
+            tool_name = str(state.get("name") or "tool")
+
+            lookup_key = tool_call_id or tool_name
+            part_id = tool_part_ids.get(lookup_key)
+            if not part_id:
+                part_id = Identifier.ascending("part")
+                tool_part_ids[lookup_key] = part_id
+
+            start_time_raw = state.get("start_time")
+            if isinstance(start_time_raw, (int, float)) and int(start_time_raw) > 0:
+                start_time = int(start_time_raw)
+            elif lookup_key in tool_start_times:
+                start_time = tool_start_times[lookup_key]
+            else:
+                start_time = _now_ms()
+            tool_start_times[lookup_key] = start_time
+
+            end_time_raw = state.get("end_time")
+            end_time = int(end_time_raw) if isinstance(end_time_raw, (int, float)) else None
+
+            try:
+                await Session.update_part(
+                    ToolPart(
+                        id=part_id,
+                        session_id=session_id,
+                        message_id=assistant_message_id,
+                        tool=tool_name,
+                        call_id=tool_call_id or lookup_key,
+                        state=ToolState(
+                            status=_tool_status(state.get("status")),
+                            input=dict(state.get("input") or {})
+                            if isinstance(state.get("input"), dict)
+                            else {},
+                            raw=str(state.get("input_json") or ""),
+                            output=state.get("output"),
+                            error=str(state.get("error")) if state.get("error") is not None else None,
+                            title=str(state.get("title")) if state.get("title") is not None else None,
+                            metadata=dict(state.get("metadata") or {})
+                            if isinstance(state.get("metadata"), dict)
+                            else {},
+                            attachments=list(state.get("attachments") or [])
+                            if isinstance(state.get("attachments"), list)
+                            else [],
+                            time=ToolStateTime(
+                                start=start_time,
+                                end=end_time,
+                            ),
+                        ),
+                    )
+                )
+            except Exception as e:
+                log.debug("failed to persist tool update", {"error": str(e)})
+
+            await _emit_callback(
+                on_tool_update,
+                state,
+                label="tool-update",
+            )
 
         def _reasoning_key(raw_id: Optional[str], *, create: bool = True) -> str:
             nonlocal fallback_index
@@ -837,10 +956,10 @@ class SessionPrompt:
         try:
             step = await processor.process_step(
                 system_prompt=system_prompt,
-                on_text=on_text,
+                on_text=_on_text,
                 on_tool_start=on_tool_start,
                 on_tool_end=on_tool_end,
-                on_tool_update=on_tool_update,
+                on_tool_update=_on_tool_update,
                 on_reasoning_start=_on_reasoning_start,
                 on_reasoning_delta=_on_reasoning_delta,
                 on_reasoning_end=_on_reasoning_end,
@@ -855,6 +974,23 @@ class SessionPrompt:
 
         for rid in list(reasoning_parts.keys()):
             await _close_reasoning(rid)
+        if active_text is not None:
+            now = _now_ms()
+            try:
+                await Session.update_part(
+                    TextPart(
+                        id=str(active_text["part_id"]),
+                        session_id=session_id,
+                        message_id=assistant_message_id,
+                        text=str(active_text.get("text", "")).rstrip(),
+                        time=PartTime(
+                            start=int(active_text.get("start") or now),
+                            end=now,
+                        ),
+                    )
+                )
+            except Exception as e:
+                log.debug("failed to finalize text part", {"error": str(e)})
 
         tokens = _usage_to_tokens(step.usage)
         cost = _usage_cost(tokens=tokens, model=model_info)
@@ -1110,6 +1246,7 @@ class SessionPrompt:
             error=result.error,
             cost=step_cost,
             finish_reason=result.stop_reason,
+            persist_parts=False,
         )
 
         if result.error:

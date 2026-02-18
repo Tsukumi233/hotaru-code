@@ -7,9 +7,8 @@ from hotaru.tui.context.sdk import SDKContext
 
 
 class _ApiClientStub:
-    async def stream_session_message(self, _session_id: str, _payload: dict):
-        raise RuntimeError("stream failed")
-        yield  # pragma: no cover
+    async def send_session_message(self, _session_id: str, _payload: dict):
+        raise RuntimeError("request failed")
 
     async def get_session(self, _session_id: str):
         raise ApiClientError(status_code=404, message="not found")
@@ -49,11 +48,56 @@ class _ApiEventStreamStub:
         self.closed = True
 
 
+class _ApiMissingIdleStub:
+    def __init__(self) -> None:
+        self._events: asyncio.Queue[dict] = asyncio.Queue()
+
+    async def send_session_message(self, session_id: str, _payload: dict):
+        await self._events.put(
+            {
+                "type": "message.part.updated",
+                "data": {
+                    "part": {
+                        "id": "part_1",
+                        "session_id": session_id,
+                        "message_id": "message_1",
+                        "type": "text",
+                        "text": "hello",
+                    }
+                },
+            }
+        )
+        return {"ok": True}
+
+    async def stream_events(self):
+        while True:
+            event = await self._events.get()
+            yield event
+
+
+class _ApiReadyStreamStub:
+    def __init__(self) -> None:
+        self.closed = False
+        self.cancelled = False
+
+    async def stream_events(self):
+        yield {"type": "server.connected", "data": {}}
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 @pytest.mark.anyio
-async def test_send_message_emits_error_event_when_api_stream_fails(tmp_path) -> None:
+async def test_send_message_emits_error_event_when_api_request_fails(tmp_path) -> None:
     sdk = SDKContext(cwd=str(tmp_path), api_client=_ApiClientStub())
     events = [event async for event in sdk.send_message(session_id="session_1", content="hello")]
-    assert events == [{"type": "error", "data": {"error": "stream failed"}}]
+    assert events == [{"type": "error", "data": {"error": "request failed"}}]
 
 
 @pytest.mark.anyio
@@ -108,3 +152,49 @@ async def test_event_stream_lifecycle_starts_and_stops_with_context(tmp_path) ->
     assert observed == [{"state": "ready"}]
     assert api.started == 1
     assert api.cancelled is True
+
+
+@pytest.mark.anyio
+async def test_send_message_finishes_without_idle_when_status_event_missing(tmp_path) -> None:
+    sdk = SDKContext(cwd=str(tmp_path), api_client=_ApiMissingIdleStub())
+    events = [event async for event in sdk.send_message(session_id="session_1", content="hello")]
+    await sdk.aclose()
+
+    assert [event["type"] for event in events] == ["message.part.updated"]
+
+
+@pytest.mark.anyio
+async def test_start_event_stream_bootstraps_embedded_server_for_default_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from hotaru.server.server import DEFAULT_PORT, Server, ServerInfo
+
+    state: dict[str, ServerInfo | None] = {"info": None}
+    starts: list[tuple[str, int]] = []
+    stops: list[bool] = []
+
+    def fake_info(cls):
+        return state["info"]
+
+    async def fake_start(cls, host: str = "127.0.0.1", port: int = DEFAULT_PORT):
+        starts.append((host, port))
+        info = ServerInfo(host=host, port=port)
+        state["info"] = info
+        return info
+
+    async def fake_stop(cls) -> None:
+        stops.append(True)
+        state["info"] = None
+
+    monkeypatch.setattr(Server, "info", classmethod(fake_info))
+    monkeypatch.setattr(Server, "start", classmethod(fake_start))
+    monkeypatch.setattr(Server, "stop", classmethod(fake_stop))
+    monkeypatch.setattr(SDKContext, "_build_default_api_client", staticmethod(lambda _cwd: _ApiReadyStreamStub()))
+
+    sdk = SDKContext(cwd=str(tmp_path))
+    await sdk.start_event_stream()
+    await sdk.aclose()
+
+    assert starts == [("127.0.0.1", DEFAULT_PORT)]
+    assert stops == [True]

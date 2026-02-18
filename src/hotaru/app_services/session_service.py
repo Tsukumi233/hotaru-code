@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from ..agent import Agent
-from ..core.id import Identifier
+from ..core.bus import Bus
 from ..provider import Provider
-from ..session import Session, SessionCompaction, SessionPrompt
+from ..session import (
+    Session,
+    SessionCompaction,
+    SessionPrompt,
+    SessionStatus,
+    SessionStatusProperties,
+)
 from ..session.message_store import MessageInfo as StoredMessageInfo
 from ..session.message_store import parse_part
 from .session_payload import structured_messages_to_payload
@@ -233,12 +239,12 @@ class SessionService:
         }
 
     @classmethod
-    async def stream_message(
+    async def message(
         cls,
         session_id: str,
         payload: dict[str, Any],
         cwd: str,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> dict[str, Any]:
         content = payload.get("content")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("Field 'content' must be a non-empty string")
@@ -258,15 +264,10 @@ class SessionService:
             raise ValueError("Field 'agent' must be a non-empty string")
 
         worktree = session.directory or cwd
-        assistant_message_id = Identifier.ascending("message")
-
-        yield {
-            "type": "message.created",
-            "data": {
-                "id": assistant_message_id,
-                "role": "assistant",
-            },
-        }
+        await Bus.publish(
+            SessionStatus,
+            SessionStatusProperties(session_id=session_id, status={"type": "working"}),
+        )
 
         try:
             result = await SessionPrompt.prompt(
@@ -278,27 +279,15 @@ class SessionService:
                 cwd=str(Path(worktree)),
                 worktree=str(Path(worktree)),
                 resume_history=True,
-                assistant_message_id=assistant_message_id,
             )
-        except Exception as exc:
-            yield {
-                "type": "error",
-                "data": {"error": str(exc)},
+            return {
+                "ok": result.result.error is None,
+                "assistant_message_id": result.assistant_message_id,
+                "status": result.result.status,
+                "error": result.result.error,
             }
-            return
-
-        if result.result.error:
-            yield {
-                "type": "error",
-                "data": {"error": str(result.result.error)},
-            }
-            return
-
-        yield {
-            "type": "message.completed",
-            "data": {
-                "id": result.assistant_message_id,
-                "finish": result.result.stop_reason or "stop",
-                "usage": dict(result.result.usage or {}),
-            },
-        }
+        finally:
+            await Bus.publish(
+                SessionStatus,
+                SessionStatusProperties(session_id=session_id, status={"type": "idle"}),
+            )

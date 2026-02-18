@@ -156,6 +156,36 @@ paths:
           $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
+    post:
+      operationId: v1.session.message
+      summary: Send message to session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/RequestDirectoryHeader'
+        - $ref: '#/components/parameters/RequestDirectoryQuery'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StreamMessageRequest'
+      responses:
+        '200':
+          description: Message request result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompactSessionResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
   /v1/session/{id}/compact:
     post:
       operationId: v1.session.compact
@@ -239,37 +269,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RestoreMessagesResponse'
-        '400':
-          $ref: '#/components/responses/ErrorResponse'
-        '404':
-          $ref: '#/components/responses/ErrorResponse'
-        '500':
-          $ref: '#/components/responses/ErrorResponse'
-  /v1/session/{id}/message:stream:
-    post:
-      operationId: v1.session.message.stream
-      summary: Stream session message
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-        - $ref: '#/components/parameters/RequestDirectoryHeader'
-        - $ref: '#/components/parameters/RequestDirectoryQuery'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/StreamMessageRequest'
-      responses:
-        '200':
-          description: SSE stream
-          content:
-            text/event-stream:
-              schema:
-                $ref: '#/components/schemas/SseEnvelope'
         '400':
           $ref: '#/components/responses/ErrorResponse'
         '404':

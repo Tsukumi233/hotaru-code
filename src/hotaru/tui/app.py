@@ -410,6 +410,7 @@ class TuiApp(App):
 
     async def on_mount(self) -> None:
         """Handle application mount — runs async bootstrap then shows screen."""
+        await self.sdk_ctx.start_event_stream()
         await self._bootstrap()
         self._start_runtime_subscriptions()
 
@@ -621,6 +622,19 @@ class TuiApp(App):
         self._runtime_unsubscribers.append(Bus.subscribe(QuestionAsked, on_question_asked))
         self._runtime_unsubscribers.append(Bus.subscribe(QuestionReplied, on_question_resolved))
         self._runtime_unsubscribers.append(Bus.subscribe(QuestionRejected, on_question_resolved))
+
+        def bind_sdk_event(event_type: str) -> None:
+            def on_event(data: Any) -> None:
+                if not isinstance(data, dict):
+                    return
+                self.sync_ctx.apply_runtime_event(event_type, data)
+
+            self._runtime_unsubscribers.append(self.sdk_ctx.on_event(event_type, on_event))
+
+        bind_sdk_event("message.updated")
+        bind_sdk_event("message.part.updated")
+        bind_sdk_event("message.part.delta")
+        bind_sdk_event("session.status")
 
     def _schedule_lsp_refresh(self) -> None:
         """Coalesce LSP refreshes so only one refresh runs at a time."""

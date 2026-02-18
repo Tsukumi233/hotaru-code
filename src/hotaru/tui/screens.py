@@ -1,8 +1,6 @@
 """Screens for TUI application."""
 
 import asyncio
-import time
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -33,15 +31,6 @@ from .widgets import (
     StatusBar,
     ToolDisplay,
 )
-
-
-@dataclass
-class AssistantTurnState:
-    """Mounted widgets for the currently streaming assistant turn."""
-
-    text_parts: Dict[str, AssistantTextPart] = field(default_factory=dict)
-    tool_widgets: Dict[str, ToolDisplay] = field(default_factory=dict)
-
 
 def _build_slash_commands(registry: CommandRegistry) -> List[SlashCommandItem]:
     """Build slash command items from registry."""
@@ -315,10 +304,9 @@ class SessionScreen(Screen):
         self.session_id = session_id
         self.initial_message = initial_message
         self._subscriptions = ScreenSubscriptions()
-        self._active_turn: Optional[AssistantTurnState] = None
         self._loading_spinner: Optional[Spinner] = None
-        self._uses_tool_part_updates: bool = False
-        self._legacy_tool_parts: Dict[str, Dict[str, Any]] = {}
+        self._history_refresh_scheduled = False
+        self._history_refresh_running = False
         self._show_tool_details = bool(use_kv().get("tool_details_visibility", True))
         self._show_thinking = bool(use_kv().get("thinking_visibility", True))
         self._show_assistant_metadata = bool(use_kv().get("assistant_metadata_visibility", True))
@@ -398,8 +386,29 @@ class SessionScreen(Screen):
         if payload.get("session_id") != self.session_id:
             return
         self._refresh_header()
+        self._schedule_history_refresh()
 
-    async def _load_session_history(self) -> None:
+    def _schedule_history_refresh(self) -> None:
+        if self._history_refresh_scheduled:
+            return
+        self._history_refresh_scheduled = True
+        self.run_worker(self._refresh_history_debounced(), exclusive=False)
+
+    async def _refresh_history_debounced(self) -> None:
+        await asyncio.sleep(0.016)
+        self._history_refresh_scheduled = False
+        if self._history_refresh_running:
+            self._schedule_history_refresh()
+            return
+        self._history_refresh_running = True
+        try:
+            await self._load_session_history(sync_if_needed=False)
+            container = self.query_one("#messages-container", ScrollableContainer)
+            container.scroll_end()
+        finally:
+            self._history_refresh_running = False
+
+    async def _load_session_history(self, sync_if_needed: bool = True) -> None:
         """Load and render historical messages for an existing session."""
         if not self.session_id:
             return
@@ -410,12 +419,11 @@ class SessionScreen(Screen):
 
         sync = use_sync()
         sdk = use_sdk()
-        if not sync.is_session_synced(self.session_id):
+        if sync_if_needed and not sync.is_session_synced(self.session_id):
             await sync.sync_session(self.session_id, sdk)
 
         container = self.query_one("#messages-container", ScrollableContainer)
         container.remove_children()
-        self._active_turn = None
         self._loading_spinner = None
 
         for message in sync.get_messages(self.session_id):
@@ -576,14 +584,6 @@ class SessionScreen(Screen):
                 return f"{agent} · {model_id}"
         return agent
 
-    def _assistant_label_from_runtime(self, agent: str) -> Optional[str]:
-        if not self._show_assistant_metadata:
-            return None
-        model_selection = use_local().model.current()
-        if model_selection:
-            return f"{agent} · {model_selection.provider_id}/{model_selection.model_id}"
-        return agent
-
     def _message_timestamp(self, info: Any) -> Optional[str]:
         if not self._show_timestamps or not isinstance(info, dict):
             return None
@@ -714,16 +714,6 @@ class SessionScreen(Screen):
             return
 
         container = self.query_one("#messages-container", ScrollableContainer)
-        container.mount(
-            MessageBubble(
-                content=content,
-                role="user",
-                timestamp=self._now_timestamp(),
-                classes="message user-message",
-            )
-        )
-        container.scroll_end()
-
         self._loading_spinner = Spinner("Thinking...")
         container.mount(self._loading_spinner)
 
@@ -731,7 +721,7 @@ class SessionScreen(Screen):
         prompt.disabled = True
 
         self.run_worker(
-            self._send_message_async(content, container),
+            self._send_message_async(content),
             exclusive=True,
         )
 
@@ -828,24 +818,7 @@ class SessionScreen(Screen):
             pass
         self._loading_spinner = None
 
-    async def _begin_turn(self, container: ScrollableContainer, agent: str) -> None:
-        await self._remove_spinner()
-        await container.mount(
-            MessageBubble(
-                content="",
-                role="assistant",
-                agent=self._assistant_label_from_runtime(agent),
-                timestamp=self._now_timestamp(),
-                classes="message assistant-message",
-            )
-        )
-        self._uses_tool_part_updates = False
-        self._legacy_tool_parts = {}
-        self._active_turn = AssistantTurnState()
-
-    async def _send_message_async(
-        self, content: str, container: ScrollableContainer
-    ) -> None:
+    async def _send_message_async(self, content: str) -> None:
         """Send a message and stream assistant output."""
         from ..core.bus import Bus
         from ..permission import Permission, PermissionAsked, PermissionReply
@@ -973,6 +946,7 @@ class SessionScreen(Screen):
                     severity="information",
                 )
 
+            finalized = False
             async for event in sdk.send_message(
                 session_id=self.session_id,
                 content=enriched_content,
@@ -981,32 +955,33 @@ class SessionScreen(Screen):
                 files=[{"path": path} for path in attached_paths] if attached_paths else None,
             ):
                 event_type = event.get("type")
-                if event_type == "message.created":
-                    await self._begin_turn(container, agent)
-                elif event_type == "message.part.updated":
-                    await self._handle_part_update(event, container, agent)
-                elif event_type == "message.part.tool.start":
-                    await self._handle_tool_start(event, container, agent)
-                elif event_type == "message.part.tool.end":
-                    await self._handle_tool_end(event, container)
-                elif event_type == "message.completed":
-                    self._active_turn = None
+                if event_type == "session.status":
+                    status_data = event.get("data", {}).get("status", {})
+                    status_type = status_data.get("type") if isinstance(status_data, dict) else None
+                    if status_type != "idle":
+                        continue
+                    finalized = True
                     if self.session_id:
-                        await sync.sync_session(self.session_id, sdk, force=True)
                         session_data = sync.get_session(self.session_id)
                         if session_data and isinstance(session_data.get("agent"), str):
                             local.agent.set(session_data["agent"])
                             self._refresh_prompt_meta()
-                        # Re-render from structured history so non-streamed parts
-                        # (for example compaction boundaries) are also visible.
-                        await self._load_session_history()
-                        container = self.query_one("#messages-container", ScrollableContainer)
                 elif event_type == "error":
                     error_msg = event.get("data", {}).get("error", "Unknown error")
                     self.app.notify(f"Error: {error_msg}", severity="error")
                     await self._remove_spinner()
 
-                container.scroll_end()
+            # OpenCode-like behavior: message request completion is authoritative.
+            # If idle event was missed in transit, force a final sync after stream loop exits.
+            if self.session_id and not finalized:
+                await sync.sync_session(self.session_id, sdk, force=True)
+                session_data = sync.get_session(self.session_id)
+                if session_data and isinstance(session_data.get("agent"), str):
+                    local.agent.set(session_data["agent"])
+                    self._refresh_prompt_meta()
+                await self._load_session_history()
+            container = self.query_one("#messages-container", ScrollableContainer)
+            container.scroll_end()
         except Exception as e:
             self.app.notify(f"Error sending message: {str(e)}", severity="error")
             await self._remove_spinner()
@@ -1014,102 +989,9 @@ class SessionScreen(Screen):
             unsub()
             unsub_question()
             await self._remove_spinner()
-            self._active_turn = None
             prompt = self.query_one("#prompt-input", PromptInput)
             prompt.disabled = False
             prompt.focus()
-
-    async def _ensure_turn(
-        self, container: ScrollableContainer, agent: str
-    ) -> AssistantTurnState:
-        if self._active_turn is None:
-            await self._begin_turn(container, agent)
-        return self._active_turn or AssistantTurnState()
-
-    async def _handle_part_update(
-        self, event: Dict[str, Any], container: ScrollableContainer, agent: str
-    ) -> None:
-        part = event.get("data", {}).get("part", {})
-        part_type = part.get("type")
-        if part_type == "text":
-            part_id = part.get("id", "")
-            text = part.get("text", "")
-            turn = await self._ensure_turn(container, agent)
-
-            widget = turn.text_parts.get(part_id)
-            if widget:
-                widget.content = text
-                widget.refresh()
-                return
-
-            text_widget = AssistantTextPart(
-                content=text,
-                part_id=part_id,
-                classes="message assistant-message",
-            )
-            turn.text_parts[part_id] = text_widget
-            await container.mount(text_widget)
-            return
-        if part_type in {"reasoning", "step-start", "step-finish", "patch", "compaction", "subtask", "file"}:
-            content = self._render_part_content(part)
-            if not content:
-                return
-            part_id = str(part.get("id") or f"part-{len(self._active_turn.text_parts) if self._active_turn else 0}")
-            turn = await self._ensure_turn(container, agent)
-            widget = turn.text_parts.get(part_id)
-            if widget:
-                widget.content = content
-                widget.refresh()
-                return
-            text_widget = AssistantTextPart(
-                content=content,
-                part_id=part_id,
-                classes="message assistant-message",
-            )
-            turn.text_parts[part_id] = text_widget
-            await container.mount(text_widget)
-            return
-        if part_type == "tool":
-            self._uses_tool_part_updates = True
-            await self._handle_tool_part_update(part, container, agent)
-            return
-
-    async def _handle_tool_part_update(
-        self,
-        part: Dict[str, Any],
-        container: ScrollableContainer,
-        agent: str,
-    ) -> None:
-        tool_key = self._tool_widget_key(part)
-        if not tool_key:
-            return
-        turn = await self._ensure_turn(container, agent)
-        widget = turn.tool_widgets.get(tool_key)
-        if widget:
-            widget.show_details = self._show_tool_details
-            widget.set_part(part)
-            widget.refresh()
-            return
-        if self._should_hide_tool_part(part):
-            return
-        widget = ToolDisplay(
-            part=part,
-            show_details=self._show_tool_details,
-            on_open_session=self._open_task_session,
-            classes="message tool-display",
-        )
-        turn.tool_widgets[tool_key] = widget
-        await container.mount(widget)
-
-    @staticmethod
-    def _tool_widget_key(part: Dict[str, Any]) -> str:
-        call_id = part.get("call_id")
-        if isinstance(call_id, str) and call_id:
-            return call_id
-        part_id = part.get("id")
-        if isinstance(part_id, str) and part_id:
-            return part_id
-        return ""
 
     def _should_hide_tool_part(self, part: Dict[str, Any]) -> bool:
         if self._show_tool_details:
@@ -1124,66 +1006,6 @@ class SessionScreen(Screen):
     def _open_task_session(self, session_id: str) -> None:
         route = use_route()
         route.navigate(SessionRoute(session_id=session_id))
-
-    async def _handle_tool_start(
-        self, event: Dict[str, Any], container: ScrollableContainer, agent: str
-    ) -> None:
-        if self._uses_tool_part_updates:
-            return
-        data = event.get("data", {})
-        tool_id = data.get("tool_id", "")
-        tool_name = data.get("tool_name", "tool")
-        input_data = data.get("input", {})
-        now_ms = int(time.time() * 1000)
-        part_id = self._legacy_tool_parts.get(tool_id, {}).get("id")
-        part = {
-            "id": part_id or f"tool-{tool_id or tool_name}",
-            "type": "tool",
-            "tool": tool_name,
-            "call_id": tool_id,
-            "state": {
-                "status": "running",
-                "input": input_data if isinstance(input_data, dict) else {},
-                "raw": "",
-                "output": None,
-                "error": None,
-                "title": "",
-                "metadata": {},
-                "attachments": [],
-                "time": {"start": now_ms, "end": None},
-            },
-        }
-        self._legacy_tool_parts[tool_id] = part
-        await self._handle_tool_part_update(part, container, agent)
-
-    async def _handle_tool_end(
-        self, event: Dict[str, Any], container: ScrollableContainer
-    ) -> None:
-        if self._uses_tool_part_updates or self._active_turn is None:
-            return
-
-        data = event.get("data", {})
-        tool_id = data.get("tool_id", "")
-        existing = self._legacy_tool_parts.get(tool_id)
-        if not existing:
-            return
-        state = dict(existing.get("state") or {})
-        state["status"] = "error" if data.get("error") else "completed"
-        state["output"] = data.get("output")
-        state["error"] = data.get("error")
-        state["title"] = data.get("title", "")
-        metadata = data.get("metadata", {})
-        state["metadata"] = metadata if isinstance(metadata, dict) else {}
-        time_info = dict(state.get("time") or {})
-        time_info["end"] = int(time.time() * 1000)
-        state["time"] = time_info
-        existing["state"] = state
-        self._legacy_tool_parts[tool_id] = existing
-        await self._handle_tool_part_update(
-            existing,
-            container,
-            use_local().agent.current().get("name", "assistant"),
-        )
 
     def action_command_palette(self) -> None:
         self.app.action_command_palette()
@@ -1225,10 +1047,6 @@ class SessionScreen(Screen):
     def set_tool_details_visibility(self, visible: bool) -> None:
         """Update tool detail visibility and refresh timeline rendering."""
         self._show_tool_details = bool(visible)
-        if self._active_turn:
-            for widget in self._active_turn.tool_widgets.values():
-                widget.show_details = self._show_tool_details
-                widget.refresh()
         prompt = self.query_one("#prompt-input", PromptInput)
         if prompt.disabled:
             return

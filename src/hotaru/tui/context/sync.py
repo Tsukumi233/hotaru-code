@@ -23,6 +23,8 @@ class SyncEvent:
     SESSIONS_UPDATED = "sessions.updated"
     SESSION_STATUS_UPDATED = "session.status.updated"
     MESSAGES_UPDATED = "messages.updated"
+    MESSAGE_UPDATED = "message.updated"
+    PART_UPDATED = "part.updated"
     PERMISSION_UPDATED = "permission.updated"
     QUESTION_UPDATED = "question.updated"
     MCP_UPDATED = "mcp.updated"
@@ -88,6 +90,11 @@ class SyncContext:
         if isinstance(updated, (int, float)):
             return int(updated)
         return 0
+
+    @staticmethod
+    def _message_sort_key(message: Dict[str, Any]) -> str:
+        """Build an ascending sort key for message order."""
+        return str(message.get("id") or "")
 
     @property
     def data(self) -> SyncData:
@@ -235,9 +242,79 @@ class SyncContext:
             session_id: Session ID
             messages: List of messages
         """
-        self._data.messages[session_id] = messages
-        self._notify("messages", {"session_id": session_id, "messages": messages})
-        self._notify(SyncEvent.MESSAGES_UPDATED, {"session_id": session_id, "messages": messages})
+        normalized: List[Dict[str, Any]] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            payload = self._normalize_message_payload(session_id, message)
+            normalized.append(payload)
+            message_id = str(payload.get("id") or "")
+            if message_id:
+                self._data.parts[message_id] = payload["parts"]
+
+        self._data.messages[session_id] = normalized
+        self._synced_sessions.add(session_id)
+        self._notify("messages", {"session_id": session_id, "messages": normalized})
+        self._notify(SyncEvent.MESSAGES_UPDATED, {"session_id": session_id, "messages": normalized})
+
+    def _normalize_message_payload(self, session_id: str, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize runtime message/event payloads into renderable message shape."""
+        info_raw = message.get("info")
+        info: Dict[str, Any]
+        if isinstance(info_raw, dict):
+            info = dict(info_raw)
+        else:
+            info = dict(message)
+
+        if session_id and not info.get("session_id"):
+            info["session_id"] = session_id
+
+        message_id = str(message.get("id") or info.get("id") or "")
+        role = str(message.get("role") or info.get("role") or "assistant")
+
+        parts: List[Dict[str, Any]] = []
+        raw_parts = message.get("parts")
+        if isinstance(raw_parts, list):
+            for part in raw_parts:
+                if isinstance(part, dict):
+                    parts.append(dict(part))
+        parts.sort(key=self._message_sort_key)
+
+        payload: Dict[str, Any] = {
+            "id": message_id,
+            "role": role,
+            "info": info,
+            "parts": parts,
+        }
+        metadata = message.get("metadata")
+        if isinstance(metadata, dict):
+            payload["metadata"] = dict(metadata)
+        return payload
+
+    def _ensure_message_payload(self, session_id: str, message_id: str, role: str = "assistant") -> Dict[str, Any]:
+        """Ensure a message shell exists so part-first streams can render incrementally."""
+        if session_id not in self._data.messages:
+            self._data.messages[session_id] = []
+
+        messages = self._data.messages[session_id]
+        for message in messages:
+            if str(message.get("id") or "") == message_id:
+                return message
+
+        shell = {
+            "id": message_id,
+            "role": role,
+            "info": {
+                "id": message_id,
+                "role": role,
+                "session_id": session_id,
+            },
+            "parts": [],
+        }
+        messages.append(shell)
+        messages.sort(key=self._message_sort_key)
+        self._data.parts[message_id] = shell["parts"]
+        return shell
 
     def add_message(self, session_id: str, message: Dict[str, Any]) -> None:
         """Add a message to a session.
@@ -246,21 +323,41 @@ class SyncContext:
             session_id: Session ID
             message: Message data
         """
-        if session_id not in self._data.messages:
-            self._data.messages[session_id] = []
+        payload = self._normalize_message_payload(session_id, message)
+        message_id = str(payload.get("id") or "")
+        if not message_id:
+            return
 
-        messages = self._data.messages[session_id]
-        message_id = message.get("id")
+        messages = self._data.messages.setdefault(session_id, [])
+        existing_index = -1
+        for i, current in enumerate(messages):
+            if str(current.get("id") or "") == message_id:
+                existing_index = i
+                break
 
-        # Update existing or append
-        for i, m in enumerate(messages):
-            if m.get("id") == message_id:
-                messages[i] = message
-                self._notify("message.updated", message)
-                return
+        if existing_index >= 0:
+            existing = messages[existing_index]
+            merged = dict(existing)
+            merged.update(payload)
+            if "metadata" not in payload and "metadata" in existing:
+                merged["metadata"] = existing["metadata"]
+            if not payload.get("parts"):
+                merged["parts"] = existing.get("parts", [])
+            messages[existing_index] = merged
+            payload = merged
+        else:
+            messages.append(payload)
+            messages.sort(key=self._message_sort_key)
 
-        messages.append(message)
-        self._notify("message.updated", message)
+        parts_ref = payload.get("parts")
+        if not isinstance(parts_ref, list):
+            parts_ref = []
+            payload["parts"] = parts_ref
+        self._data.parts[message_id] = parts_ref
+
+        self._notify(SyncEvent.MESSAGE_UPDATED, {"session_id": session_id, "message": payload})
+        self._notify("messages", {"session_id": session_id, "messages": messages})
+        self._notify(SyncEvent.MESSAGES_UPDATED, {"session_id": session_id, "messages": messages})
 
     # Part methods
     def get_parts(self, message_id: str) -> List[Dict[str, Any]]:
@@ -290,19 +387,153 @@ class SyncContext:
             message_id: Message ID
             part: Part data
         """
-        if message_id not in self._data.parts:
-            self._data.parts[message_id] = []
+        session_id = str(part.get("session_id") or "")
+        role = "assistant"
+        existing_message = self._find_message(message_id)
+        if existing_message is not None:
+            role = str(existing_message.get("role") or role)
+            info = existing_message.get("info", {})
+            if isinstance(info, dict):
+                session_id = str(info.get("session_id") or session_id)
+        if not session_id:
+            return
 
-        parts = self._data.parts[message_id]
+        message = self._ensure_message_payload(session_id, message_id, role=role)
+        parts = message.setdefault("parts", [])
+        if not isinstance(parts, list):
+            parts = []
+            message["parts"] = parts
+        self._data.parts[message_id] = parts
         part_id = part.get("id")
 
         # Update existing or append
         for i, p in enumerate(parts):
             if p.get("id") == part_id:
-                parts[i] = part
+                parts[i] = dict(part)
+                self._notify(
+                    SyncEvent.PART_UPDATED,
+                    {"session_id": session_id, "message_id": message_id, "part": parts[i]},
+                )
+                self._notify("messages", {"session_id": session_id, "messages": self._data.messages[session_id]})
+                self._notify(
+                    SyncEvent.MESSAGES_UPDATED,
+                    {"session_id": session_id, "messages": self._data.messages[session_id]},
+                )
                 return
 
-        parts.append(part)
+        added = dict(part)
+        parts.append(added)
+        parts.sort(key=self._message_sort_key)
+        self._notify(
+            SyncEvent.PART_UPDATED,
+            {"session_id": session_id, "message_id": message_id, "part": added},
+        )
+        self._notify("messages", {"session_id": session_id, "messages": self._data.messages[session_id]})
+        self._notify(
+            SyncEvent.MESSAGES_UPDATED,
+            {"session_id": session_id, "messages": self._data.messages[session_id]},
+        )
+
+    def apply_part_delta(
+        self,
+        *,
+        session_id: str,
+        message_id: str,
+        part_id: str,
+        field: str,
+        delta: str,
+    ) -> None:
+        """Apply part delta updates from runtime events."""
+        if not session_id or not message_id or not part_id or not field:
+            return
+        message = self._ensure_message_payload(session_id, message_id, role="assistant")
+        parts = message.setdefault("parts", [])
+        if not isinstance(parts, list):
+            parts = []
+            message["parts"] = parts
+        self._data.parts[message_id] = parts
+
+        target: Optional[Dict[str, Any]] = None
+        for part in parts:
+            if str(part.get("id") or "") == part_id:
+                target = part
+                break
+
+        if target is None:
+            target = {
+                "id": part_id,
+                "session_id": session_id,
+                "message_id": message_id,
+                "type": "text",
+                field: "",
+            }
+            parts.append(target)
+            parts.sort(key=self._message_sort_key)
+
+        existing = target.get(field)
+        target[field] = f"{existing if isinstance(existing, str) else ''}{delta}"
+
+        self._notify(
+            SyncEvent.PART_UPDATED,
+            {"session_id": session_id, "message_id": message_id, "part": target},
+        )
+        self._notify("messages", {"session_id": session_id, "messages": self._data.messages[session_id]})
+        self._notify(
+            SyncEvent.MESSAGES_UPDATED,
+            {"session_id": session_id, "messages": self._data.messages[session_id]},
+        )
+
+    def _find_message(self, message_id: str) -> Optional[Dict[str, Any]]:
+        for messages in self._data.messages.values():
+            for message in messages:
+                if str(message.get("id") or "") == message_id:
+                    return message
+        return None
+
+    def apply_runtime_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Reduce runtime SDK events into the sync store."""
+        if event_type == "message.updated":
+            info = data.get("info")
+            if not isinstance(info, dict):
+                return
+            session_id = str(info.get("session_id") or "")
+            if not session_id:
+                return
+            self.add_message(session_id, info)
+            return
+
+        if event_type == "message.part.updated":
+            part = data.get("part")
+            if not isinstance(part, dict):
+                return
+            session_id = str(part.get("session_id") or "")
+            message_id = str(part.get("message_id") or "")
+            if not session_id or not message_id:
+                return
+            self.add_part(message_id, part)
+            return
+
+        if event_type == "message.part.delta":
+            session_id = str(data.get("session_id") or "")
+            message_id = str(data.get("message_id") or "")
+            part_id = str(data.get("part_id") or "")
+            field = str(data.get("field") or "")
+            delta = str(data.get("delta") or "")
+            self.apply_part_delta(
+                session_id=session_id,
+                message_id=message_id,
+                part_id=part_id,
+                field=field,
+                delta=delta,
+            )
+            return
+
+        if event_type == "session.status":
+            session_id = str(data.get("session_id") or "")
+            status = data.get("status")
+            if not session_id or not isinstance(status, dict):
+                return
+            self.set_session_status(session_id, status)
 
     # Permission methods
     def get_permissions(self, session_id: str) -> List[Dict[str, Any]]:

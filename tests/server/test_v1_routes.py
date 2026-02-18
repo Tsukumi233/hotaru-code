@@ -97,41 +97,28 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
     assert captured["compact"]["payload"]["auto"] is True
 
 
-def test_v1_session_message_stream_returns_sse_envelope(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_v1_session_message_route_delegates_to_service(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, Any] = {}
 
-    async def fake_stream(
+    async def fake_message(
         cls,
         session_id: str,
         payload: dict[str, Any],
         cwd: str,
-    ) -> AsyncIterator[dict[str, Any]]:
-        captured["stream"] = {"session_id": session_id, "payload": payload, "cwd": cwd}
-        yield {"type": "message.created", "data": {"id": "msg_1"}}
-        yield {"type": "message.completed", "data": {"id": "msg_1", "finish": "stop"}}
+    ) -> dict[str, Any]:
+        captured["message"] = {"session_id": session_id, "payload": payload, "cwd": cwd}
+        return {"ok": True, "assistant_message_id": "msg_1", "status": "stop", "error": None}
 
-    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.stream_message", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.message", classmethod(fake_message))
 
     app = Server._create_app()
     with TestClient(app) as client:
-        with client.stream("POST", "/v1/session/ses_1/message:stream", json={"content": "hello"}) as response:
-            assert response.status_code == 200
-            lines = [line for line in response.iter_lines() if line]
+        response = client.post("/v1/session/ses_1/message", json={"content": "hello"})
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
 
-    assert len(lines) >= 2
-    payload_1 = json.loads(lines[0].removeprefix("data: "))
-    payload_2 = json.loads(lines[1].removeprefix("data: "))
-
-    assert payload_1["type"] == "message.created"
-    assert payload_1["data"] == {"id": "msg_1"}
-    assert payload_1["session_id"] == "ses_1"
-    assert isinstance(payload_1["timestamp"], int)
-
-    assert payload_2["type"] == "message.completed"
-    assert payload_2["data"]["finish"] == "stop"
-
-    assert captured["stream"]["session_id"] == "ses_1"
-    assert captured["stream"]["payload"]["content"] == "hello"
+    assert captured["message"]["session_id"] == "ses_1"
+    assert captured["message"]["payload"]["content"] == "hello"
 
 
 def test_v1_provider_and_agent_routes_delegate_to_services(monkeypatch) -> None:  # type: ignore[no-untyped-def]

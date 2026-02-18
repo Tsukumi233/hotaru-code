@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from hotaru.tui.context.sdk import SDKContext
@@ -6,11 +8,56 @@ from hotaru.tui.context.sdk import SDKContext
 class _FakeApiClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple, dict]] = []
+        self._events: asyncio.Queue[dict] = asyncio.Queue()
 
-    async def stream_session_message(self, session_id: str, payload: dict):
-        self.calls.append(("stream_session_message", (session_id,), {"payload": payload}))
-        yield {"type": "message.created", "data": {"id": "message_1"}}
-        yield {"type": "message.completed", "data": {"id": "message_1", "finish": "stop"}}
+    async def send_session_message(self, session_id: str, payload: dict):
+        self.calls.append(("send_session_message", (session_id,), {"payload": payload}))
+        await self._events.put(
+            {
+                "type": "message.part.updated",
+                "data": {
+                    "part": {
+                        "id": "part_ignore",
+                        "session_id": "other_session",
+                        "message_id": "message_other",
+                        "type": "text",
+                        "text": "ignore",
+                    }
+                },
+            }
+        )
+        await self._events.put(
+            {
+                "type": "message.part.updated",
+                "data": {
+                    "part": {
+                        "id": "part_1",
+                        "session_id": session_id,
+                        "message_id": "message_1",
+                        "type": "text",
+                        "text": "hello",
+                    }
+                },
+            }
+        )
+        await self._events.put(
+            {
+                "type": "session.status",
+                "data": {"session_id": session_id, "status": {"type": "working"}},
+            }
+        )
+        await self._events.put(
+            {
+                "type": "session.status",
+                "data": {"session_id": session_id, "status": {"type": "idle"}},
+            }
+        )
+        return {"ok": True}
+
+    async def stream_events(self):
+        while True:
+            event = await self._events.get()
+            yield event
 
     async def create_session(self, payload: dict):
         self.calls.append(("create_session", tuple(), {"payload": payload}))
@@ -75,8 +122,37 @@ class _FakeApiClient:
         return True
 
 
+class _FakeApiClientNoIdle:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self._events: asyncio.Queue[dict] = asyncio.Queue()
+
+    async def send_session_message(self, session_id: str, payload: dict):
+        self.calls.append(("send_session_message", (session_id,), {"payload": payload}))
+        await self._events.put(
+            {
+                "type": "message.part.updated",
+                "data": {
+                    "part": {
+                        "id": "part_1",
+                        "session_id": session_id,
+                        "message_id": "message_1",
+                        "type": "text",
+                        "text": "hello",
+                    }
+                },
+            }
+        )
+        return {"ok": True}
+
+    async def stream_events(self):
+        while True:
+            event = await self._events.get()
+            yield event
+
+
 @pytest.mark.anyio
-async def test_send_message_uses_api_client_stream_contract(tmp_path) -> None:
+async def test_send_message_uses_api_client_event_contract(tmp_path) -> None:
     api = _FakeApiClient()
     sdk = SDKContext(cwd=str(tmp_path), api_client=api)
 
@@ -91,9 +167,15 @@ async def test_send_message_uses_api_client_stream_contract(tmp_path) -> None:
         )
     ]
 
-    assert [event["type"] for event in events] == ["message.created", "message.completed"]
+    await sdk.aclose()
+
+    assert [event["type"] for event in events] == [
+        "message.part.updated",
+        "session.status",
+        "session.status",
+    ]
     assert api.calls[0] == (
-        "stream_session_message",
+        "send_session_message",
         ("session_1",),
         {
             "payload": {
@@ -104,6 +186,24 @@ async def test_send_message_uses_api_client_stream_contract(tmp_path) -> None:
             }
         },
     )
+
+
+@pytest.mark.anyio
+async def test_send_message_finishes_without_idle_event(tmp_path) -> None:
+    api = _FakeApiClientNoIdle()
+    sdk = SDKContext(cwd=str(tmp_path), api_client=api)
+
+    events = [
+        event
+        async for event in sdk.send_message(
+            session_id="session_1",
+            content="hello",
+        )
+    ]
+
+    await sdk.aclose()
+
+    assert [event["type"] for event in events] == ["message.part.updated"]
 
 
 @pytest.mark.anyio

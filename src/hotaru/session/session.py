@@ -68,6 +68,35 @@ class SessionDeletedProperties(BaseModel):
     session_id: str
 
 
+class MessageUpdatedProperties(BaseModel):
+    """Properties for message.updated event."""
+
+    info: Dict[str, Any]
+
+
+class MessagePartUpdatedProperties(BaseModel):
+    """Properties for message.part.updated event."""
+
+    part: Dict[str, Any]
+
+
+class MessagePartDeltaProperties(BaseModel):
+    """Properties for message.part.delta event."""
+
+    session_id: str
+    message_id: str
+    part_id: str
+    field: str
+    delta: str
+
+
+class SessionStatusProperties(BaseModel):
+    """Properties for session.status event."""
+
+    session_id: str
+    status: Dict[str, Any]
+
+
 SessionCreated = BusEvent(
     event_type="session.created",
     properties_type=SessionCreatedProperties
@@ -81,6 +110,26 @@ SessionUpdated = BusEvent(
 SessionDeleted = BusEvent(
     event_type="session.deleted",
     properties_type=SessionDeletedProperties
+)
+
+MessageUpdated = BusEvent(
+    event_type="message.updated",
+    properties_type=MessageUpdatedProperties,
+)
+
+MessagePartUpdated = BusEvent(
+    event_type="message.part.updated",
+    properties_type=MessagePartUpdatedProperties,
+)
+
+MessagePartDelta = BusEvent(
+    event_type="message.part.delta",
+    properties_type=MessagePartDeltaProperties,
+)
+
+SessionStatus = BusEvent(
+    event_type="session.status",
+    properties_type=SessionStatusProperties,
 )
 
 
@@ -351,6 +400,10 @@ class Session:
             message.model_dump(),
         )
         await cls._touch_session(message.session_id)
+        await Bus.publish(
+            MessageUpdated,
+            MessageUpdatedProperties(info=message.model_dump(mode="json")),
+        )
         return message
 
     @classmethod
@@ -373,6 +426,10 @@ class Session:
             part.model_dump(),
         )
         await cls._touch_session(part.session_id)
+        await Bus.publish(
+            MessagePartUpdated,
+            MessagePartUpdatedProperties(part=part.model_dump(mode="json")),
+        )
         return part
 
     @classmethod
@@ -398,6 +455,20 @@ class Session:
         if getattr(part, "message_id", None) != message_id:
             return None
         await cls._touch_session(session_id)
+        await Bus.publish(
+            MessagePartDelta,
+            MessagePartDeltaProperties(
+                session_id=session_id,
+                message_id=message_id,
+                part_id=part_id,
+                field=field,
+                delta=delta,
+            ),
+        )
+        await Bus.publish(
+            MessagePartUpdated,
+            MessagePartUpdatedProperties(part=part.model_dump(mode="json")),
+        )
         return part
 
     @classmethod

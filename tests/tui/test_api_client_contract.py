@@ -9,10 +9,6 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     calls: list[tuple[str, str]] = []
     directory_headers: list[str] = []
 
-    stream_payload = (
-        'data: {"type":"message.created","data":{"id":"message_1"}}\n\n'
-        'data: {"type":"message.completed","data":{"id":"message_1","finish":"stop"}}\n\n'
-    )
     event_payload = 'data: {"type":"server.connected","data":{}}\n\n'
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -35,12 +31,8 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
             return httpx.Response(200, json={"deleted": 1})
         if route == ("POST", "/v1/session/session_1/message:restore"):
             return httpx.Response(200, json={"restored": 1})
-        if route == ("POST", "/v1/session/session_1/message:stream"):
-            return httpx.Response(
-                200,
-                text=stream_payload,
-                headers={"content-type": "text/event-stream"},
-            )
+        if route == ("POST", "/v1/session/session_1/message"):
+            return httpx.Response(200, json={"ok": True, "assistant_message_id": "message_1", "status": "stop"})
         if route == ("POST", "/v1/session/session_1/compact"):
             return httpx.Response(200, json={"ok": True})
         if route == ("GET", "/v1/path"):
@@ -84,7 +76,7 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     await client.list_messages("session_1")
     await client.delete_messages("session_1", {"message_ids": ["message_1"]})
     await client.restore_messages("session_1", {"messages": [{"id": "message_1"}]})
-    events = [event async for event in client.stream_session_message("session_1", {"content": "hello"})]
+    message_result = await client.send_session_message("session_1", {"content": "hello"})
     await client.compact_session("session_1")
     await client.get_paths()
     global_events = [event async for event in client.stream_events()]
@@ -108,7 +100,7 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     await client.reject_question("question_1")
     await client.aclose()
 
-    assert [evt["type"] for evt in events] == ["message.created", "message.completed"]
+    assert message_result["ok"] is True
     assert [evt["type"] for evt in global_events] == ["server.connected"]
     assert all(value == "/tmp/workspace" for value in directory_headers)
     assert {
@@ -119,7 +111,7 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
         ("GET", "/v1/session/session_1/message"),
         ("POST", "/v1/session/session_1/message:delete"),
         ("POST", "/v1/session/session_1/message:restore"),
-        ("POST", "/v1/session/session_1/message:stream"),
+        ("POST", "/v1/session/session_1/message"),
         ("POST", "/v1/session/session_1/compact"),
         ("GET", "/v1/path"),
         ("GET", "/v1/event"),

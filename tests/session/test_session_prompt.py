@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from hotaru.agent.agent import AgentInfo, AgentMode
+from hotaru.core.bus import Bus
 from hotaru.core.id import Identifier
 from hotaru.core.global_paths import GlobalPath
 from hotaru.provider.models import ModelLimit
@@ -106,6 +107,92 @@ async def test_session_prompt_persists_reasoning_parts(monkeypatch: pytest.Monke
     assert len(reasoning_parts) == 1
     assert reasoning_parts[0].text == "think done"
     assert reasoning_parts[0].time.end is not None
+
+
+@pytest.mark.anyio
+async def test_session_prompt_emits_text_delta_events_without_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _setup_storage(monkeypatch, tmp_path)
+
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="text", text="he")
+        yield StreamChunk(type="text", text="llo")
+        yield StreamChunk(type="message_delta", usage={"input_tokens": 4, "output_tokens": 2})
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
+
+    events: list[dict] = []
+    unsubscribe = Bus.subscribe_all(lambda payload: events.append({"type": payload.type, "properties": payload.properties}))
+    try:
+        await SessionPrompt.prompt(
+            session_id=session.id,
+            content="hello",
+            provider_id="openai",
+            model_id="gpt-5",
+            agent="build",
+            cwd=str(tmp_path),
+            worktree=str(tmp_path),
+            resume_history=True,
+            auto_compaction=False,
+        )
+    finally:
+        unsubscribe()
+
+    deltas = [
+        event["properties"]["delta"]
+        for event in events
+        if event["type"] == "message.part.delta"
+        and event["properties"].get("session_id") == session.id
+        and event["properties"].get("field") == "text"
+    ]
+    assert deltas == ["he", "llo"]
+
+
+@pytest.mark.anyio
+async def test_session_prompt_persists_tool_updates_without_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _setup_storage(monkeypatch, tmp_path)
+
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="tool_call_start", tool_call_id="call_1", tool_call_name="unknown_tool")
+        yield StreamChunk(type="tool_call_end", tool_call=ToolCall(id="call_1", name="unknown_tool", input={}))
+        yield StreamChunk(type="message_delta", usage={"input_tokens": 3, "output_tokens": 1}, stop_reason="tool_calls")
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
+    await SessionPrompt.prompt(
+        session_id=session.id,
+        content="run tool",
+        provider_id="openai",
+        model_id="gpt-5",
+        agent="build",
+        cwd=str(tmp_path),
+        worktree=str(tmp_path),
+        resume_history=True,
+        auto_compaction=False,
+    )
+
+    structured = await Session.messages(session_id=session.id)
+    assistant = next(msg for msg in structured if msg.info.role == "assistant")
+    tool_parts = [part for part in assistant.parts if getattr(part, "type", "") == "tool"]
+    assert len(tool_parts) == 1
+    assert tool_parts[0].call_id == "call_1"
+    assert tool_parts[0].state.status == "error"
 
 
 @pytest.mark.anyio

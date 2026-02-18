@@ -245,22 +245,17 @@ class HotaruAPIClient:
             return int(result.get("restored", 0) or 0)
         return 0
 
-    async def stream_session_message(
+    async def send_session_message(
         self,
         session_id: str,
         payload: dict[str, Any],
-    ) -> AsyncIterator[dict[str, Any]]:
-        response = await self._stream_request(
+    ) -> dict[str, Any]:
+        result = await self._request_json(
             "POST",
-            f"/v1/session/{session_id}/message:stream",
+            f"/v1/session/{session_id}/message",
             json_body=payload,
         )
-
-        try:
-            async for event in self._iter_stream_events(response):
-                yield event
-        finally:
-            await response.aclose()
+        return result if isinstance(result, dict) else {}
 
     async def stream_events(self) -> AsyncIterator[dict[str, Any]]:
         response = await self._stream_request(

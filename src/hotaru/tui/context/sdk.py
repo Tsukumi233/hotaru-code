@@ -9,10 +9,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from ...api_client import ApiClientError, HotaruAPIClient
-from ...server.server import Server
+from ...server.server import DEFAULT_PORT, Server
 from ...util.log import Log
 
 log = Log.create({"service": "tui.context.sdk"})
@@ -31,15 +29,37 @@ class SDKContext:
         self._owns_api_client = api_client is None
         self._api_client = api_client or self._build_default_api_client(self._cwd)
         self._event_task: asyncio.Task[None] | None = None
+        self._event_stream_ready = asyncio.Event()
+        self._owns_embedded_server = False
+        self._server_lock = asyncio.Lock()
 
     @staticmethod
     def _build_default_api_client(cwd: str) -> HotaruAPIClient:
-        transport = httpx.ASGITransport(app=Server._create_app())
+        info = Server.info()
+        base_url = info.url if info else f"http://127.0.0.1:{DEFAULT_PORT}"
         return HotaruAPIClient(
-            base_url="http://hotaru.local",
-            transport=transport,
+            base_url=base_url,
             directory=cwd,
         )
+
+    async def _ensure_embedded_server(self) -> None:
+        if not self._owns_api_client:
+            return
+
+        if Server.info() is not None:
+            return
+
+        async with self._server_lock:
+            if Server.info() is not None:
+                return
+            await Server.start(host="127.0.0.1", port=DEFAULT_PORT)
+            self._owns_embedded_server = True
+            try:
+                if hasattr(self._api_client, "aclose"):
+                    await self._api_client.aclose()
+            except Exception:
+                pass
+            self._api_client = self._build_default_api_client(self._cwd)
 
     @property
     def cwd(self) -> str:
@@ -49,6 +69,9 @@ class SDKContext:
         await self.stop_event_stream()
         if self._owns_api_client and hasattr(self._api_client, "aclose"):
             await self._api_client.aclose()
+        if self._owns_embedded_server:
+            self._owns_embedded_server = False
+            await Server.stop()
 
     def _supports_event_stream(self) -> bool:
         return hasattr(self._api_client, "stream_events")
@@ -58,10 +81,13 @@ class SDKContext:
             return
 
         while True:
+            self._event_stream_ready.clear()
             try:
                 async for event in self._api_client.stream_events():
                     if not isinstance(event, dict):
                         continue
+                    if not self._event_stream_ready.is_set():
+                        self._event_stream_ready.set()
                     event_type = str(event.get("type", "server.event"))
                     data = event.get("data", {})
                     if not isinstance(data, dict):
@@ -87,13 +113,18 @@ class SDKContext:
         self._event_task = loop.create_task(self._run_event_stream())
 
     async def start_event_stream(self) -> None:
+        await self._ensure_embedded_server()
         self._ensure_event_stream_started()
         if self._event_task is not None:
-            await asyncio.sleep(0)
+            try:
+                await asyncio.wait_for(self._event_stream_ready.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                log.warning("event stream not ready before timeout")
 
     async def stop_event_stream(self) -> None:
         task = self._event_task
         self._event_task = None
+        self._event_stream_ready.clear()
         if task is None:
             return
         task.cancel()
@@ -132,14 +163,96 @@ class SDKContext:
         if files:
             payload["files"] = files
 
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        idle_reached = asyncio.Event()
+        unsubscribers: list[Callable[[], None]] = []
+        trigger_task: asyncio.Task[dict[str, Any]] | None = None
+        idle_grace_deadline: float | None = None
+
+        def _extract_session_id(data: dict[str, Any]) -> str:
+            value = data.get("session_id")
+            if isinstance(value, str) and value:
+                return value
+            return ""
+
+        def _on_message_updated(data: dict[str, Any]) -> None:
+            info = data.get("info")
+            if not isinstance(info, dict):
+                return
+            if _extract_session_id(info) != session_id:
+                return
+            queue.put_nowait({"type": "message.updated", "data": {"info": info}})
+
+        def _on_part_updated(data: dict[str, Any]) -> None:
+            part = data.get("part")
+            if not isinstance(part, dict):
+                return
+            if _extract_session_id(part) != session_id:
+                return
+            queue.put_nowait({"type": "message.part.updated", "data": {"part": part}})
+
+        def _on_part_delta(data: dict[str, Any]) -> None:
+            if _extract_session_id(data) != session_id:
+                return
+            queue.put_nowait({"type": "message.part.delta", "data": dict(data)})
+
+        def _on_session_status(data: dict[str, Any]) -> None:
+            if _extract_session_id(data) != session_id:
+                return
+            status = data.get("status") if isinstance(data.get("status"), dict) else {}
+            queue.put_nowait({"type": "session.status", "data": dict(data)})
+            if str(status.get("type") or "") == "idle":
+                idle_reached.set()
+
+        unsubscribers.append(self.on_event("message.updated", _on_message_updated))
+        unsubscribers.append(self.on_event("message.part.updated", _on_part_updated))
+        unsubscribers.append(self.on_event("message.part.delta", _on_part_delta))
+        unsubscribers.append(self.on_event("session.status", _on_session_status))
+
         try:
-            async for event in self._api_client.stream_session_message(session_id, payload):
-                if isinstance(event, dict):
-                    yield event
-                else:
-                    yield {"type": "message.event", "data": {"value": event}}
+            await self.start_event_stream()
+            trigger_task = asyncio.create_task(self._api_client.send_session_message(session_id, payload))
+            while True:
+                if trigger_task.done():
+                    exc = trigger_task.exception()
+                    if exc:
+                        yield {"type": "error", "data": {"error": str(exc)}}
+                        break
+                    if idle_reached.is_set() and queue.empty():
+                        break
+
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    if trigger_task.done():
+                        exc = trigger_task.exception()
+                        if exc:
+                            yield {"type": "error", "data": {"error": str(exc)}}
+                            break
+                        if queue.empty():
+                            loop = asyncio.get_running_loop()
+                            now = loop.time()
+                            if idle_grace_deadline is None:
+                                idle_grace_deadline = now + 0.5
+                                continue
+                            if now >= idle_grace_deadline:
+                                break
+                    continue
+
+                idle_grace_deadline = None
+                yield event
         except Exception as exc:
             yield {"type": "error", "data": {"error": str(exc)}}
+        finally:
+            for unsubscribe in unsubscribers:
+                try:
+                    unsubscribe()
+                except Exception:
+                    pass
+            if trigger_task is not None and not trigger_task.done():
+                trigger_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await trigger_task
 
     async def create_session(
         self,
@@ -378,7 +491,6 @@ class SDKContext:
         if event_type not in self._event_handlers:
             self._event_handlers[event_type] = []
         self._event_handlers[event_type].append(handler)
-        self._ensure_event_stream_started()
 
         def unsubscribe() -> None:
             if event_type in self._event_handlers and handler in self._event_handlers[event_type]:
