@@ -25,7 +25,7 @@
   - Keep maximum loose coupling: one responsibility per layer, stable interfaces, dependency inversion where applicable.
   - New compatibility logic must live at boundaries (`src/hotaru/provider/`, adapters, transforms, SDK wrappers), driven by capability/config, not scattered `if/else`.
   - If a fix requires cross-layer hacks, stop and refactor ownership boundaries first, then implement the fix.
-  - Every compatibility fix must include regression tests at the owning layer to prevent fallback hacks from creeping upward.
+  - NO HARD CODED CONFIG/MAGIC STRINGS.
 
 ## Testing Guidelines
 - There is no formal coverage gate yet; include meaningful coverage for all changed code paths.

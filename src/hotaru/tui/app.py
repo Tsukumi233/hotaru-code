@@ -814,7 +814,6 @@ class TuiApp(App):
         self._redo_turns.pop(session_id, None)
 
     async def _rename_session(self, title: Optional[str]) -> None:
-        from ..session import Session
         from .dialogs import InputDialog
 
         session_id = self._active_session_id()
@@ -842,21 +841,21 @@ class TuiApp(App):
             self.notify("Session title cannot be empty.", severity="warning")
             return
 
-        updated = await Session.update(session_id=session_id, title=next_title)
+        updated = await self.sdk_ctx.update_session(session_id=session_id, title=next_title)
         if not updated:
             self.notify("Failed to rename session.", severity="error")
             return
 
         self.sync_ctx.update_session(
             {
-                "id": updated.id,
-                "title": updated.title or "Untitled",
-                "agent": updated.agent,
-                "parentID": updated.parent_id,
-                "share": updated.share.model_dump() if updated.share else None,
+                "id": updated.get("id", session_id),
+                "title": updated.get("title") or "Untitled",
+                "agent": updated.get("agent"),
+                "parentID": updated.get("parent_id") or updated.get("parentID"),
+                "share": updated.get("share"),
                 "time": {
-                    "created": updated.time.created,
-                    "updated": updated.time.updated,
+                    "created": (updated.get("time") or {}).get("created"),
+                    "updated": (updated.get("time") or {}).get("updated"),
                 },
             }
         )
@@ -884,13 +883,11 @@ class TuiApp(App):
             self.notify(f"Session compaction failed: {result['error']}", severity="error")
             return
 
-        await self.sync_ctx.sync_session(session_id, force=True)
+        await self.sync_ctx.sync_session(session_id, self.sdk_ctx, force=True)
         await self._refresh_active_session_screen(session_id)
         self.notify("Session compacted.")
 
     async def _undo_session_turn(self) -> None:
-        from ..session import Session
-
         session_id = self._active_session_id()
         if not session_id:
             self.notify("Open a session first to undo.", severity="warning")
@@ -898,7 +895,7 @@ class TuiApp(App):
 
         sync = self.sync_ctx
         if not sync.is_session_synced(session_id):
-            await sync.sync_session(session_id)
+            await sync.sync_session(session_id, self.sdk_ctx)
 
         messages = sync.get_messages(session_id)
         _, removed = split_messages_for_undo(messages)
@@ -915,13 +912,13 @@ class TuiApp(App):
             self.notify("Failed to identify messages to undo.", severity="error")
             return
 
-        deleted = await Session.delete_messages(session_id, message_ids)
+        deleted = await self.sdk_ctx.delete_messages(session_id, message_ids)
         if deleted <= 0:
             self.notify("Undo failed: session messages were not updated.", severity="error")
             return
 
         self._redo_turns.setdefault(session_id, []).append(deepcopy(removed))
-        await sync.sync_session(session_id, force=True)
+        await sync.sync_session(session_id, self.sdk_ctx, force=True)
         await self._refresh_active_session_screen(
             session_id,
             prompt_text=extract_user_text_from_turn(removed),
@@ -929,9 +926,6 @@ class TuiApp(App):
         self.notify("Undid the last turn. Use /redo to restore it.")
 
     async def _redo_session_turn(self) -> None:
-        from ..session import Session, StoredMessageInfo
-        from ..session.message_store import parse_part
-
         session_id = self._active_session_id()
         if not session_id:
             self.notify("Open a session first to redo.", severity="warning")
@@ -948,36 +942,13 @@ class TuiApp(App):
         else:
             self._redo_turns[session_id] = stack
 
-        restored = 0
-        for message in turn:
-            if not isinstance(message, dict):
-                continue
-
-            info_data = message.get("info")
-            if isinstance(info_data, dict):
-                try:
-                    structured_info = StoredMessageInfo.model_validate(info_data)
-                except Exception:
-                    continue
-                await Session.update_message(structured_info)
-                for part_data in message.get("parts", []):
-                    if not isinstance(part_data, dict):
-                        continue
-                    try:
-                        parsed_part = parse_part(part_data)
-                    except Exception:
-                        continue
-                    await Session.update_part(parsed_part)
-                restored += 1
-                continue
-
-            continue
+        restored = await self.sdk_ctx.restore_messages(session_id, turn)
 
         if restored == 0:
             self.notify("Redo failed: no messages could be restored.", severity="error")
             return
 
-        await self.sync_ctx.sync_session(session_id, force=True)
+        await self.sync_ctx.sync_session(session_id, self.sdk_ctx, force=True)
         await self._refresh_active_session_screen(session_id, prompt_text="")
         self.notify("Redid one turn.")
 
@@ -1407,7 +1378,7 @@ class TuiApp(App):
         """Build transcript markdown for the given session."""
         sync = self.sync_ctx
         if not sync.is_session_synced(session_id):
-            await sync.sync_session(session_id)
+            await sync.sync_session(session_id, self.sdk_ctx)
 
         session = sync.get_session(session_id)
         if not session:

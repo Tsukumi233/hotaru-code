@@ -19,6 +19,18 @@ class SessionCompactPayload(TypedDict, total=False):
     model_id: str
 
 
+class SessionUpdatePayload(TypedDict, total=False):
+    title: str
+
+
+class SessionDeleteMessagesPayload(TypedDict):
+    message_ids: list[str]
+
+
+class SessionRestoreMessagesPayload(TypedDict):
+    messages: list[dict[str, Any]]
+
+
 class ProviderConnectPayload(TypedDict):
     provider_id: str
     provider_type: str

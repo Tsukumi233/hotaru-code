@@ -21,6 +21,22 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
         captured["get"] = session_id
         return {"id": session_id, "project_id": "proj_1"}
 
+    async def fake_update(cls, session_id: str, payload: dict[str, Any]):
+        captured["update"] = {"session_id": session_id, "payload": payload}
+        return {"id": session_id, "title": payload.get("title", "Untitled")}
+
+    async def fake_list_messages(cls, session_id: str):
+        captured["list_messages"] = session_id
+        return [{"id": "msg_1", "role": "assistant"}]
+
+    async def fake_delete_messages(cls, session_id: str, payload: dict[str, Any]):
+        captured["delete_messages"] = {"session_id": session_id, "payload": payload}
+        return {"deleted": 2}
+
+    async def fake_restore_messages(cls, session_id: str, payload: dict[str, Any]):
+        captured["restore_messages"] = {"session_id": session_id, "payload": payload}
+        return {"restored": 1}
+
     async def fake_compact(cls, session_id: str, payload: dict[str, Any], cwd: str):
         captured["compact"] = {"session_id": session_id, "payload": payload, "cwd": cwd}
         return {"ok": True}
@@ -28,6 +44,10 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.create", classmethod(fake_create))
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.list", classmethod(fake_list))
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.get", classmethod(fake_get))
+    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.update", classmethod(fake_update))
+    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.list_messages", classmethod(fake_list_messages))
+    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.delete_messages", classmethod(fake_delete_messages))
+    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.restore_messages", classmethod(fake_restore_messages))
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.compact", classmethod(fake_compact))
 
     app = Server._create_app()
@@ -44,6 +64,25 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
         assert fetched.status_code == 200
         assert fetched.json()["id"] == "ses_1"
 
+        updated = client.patch("/v1/session/ses_1", json={"title": "Renamed"})
+        assert updated.status_code == 200
+        assert updated.json()["title"] == "Renamed"
+
+        messages = client.get("/v1/session/ses_1/message")
+        assert messages.status_code == 200
+        assert messages.json()[0]["id"] == "msg_1"
+
+        deleted = client.post("/v1/session/ses_1/message:delete", json={"message_ids": ["m1", "m2"]})
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted"] == 2
+
+        restored = client.post(
+            "/v1/session/ses_1/message:restore",
+            json={"messages": [{"info": {"id": "m1", "session_id": "ses_1"}}]},
+        )
+        assert restored.status_code == 200
+        assert restored.json()["restored"] == 1
+
         compacted = client.post("/v1/session/ses_1/compact", json={"auto": True})
         assert compacted.status_code == 200
         assert compacted.json()["ok"] is True
@@ -51,6 +90,10 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
     assert captured["create"]["payload"]["project_id"] == "proj_1"
     assert captured["list"] == "proj_1"
     assert captured["get"] == "ses_1"
+    assert captured["update"]["payload"]["title"] == "Renamed"
+    assert captured["list_messages"] == "ses_1"
+    assert captured["delete_messages"]["payload"]["message_ids"] == ["m1", "m2"]
+    assert captured["restore_messages"]["payload"]["messages"][0]["info"]["id"] == "m1"
     assert captured["compact"]["payload"]["auto"] is True
 
 

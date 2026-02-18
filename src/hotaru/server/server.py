@@ -28,6 +28,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import unquote
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -44,11 +45,7 @@ from ..app_services import (
     QuestionService,
     SessionService,
 )
-from ..agent import Agent
-from ..core.bus import Bus
 from ..core.global_paths import GlobalPath
-from ..provider import Provider
-from ..session import Session, SessionCompaction, SessionPrompt
 from ..skill import Skill
 from ..util.log import Log
 
@@ -97,16 +94,19 @@ class Server:
         routes = [
             # Health check
             Route("/health", cls._health, methods=["GET"]),
-
-            # Path information
-            Route("/path", cls._get_paths, methods=["GET"]),
+            Route("/v1/path", cls._v1_get_paths, methods=["GET"]),
+            Route("/v1/skill", cls._v1_list_skills, methods=["GET"]),
 
             # Versioned v1 endpoints
             Route("/v1/session", cls._v1_create_session, methods=["POST"]),
             Route("/v1/session", cls._v1_list_sessions, methods=["GET"]),
             Route("/v1/session/{id}", cls._v1_get_session, methods=["GET"]),
+            Route("/v1/session/{id}", cls._v1_update_session, methods=["PATCH"]),
+            Route("/v1/session/{id}/message", cls._v1_list_messages, methods=["GET"]),
             Route("/v1/session/{id}/compact", cls._v1_compact_session, methods=["POST"]),
             Route("/v1/session/{id}/message:stream", cls._v1_message_stream, methods=["POST"]),
+            Route("/v1/session/{id}/message:delete", cls._v1_delete_messages, methods=["POST"]),
+            Route("/v1/session/{id}/message:restore", cls._v1_restore_messages, methods=["POST"]),
             Route("/v1/provider", cls._v1_list_providers, methods=["GET"]),
             Route("/v1/provider/{id}/model", cls._v1_list_models, methods=["GET"]),
             Route("/v1/provider/connect", cls._v1_connect_provider, methods=["POST"]),
@@ -117,29 +117,6 @@ class Server:
             Route("/v1/question/{id}/reply", cls._v1_reply_question, methods=["POST"]),
             Route("/v1/question/{id}/reject", cls._v1_reject_question, methods=["POST"]),
             Route("/v1/event", cls._v1_event_stream, methods=["GET"]),
-
-            # Provider endpoints
-            Route("/provider", cls._list_providers, methods=["GET"]),
-            Route("/provider/{provider_id}/model", cls._list_models, methods=["GET"]),
-
-            # Agent endpoints
-            Route("/agent", cls._list_agents, methods=["GET"]),
-
-            # Skill endpoints
-            Route("/skill", cls._list_skills, methods=["GET"]),
-
-            # Session endpoints
-            Route("/session", cls._list_sessions, methods=["GET"]),
-            Route("/session/{session_id}", cls._get_session, methods=["GET"]),
-            Route("/session/{session_id}/summarize", cls._summarize_session, methods=["POST"]),
-            Route("/permission", cls._list_permissions, methods=["GET"]),
-            Route("/permission/{request_id}/reply", cls._reply_permission, methods=["POST"]),
-            Route("/question", cls._list_questions, methods=["GET"]),
-            Route("/question/{request_id}/reply", cls._reply_question, methods=["POST"]),
-            Route("/question/{request_id}/reject", cls._reject_question, methods=["POST"]),
-
-            # Event stream
-            Route("/event", cls._event_stream, methods=["GET"]),
         ]
 
         middleware = [
@@ -233,6 +210,32 @@ class Server:
         return payload
 
     @classmethod
+    def _decode_directory_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return unquote(text)
+        except Exception:
+            return text
+
+    @classmethod
+    def _resolve_request_directory(cls, request: Request) -> str:
+        for source, value in (
+            ("header", request.headers.get("x-hotaru-directory")),
+            ("query", request.query_params.get("directory")),
+        ):
+            resolved = cls._decode_directory_value(value)
+            if resolved:
+                log.debug("resolved request directory", {"source": source, "directory": resolved})
+                return resolved
+        fallback = str(Path.cwd())
+        log.debug("resolved request directory", {"source": "cwd", "directory": fallback})
+        return fallback
+
+    @classmethod
     def _sse_data(
         cls,
         event: dict[str, Any],
@@ -269,7 +272,7 @@ class Server:
     async def _v1_create_session(cls, request: Request) -> JSONResponse:
         try:
             payload = await cls._json_payload(request, required=False)
-            result = await SessionService.create(payload, str(Path.cwd()))
+            result = await SessionService.create(payload, cls._resolve_request_directory(request))
             return JSONResponse(result)
         except Exception as exc:
             return cls._error_from_exception(exc)
@@ -299,11 +302,36 @@ class Server:
             return cls._error_from_exception(exc)
 
     @classmethod
+    async def _v1_update_session(cls, request: Request) -> JSONResponse:
+        session_id = request.path_params["id"]
+        try:
+            payload = await cls._json_payload(request, required=True)
+            result = await SessionService.update(session_id, payload)
+            if result is None:
+                return cls._error_response(
+                    status_code=404,
+                    code="not_found",
+                    message=f"Session '{session_id}' not found",
+                )
+            return JSONResponse(result)
+        except Exception as exc:
+            return cls._error_from_exception(exc)
+
+    @classmethod
+    async def _v1_list_messages(cls, request: Request) -> JSONResponse:
+        session_id = request.path_params["id"]
+        try:
+            result = await SessionService.list_messages(session_id)
+            return JSONResponse(result)
+        except Exception as exc:
+            return cls._error_from_exception(exc)
+
+    @classmethod
     async def _v1_compact_session(cls, request: Request) -> JSONResponse:
         session_id = request.path_params["id"]
         try:
             payload = await cls._json_payload(request, required=False)
-            result = await SessionService.compact(session_id, payload, str(Path.cwd()))
+            result = await SessionService.compact(session_id, payload, cls._resolve_request_directory(request))
             return JSONResponse(result)
         except Exception as exc:
             return cls._error_from_exception(exc)
@@ -313,7 +341,11 @@ class Server:
         session_id = request.path_params["id"]
         try:
             payload = await cls._json_payload(request, required=True)
-            stream = SessionService.stream_message(session_id, payload, str(Path.cwd()))
+            stream = SessionService.stream_message(
+                session_id,
+                payload,
+                cls._resolve_request_directory(request),
+            )
         except Exception as exc:
             return cls._error_from_exception(exc)
 
@@ -328,6 +360,26 @@ class Server:
                 )
 
         return cls._sse_response(event_generator())
+
+    @classmethod
+    async def _v1_delete_messages(cls, request: Request) -> JSONResponse:
+        session_id = request.path_params["id"]
+        try:
+            payload = await cls._json_payload(request, required=True)
+            result = await SessionService.delete_messages(session_id, payload)
+            return JSONResponse(result)
+        except Exception as exc:
+            return cls._error_from_exception(exc)
+
+    @classmethod
+    async def _v1_restore_messages(cls, request: Request) -> JSONResponse:
+        session_id = request.path_params["id"]
+        try:
+            payload = await cls._json_payload(request, required=True)
+            result = await SessionService.restore_messages(session_id, payload)
+            return JSONResponse(result)
+        except Exception as exc:
+            return cls._error_from_exception(exc)
 
     @classmethod
     async def _v1_list_providers(cls, request: Request) -> JSONResponse:
@@ -412,320 +464,38 @@ class Server:
 
         return cls._sse_response(event_generator())
 
+    @classmethod
+    async def _v1_get_paths(cls, request: Request) -> JSONResponse:
+        cwd = cls._resolve_request_directory(request)
+        return JSONResponse(
+            {
+                "home": str(GlobalPath.home()),
+                "state": str(GlobalPath.state()),
+                "config": str(GlobalPath.config()),
+                "cwd": cwd,
+            }
+        )
+
+    @classmethod
+    async def _v1_list_skills(cls, request: Request) -> JSONResponse:
+        skills = await Skill.list()
+        result = []
+        for skill in skills:
+            result.append(
+                {
+                    "name": skill.name,
+                    "description": skill.description,
+                    "location": skill.location,
+                }
+            )
+        return JSONResponse(result)
+
     # Route handlers
 
     @classmethod
     async def _health(cls, request: Request) -> JSONResponse:
         """Health check endpoint."""
         return JSONResponse({"status": "ok"})
-
-    @classmethod
-    async def _get_paths(cls, request: Request) -> JSONResponse:
-        """Get path information."""
-        import os
-        return JSONResponse({
-            "home": str(GlobalPath.home()),
-            "state": str(GlobalPath.state()),
-            "config": str(GlobalPath.config()),
-            "cwd": os.getcwd(),
-        })
-
-    @classmethod
-    async def _list_providers(cls, request: Request) -> JSONResponse:
-        """List available providers."""
-        providers = await Provider.list()
-        result = []
-        for provider_id, provider in providers.items():
-            result.append({
-                "id": provider.id,
-                "name": provider.name,
-                "source": provider.source.value if provider.source else None,
-                "model_count": len(provider.models),
-            })
-        return JSONResponse(result)
-
-    @classmethod
-    async def _list_models(cls, request: Request) -> JSONResponse:
-        """List models for a provider."""
-        provider_id = request.path_params["provider_id"]
-        provider = await Provider.get(provider_id)
-
-        if not provider:
-            return JSONResponse(
-                {"error": f"Provider '{provider_id}' not found"},
-                status_code=404,
-            )
-
-        models = []
-        for model_id, model in provider.models.items():
-            models.append({
-                "id": model.id,
-                "name": model.name,
-                "api_id": model.api_id,
-                "status": model.status,
-            })
-
-        return JSONResponse(models)
-
-    @classmethod
-    async def _list_agents(cls, request: Request) -> JSONResponse:
-        """List available agents."""
-        agents = await Agent.list()
-        result = []
-        for agent in agents:
-            result.append({
-                "name": agent.name,
-                "description": agent.description,
-                "mode": agent.mode,
-            })
-        return JSONResponse(result)
-
-    @classmethod
-    async def _list_skills(cls, request: Request) -> JSONResponse:
-        """List available skills."""
-        skills = await Skill.list()
-        result = []
-        for skill in skills:
-            result.append({
-                "name": skill.name,
-                "description": skill.description,
-                "location": skill.location,
-            })
-        return JSONResponse(result)
-
-    @classmethod
-    async def _list_sessions(cls, request: Request) -> JSONResponse:
-        """List sessions."""
-        # Get project_id from query params
-        project_id = request.query_params.get("project_id")
-        if not project_id:
-            return JSONResponse(
-                {"error": "project_id query parameter required"},
-                status_code=400,
-            )
-
-        sessions = await Session.list(project_id)
-        result = []
-        for session in sessions:
-            result.append({
-                "id": session.id,
-                "project_id": session.project_id,
-                "agent": session.agent,
-                "model_id": session.model_id,
-                "provider_id": session.provider_id,
-                "created": session.created,
-            })
-        return JSONResponse(result)
-
-    @classmethod
-    async def _get_session(cls, request: Request) -> JSONResponse:
-        """Get a specific session."""
-        session_id = request.path_params["session_id"]
-        session = await Session.get(session_id)
-
-        if not session:
-            return JSONResponse(
-                {"error": f"Session '{session_id}' not found"},
-                status_code=404,
-            )
-
-        return JSONResponse({
-            "id": session.id,
-            "project_id": session.project_id,
-            "agent": session.agent,
-            "model_id": session.model_id,
-            "provider_id": session.provider_id,
-            "created": session.created,
-        })
-
-    @classmethod
-    async def _summarize_session(cls, request: Request) -> JSONResponse:
-        """Manually compact a session."""
-        session_id = request.path_params["session_id"]
-        session = await Session.get(session_id)
-        if not session:
-            return JSONResponse(
-                {"error": f"Session '{session_id}' not found"},
-                status_code=404,
-            )
-
-        try:
-            payload = await request.json()
-        except Exception:
-            payload = {}
-        if payload is None:
-            payload = {}
-        if not isinstance(payload, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
-
-        provider_id = payload.get("provider_id") or payload.get("providerID") or session.provider_id
-        model_id = payload.get("model_id") or payload.get("modelID") or session.model_id
-        auto = bool(payload.get("auto", False))
-
-        if not provider_id or not model_id:
-            provider_id, model_id = await Provider.default_model()
-
-        provider_id = str(provider_id)
-        model_id = str(model_id)
-
-        try:
-            await Provider.get_model(provider_id, model_id)
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
-
-        agent_name = session.agent or await Agent.default_agent()
-        cwd = session.directory or str(Path.cwd())
-
-        try:
-            await SessionCompaction.create(
-                session_id=session_id,
-                agent=agent_name,
-                provider_id=provider_id,
-                model_id=model_id,
-                auto=auto,
-            )
-            result = await SessionPrompt.loop(
-                session_id=session_id,
-                provider_id=provider_id,
-                model_id=model_id,
-                agent=agent_name,
-                cwd=cwd,
-                worktree=cwd,
-                resume_history=True,
-                auto_compaction=False,
-            )
-        except Exception as e:
-            log.error("session summarize failed", {"session_id": session_id, "error": str(e)})
-            return JSONResponse({"error": str(e)}, status_code=500)
-
-        return JSONResponse(
-            {
-                "ok": result.result.error is None,
-                "assistant_message_id": result.assistant_message_id,
-                "status": result.result.status,
-                "error": result.result.error,
-            }
-        )
-
-    @classmethod
-    async def _list_permissions(cls, request: Request) -> JSONResponse:
-        """List pending permission requests."""
-        from ..permission import Permission
-
-        pending = await Permission.list_pending()
-        return JSONResponse([item.model_dump() for item in pending])
-
-    @classmethod
-    async def _reply_permission(cls, request: Request) -> JSONResponse:
-        """Reply to a permission request."""
-        from ..permission import Permission, PermissionReply
-
-        request_id = request.path_params["request_id"]
-        try:
-            payload = await request.json()
-        except Exception:
-            payload = {}
-        if not isinstance(payload, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
-
-        reply_value = payload.get("reply")
-        message = payload.get("message")
-        if reply_value not in {r.value for r in PermissionReply}:
-            return JSONResponse({"error": "Field 'reply' must be one of: once, always, reject"}, status_code=400)
-
-        await Permission.reply(
-            request_id=request_id,
-            reply=PermissionReply(reply_value),
-            message=message if isinstance(message, str) else None,
-        )
-        return JSONResponse(True)
-
-    @classmethod
-    async def _list_questions(cls, request: Request) -> JSONResponse:
-        """List pending question requests."""
-        from ..question import Question
-
-        pending = await Question.list_pending()
-        return JSONResponse([item.model_dump() for item in pending])
-
-    @classmethod
-    async def _reply_question(cls, request: Request) -> JSONResponse:
-        """Reply to a question request."""
-        from ..question import Question
-
-        request_id = request.path_params["request_id"]
-        try:
-            payload = await request.json()
-        except Exception:
-            payload = {}
-        if not isinstance(payload, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
-
-        answers = payload.get("answers")
-        if not isinstance(answers, list) or any(not isinstance(item, list) for item in answers):
-            return JSONResponse({"error": "Field 'answers' must be a list of string lists"}, status_code=400)
-        if any(any(not isinstance(choice, str) for choice in item) for item in answers):
-            return JSONResponse({"error": "Field 'answers' must contain only strings"}, status_code=400)
-
-        await Question.reply(request_id, answers)
-        return JSONResponse(True)
-
-    @classmethod
-    async def _reject_question(cls, request: Request) -> JSONResponse:
-        """Reject a question request."""
-        from ..question import Question
-
-        request_id = request.path_params["request_id"]
-        await Question.reject(request_id)
-        return JSONResponse(True)
-
-    @classmethod
-    async def _event_stream(cls, request: Request) -> StreamingResponse:
-        """Server-Sent Events stream for real-time updates."""
-        async def event_generator():
-            # Send initial connected event
-            yield f"data: {json.dumps({'type': 'server.connected'})}\n\n"
-
-            # Subscribe to bus events
-            queue: asyncio.Queue = asyncio.Queue()
-
-            def on_event(event: Any) -> None:
-                if isinstance(event, dict):
-                    payload = event
-                elif hasattr(event, "model_dump"):
-                    payload = event.model_dump()
-                elif hasattr(event, "type") and hasattr(event, "properties"):
-                    payload = {"type": event.type, "properties": event.properties}
-                else:
-                    payload = {"type": "server.event", "properties": {}}
-                asyncio.create_task(queue.put(payload))
-
-            unsubscribe = Bus.subscribe_all(on_event)
-
-            # Note: In a full implementation, we would subscribe to Bus events
-            # For now, just send heartbeats
-            try:
-                while True:
-                    try:
-                        # Wait for events with timeout for heartbeat
-                        event = await asyncio.wait_for(queue.get(), timeout=30.0)
-                        yield f"data: {json.dumps(event)}\n\n"
-                    except asyncio.TimeoutError:
-                        # Send heartbeat
-                        yield f"data: {json.dumps({'type': 'server.heartbeat'})}\n\n"
-            except asyncio.CancelledError:
-                pass
-            finally:
-                unsubscribe()
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            },
-        )
 
     @classmethod
     async def start(

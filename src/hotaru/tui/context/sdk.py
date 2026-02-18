@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from collections.abc import AsyncIterator, Callable
 from contextvars import ContextVar
 from pathlib import Path
@@ -27,14 +29,16 @@ class SDKContext:
         self._cwd = cwd or str(Path.cwd())
         self._event_handlers: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
         self._owns_api_client = api_client is None
-        self._api_client = api_client or self._build_default_api_client()
+        self._api_client = api_client or self._build_default_api_client(self._cwd)
+        self._event_task: asyncio.Task[None] | None = None
 
     @staticmethod
-    def _build_default_api_client() -> HotaruAPIClient:
+    def _build_default_api_client(cwd: str) -> HotaruAPIClient:
         transport = httpx.ASGITransport(app=Server._create_app())
         return HotaruAPIClient(
             base_url="http://hotaru.local",
             transport=transport,
+            directory=cwd,
         )
 
     @property
@@ -42,8 +46,59 @@ class SDKContext:
         return self._cwd
 
     async def aclose(self) -> None:
+        await self.stop_event_stream()
         if self._owns_api_client and hasattr(self._api_client, "aclose"):
             await self._api_client.aclose()
+
+    def _supports_event_stream(self) -> bool:
+        return hasattr(self._api_client, "stream_events")
+
+    async def _run_event_stream(self) -> None:
+        if not self._supports_event_stream():
+            return
+
+        while True:
+            try:
+                async for event in self._api_client.stream_events():
+                    if not isinstance(event, dict):
+                        continue
+                    event_type = str(event.get("type", "server.event"))
+                    data = event.get("data", {})
+                    if not isinstance(data, dict):
+                        data = {"value": data}
+                    self.emit_event(event_type, data)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("event stream failed", {"error": str(exc)})
+                await asyncio.sleep(0.25)
+            else:
+                await asyncio.sleep(0.25)
+
+    def _ensure_event_stream_started(self) -> None:
+        if not self._supports_event_stream():
+            return
+        if self._event_task is not None and not self._event_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._event_task = loop.create_task(self._run_event_stream())
+
+    async def start_event_stream(self) -> None:
+        self._ensure_event_stream_started()
+        if self._event_task is not None:
+            await asyncio.sleep(0)
+
+    async def stop_event_stream(self) -> None:
+        task = self._event_task
+        self._event_task = None
+        if task is None:
+            return
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
     @staticmethod
     def _split_model_ref(model: str) -> tuple[str, str]:
@@ -130,6 +185,21 @@ class SDKContext:
             session["title"] = "Untitled"
         return session
 
+    async def update_session(self, session_id: str, *, title: str | None = None) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {}
+        if title is not None:
+            payload["title"] = str(title)
+        try:
+            session = await self._api_client.update_session(session_id, payload)
+        except ApiClientError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+
+        if "title" not in session:
+            session["title"] = "Untitled"
+        return session
+
     async def list_sessions(self, project_id: str | None = None) -> list[dict[str, Any]]:
         sessions = await self._api_client.list_sessions(project_id=project_id)
         for session in sessions:
@@ -148,8 +218,27 @@ class SDKContext:
                 return []
             raise
 
-    async def abort_message(self, session_id: str) -> None:
-        await self._api_client.abort_session(session_id)
+    async def delete_messages(self, session_id: str, message_ids: list[str]) -> int:
+        try:
+            return await self._api_client.delete_messages(
+                session_id,
+                {"message_ids": [str(item) for item in message_ids]},
+            )
+        except ApiClientError as exc:
+            if exc.status_code == 404:
+                return 0
+            raise
+
+    async def restore_messages(self, session_id: str, messages: list[dict[str, Any]]) -> int:
+        try:
+            return await self._api_client.restore_messages(
+                session_id,
+                {"messages": messages},
+            )
+        except ApiClientError as exc:
+            if exc.status_code == 404:
+                return 0
+            raise
 
     @staticmethod
     def _normalize_provider_models(models: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -289,6 +378,7 @@ class SDKContext:
         if event_type not in self._event_handlers:
             self._event_handlers[event_type] = []
         self._event_handlers[event_type].append(handler)
+        self._ensure_event_stream_started()
 
         def unsubscribe() -> None:
             if event_type in self._event_handlers and handler in self._event_handlers[event_type]:

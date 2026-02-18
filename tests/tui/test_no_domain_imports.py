@@ -7,6 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SDK_FILE = REPO_ROOT / "src/hotaru/tui/context/sdk.py"
 APP_FILE = REPO_ROOT / "src/hotaru/tui/app.py"
+SYNC_FILE = REPO_ROOT / "src/hotaru/tui/context/sync.py"
 
 
 def _parse_imports(path: Path) -> tuple[set[str], set[str]]:
@@ -55,6 +56,21 @@ def test_sdk_context_has_no_direct_domain_orchestration_imports() -> None:
 
 
 def test_tui_app_does_not_import_provider_auth_or_config_manager() -> None:
-    _modules, symbols = _parse_imports(APP_FILE)
+    modules, symbols = _parse_imports(APP_FILE)
     assert "ConfigManager" not in symbols
     assert "ProviderAuth" not in symbols
+    assert not {module for module in modules if module.endswith("session")}
+
+
+def test_sync_context_has_no_direct_session_or_message_store_imports() -> None:
+    modules, _symbols = _parse_imports(SYNC_FILE)
+    banned_module_suffixes = (
+        "session",
+        "session.message_store",
+    )
+    offending_modules = {
+        module
+        for module in modules
+        if module.endswith(banned_module_suffixes)
+    }
+    assert not offending_modules

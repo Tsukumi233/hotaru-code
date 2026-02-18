@@ -9,6 +9,9 @@ from ..agent import Agent
 from ..core.id import Identifier
 from ..provider import Provider
 from ..session import Session, SessionCompaction, SessionPrompt
+from ..session.message_store import MessageInfo as StoredMessageInfo
+from ..session.message_store import parse_part
+from .session_payload import structured_messages_to_payload
 
 
 def _session_to_dict(session: Any) -> dict[str, Any]:
@@ -66,7 +69,7 @@ class SessionService:
         if not isinstance(agent_name, str) or not agent_name.strip():
             raise ValueError("Field 'agent' must be a non-empty string")
 
-        directory = payload.get("directory") or cwd
+        directory = payload.get("directory") or payload.get("cwd") or cwd
         parent_id = payload.get("parent_id") or payload.get("parentID")
 
         session = await Session.create(
@@ -92,6 +95,95 @@ class SessionService:
         if not session:
             return None
         return _session_to_dict(session)
+
+    @classmethod
+    async def update(cls, session_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        title = payload.get("title")
+        if title is not None and not isinstance(title, str):
+            raise ValueError("Field 'title' must be a string")
+
+        updated = await Session.update(
+            session_id=session_id,
+            title=title.strip() if isinstance(title, str) else None,
+        )
+        if not updated:
+            return None
+        return _session_to_dict(updated)
+
+    @classmethod
+    async def list_messages(cls, session_id: str) -> list[dict[str, Any]]:
+        session = await Session.get(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        structured = await Session.messages(session_id=session_id)
+        return structured_messages_to_payload(structured)
+
+    @classmethod
+    async def delete_messages(cls, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        raw_message_ids = payload.get("message_ids") or payload.get("messageIDs") or []
+        if not isinstance(raw_message_ids, list):
+            raise ValueError("Field 'message_ids' must be a list of strings")
+
+        message_ids: list[str] = []
+        seen: set[str] = set()
+        for item in raw_message_ids:
+            message_id = str(item or "").strip()
+            if not message_id or message_id in seen:
+                continue
+            seen.add(message_id)
+            message_ids.append(message_id)
+
+        deleted = await Session.delete_messages(session_id, message_ids)
+        return {"deleted": int(deleted)}
+
+    @classmethod
+    async def restore_messages(cls, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        session = await Session.get(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+
+        raw_messages = payload.get("messages")
+        if not isinstance(raw_messages, list):
+            raise ValueError("Field 'messages' must be a list")
+
+        restored = 0
+        for raw_message in raw_messages:
+            if not isinstance(raw_message, dict):
+                continue
+
+            info_data = raw_message.get("info")
+            if not isinstance(info_data, dict):
+                continue
+
+            try:
+                structured_info = StoredMessageInfo.model_validate(info_data)
+            except Exception:
+                continue
+
+            if structured_info.session_id != session_id:
+                structured_info = structured_info.model_copy(update={"session_id": session_id})
+            await Session.update_message(structured_info)
+
+            raw_parts = raw_message.get("parts")
+            if isinstance(raw_parts, list):
+                for raw_part in raw_parts:
+                    if not isinstance(raw_part, dict):
+                        continue
+                    try:
+                        part = parse_part(raw_part)
+                    except Exception:
+                        continue
+                    if part.session_id != session_id or part.message_id != structured_info.id:
+                        part = part.model_copy(
+                            update={
+                                "session_id": session_id,
+                                "message_id": structured_info.id,
+                            }
+                        )
+                    await Session.update_part(part)
+            restored += 1
+
+        return {"restored": restored}
 
     @classmethod
     async def compact(cls, session_id: str, payload: dict[str, Any], cwd: str) -> dict[str, Any]:

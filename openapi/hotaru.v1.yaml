@@ -6,10 +6,44 @@ info:
 servers:
   - url: http://127.0.0.1:4096
 paths:
+  /v1/path:
+    get:
+      operationId: v1.path.get
+      summary: Get runtime paths
+      parameters:
+        - $ref: '#/components/parameters/RequestDirectoryHeader'
+        - $ref: '#/components/parameters/RequestDirectoryQuery'
+      responses:
+        '200':
+          description: Path information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PathInfo'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/skill:
+    get:
+      operationId: v1.skill.list
+      summary: List discovered skills
+      responses:
+        '200':
+          description: Skill list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillSummary'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
   /v1/session:
     post:
       operationId: v1.session.create
       summary: Create session
+      parameters:
+        - $ref: '#/components/parameters/RequestDirectoryHeader'
+        - $ref: '#/components/parameters/RequestDirectoryQuery'
       requestBody:
         required: true
         content:
@@ -70,6 +104,58 @@ paths:
           $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
+    patch:
+      operationId: v1.session.update
+      summary: Update session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSessionRequest'
+      responses:
+        '200':
+          description: Updated session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSummary'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/session/{id}/message:
+    get:
+      operationId: v1.session.message.list
+      summary: List persisted session messages
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session message list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
   /v1/session/{id}/compact:
     post:
       operationId: v1.session.compact
@@ -80,6 +166,8 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: '#/components/parameters/RequestDirectoryHeader'
+        - $ref: '#/components/parameters/RequestDirectoryQuery'
       requestBody:
         required: false
         content:
@@ -99,6 +187,64 @@ paths:
           $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
+  /v1/session/{id}/message:delete:
+    post:
+      operationId: v1.session.message.delete
+      summary: Delete specific messages from a session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteMessagesRequest'
+      responses:
+        '200':
+          description: Delete result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteMessagesResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/session/{id}/message:restore:
+    post:
+      operationId: v1.session.message.restore
+      summary: Restore serialized messages into a session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreMessagesRequest'
+      responses:
+        '200':
+          description: Restore result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreMessagesResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
   /v1/session/{id}/message:stream:
     post:
       operationId: v1.session.message.stream
@@ -109,6 +255,8 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: '#/components/parameters/RequestDirectoryHeader'
+        - $ref: '#/components/parameters/RequestDirectoryQuery'
       requestBody:
         required: true
         content:
@@ -321,6 +469,23 @@ paths:
         '500':
           $ref: '#/components/responses/ErrorResponse'
 components:
+  parameters:
+    RequestDirectoryHeader:
+      in: header
+      name: x-hotaru-directory
+      required: false
+      description: |
+        Optional workspace directory context for multi-workspace clients.
+        If provided, server routes resolve this value before query and process cwd.
+      schema:
+        type: string
+    RequestDirectoryQuery:
+      in: query
+      name: directory
+      required: false
+      description: Optional workspace directory context fallback when header is not provided.
+      schema:
+        type: string
   responses:
     ErrorResponse:
       description: Error response
@@ -391,6 +556,33 @@ components:
         - id
         - project_id
         - time
+    PathInfo:
+      type: object
+      properties:
+        home:
+          type: string
+        state:
+          type: string
+        config:
+          type: string
+        cwd:
+          type: string
+      required:
+        - home
+        - state
+        - config
+        - cwd
+    SkillSummary:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        location:
+          type: string
+      required:
+        - name
     CreateSessionRequest:
       type: object
       properties:
@@ -407,6 +599,11 @@ components:
         directory:
           type: string
         parent_id:
+          type: string
+    UpdateSessionRequest:
+      type: object
+      properties:
+        title:
           type: string
     CompactSessionRequest:
       type: object
@@ -445,6 +642,39 @@ components:
           type: string
       required:
         - content
+    DeleteMessagesRequest:
+      type: object
+      properties:
+        message_ids:
+          type: array
+          items:
+            type: string
+      required:
+        - message_ids
+    DeleteMessagesResponse:
+      type: object
+      properties:
+        deleted:
+          type: integer
+      required:
+        - deleted
+    RestoreMessagesRequest:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      required:
+        - messages
+    RestoreMessagesResponse:
+      type: object
+      properties:
+        restored:
+          type: integer
+      required:
+        - restored
     ProviderSummary:
       type: object
       properties:

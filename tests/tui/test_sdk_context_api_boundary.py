@@ -24,9 +24,21 @@ class _FakeApiClient:
         self.calls.append(("get_session", (session_id,), {}))
         return {"id": session_id, "agent": "build", "time": {"created": 1, "updated": 2}}
 
+    async def update_session(self, session_id: str, payload: dict):
+        self.calls.append(("update_session", (session_id,), {"payload": payload}))
+        return {"id": session_id, "title": payload.get("title", "Untitled"), "time": {"created": 1, "updated": 2}}
+
     async def compact_session(self, session_id: str, payload: dict | None = None):
         self.calls.append(("compact_session", (session_id,), {"payload": payload or {}}))
         return {"status": "stop"}
+
+    async def delete_messages(self, session_id: str, payload: dict):
+        self.calls.append(("delete_messages", (session_id,), {"payload": payload}))
+        return 2
+
+    async def restore_messages(self, session_id: str, payload: dict):
+        self.calls.append(("restore_messages", (session_id,), {"payload": payload}))
+        return 1
 
     async def list_providers(self):
         self.calls.append(("list_providers", tuple(), {}))
@@ -132,3 +144,20 @@ async def test_permission_and_question_calls_delegate_to_api_client(tmp_path) ->
     assert ("reply_permission", ("permission_1",), {"reply": "once", "message": "Allow this"}) in api.calls
     assert ("reply_question", ("question_1",), {"answers": [["Yes"]]}) in api.calls
     assert ("reject_question", ("question_1",), {}) in api.calls
+
+
+@pytest.mark.anyio
+async def test_session_mutation_calls_delegate_to_api_client(tmp_path) -> None:
+    api = _FakeApiClient()
+    sdk = SDKContext(cwd=str(tmp_path), api_client=api)
+
+    updated = await sdk.update_session("session_1", title="Renamed")
+    deleted = await sdk.delete_messages("session_1", ["m1", "m2"])
+    restored = await sdk.restore_messages("session_1", [{"info": {"id": "m1", "session_id": "session_1"}}])
+
+    assert updated is not None and updated["title"] == "Renamed"
+    assert deleted == 2
+    assert restored == 1
+    assert ("update_session", ("session_1",), {"payload": {"title": "Renamed"}}) in api.calls
+    assert ("delete_messages", ("session_1",), {"payload": {"message_ids": ["m1", "m2"]}}) in api.calls
+    assert ("restore_messages", ("session_1",), {"payload": {"messages": [{"info": {"id": "m1", "session_id": "session_1"}}]}}) in api.calls
