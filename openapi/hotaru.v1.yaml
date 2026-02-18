@@ -1,0 +1,539 @@
+openapi: 3.1.0
+info:
+  title: Hotaru API
+  version: 1.0.0
+  description: Contract for Hotaru versioned server routes.
+servers:
+  - url: http://127.0.0.1:4096
+paths:
+  /v1/session:
+    post:
+      operationId: v1.session.create
+      summary: Create session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '200':
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSummary'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+    get:
+      operationId: v1.session.list
+      summary: List sessions
+      parameters:
+        - in: query
+          name: project_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SessionSummary'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/session/{id}:
+    get:
+      operationId: v1.session.get
+      summary: Get session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSummary'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/session/{id}/compact:
+    post:
+      operationId: v1.session.compact
+      summary: Compact session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompactSessionRequest'
+      responses:
+        '200':
+          description: Compaction result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompactSessionResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/session/{id}/message:stream:
+    post:
+      operationId: v1.session.message.stream
+      summary: Stream session message
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StreamMessageRequest'
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseEnvelope'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/provider:
+    get:
+      operationId: v1.provider.list
+      summary: List providers
+      responses:
+        '200':
+          description: Provider list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProviderSummary'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/provider/{id}/model:
+    get:
+      operationId: v1.provider.model.list
+      summary: List provider models
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Provider model list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModelSummary'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/provider/connect:
+    post:
+      operationId: v1.provider.connect
+      summary: Connect provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderConnectRequest'
+      responses:
+        '200':
+          description: Provider connect result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderConnectResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/agent:
+    get:
+      operationId: v1.agent.list
+      summary: List agents
+      responses:
+        '200':
+          description: Agent list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentSummary'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/permission:
+    get:
+      operationId: v1.permission.list
+      summary: List pending permissions
+      responses:
+        '200':
+          description: Pending permission list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/permission/{id}/reply:
+    post:
+      operationId: v1.permission.reply
+      summary: Reply to permission request
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PermissionReplyRequest'
+      responses:
+        '200':
+          description: Permission reply accepted
+          content:
+            application/json:
+              schema:
+                type: boolean
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/question:
+    get:
+      operationId: v1.question.list
+      summary: List pending questions
+      responses:
+        '200':
+          description: Pending question list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/question/{id}/reply:
+    post:
+      operationId: v1.question.reply
+      summary: Reply to question request
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionReplyRequest'
+      responses:
+        '200':
+          description: Question reply accepted
+          content:
+            application/json:
+              schema:
+                type: boolean
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/question/{id}/reject:
+    post:
+      operationId: v1.question.reject
+      summary: Reject question request
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Question rejected
+          content:
+            application/json:
+              schema:
+                type: boolean
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /v1/event:
+    get:
+      operationId: v1.event.stream
+      summary: Stream global events
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseEnvelope'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+components:
+  responses:
+    ErrorResponse:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+          required:
+            - code
+            - message
+      required:
+        - error
+    SseEnvelope:
+      type: object
+      properties:
+        type:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        timestamp:
+          type: integer
+        session_id:
+          type: string
+      required:
+        - type
+        - data
+        - timestamp
+    SessionSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        agent:
+          type: string
+        model_id:
+          type: string
+        provider_id:
+          type: string
+        directory:
+          type: string
+        parent_id:
+          type: string
+        time:
+          type: object
+          properties:
+            created:
+              type: integer
+            updated:
+              type: integer
+      required:
+        - id
+        - project_id
+        - time
+    CreateSessionRequest:
+      type: object
+      properties:
+        project_id:
+          type: string
+        agent:
+          type: string
+        model:
+          type: string
+        model_id:
+          type: string
+        provider_id:
+          type: string
+        directory:
+          type: string
+        parent_id:
+          type: string
+    CompactSessionRequest:
+      type: object
+      properties:
+        provider_id:
+          type: string
+        model_id:
+          type: string
+        auto:
+          type: boolean
+    CompactSessionResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        assistant_message_id:
+          type: string
+        status:
+          type: string
+        error:
+          type: string
+      required:
+        - ok
+    StreamMessageRequest:
+      type: object
+      properties:
+        content:
+          type: string
+        agent:
+          type: string
+        model:
+          type: string
+        model_id:
+          type: string
+        provider_id:
+          type: string
+      required:
+        - content
+    ProviderSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        source:
+          type: string
+        model_count:
+          type: integer
+      required:
+        - id
+        - name
+        - model_count
+    ModelSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        api_id:
+          type: string
+        status:
+          type: string
+      required:
+        - id
+        - name
+        - api_id
+    ProviderConnectRequest:
+      type: object
+      properties:
+        provider_id:
+          type: string
+        api_key:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+      required:
+        - provider_id
+        - api_key
+        - config
+    ProviderConnectResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        provider_id:
+          type: string
+        provider:
+          type: object
+          additionalProperties: true
+      required:
+        - ok
+        - provider_id
+    AgentSummary:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        mode:
+          type: string
+        hidden:
+          type: boolean
+      required:
+        - name
+        - mode
+    PermissionReplyRequest:
+      type: object
+      properties:
+        reply:
+          type: string
+          enum: [once, always, reject]
+        message:
+          type: string
+      required:
+        - reply
+    QuestionReplyRequest:
+      type: object
+      properties:
+        answers:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+      required:
+        - answers

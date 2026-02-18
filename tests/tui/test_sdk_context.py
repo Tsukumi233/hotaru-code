@@ -1,556 +1,72 @@
-from types import SimpleNamespace
-import inspect
-
 import pytest
 
-from hotaru.provider.provider import ProcessedModelInfo
+from hotaru.api_client import ApiClientError
 from hotaru.tui.context.sdk import SDKContext
 
 
-@pytest.mark.anyio
-async def test_send_message_emits_tool_part_updates_without_truncation(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    sdk = SDKContext(cwd=str(tmp_path))
+class _ApiClientStub:
+    async def stream_session_message(self, _session_id: str, _payload: dict):
+        raise RuntimeError("stream failed")
+        yield  # pragma: no cover
 
-    async def fake_ensure_project(self):
-        self._project = SimpleNamespace(vcs="git")
-        self._sandbox = str(tmp_path)
+    async def get_session(self, _session_id: str):
+        raise ApiClientError(status_code=404, message="not found")
 
-    async def fake_get_model(cls, provider_id: str, model_id: str):
-        return ProcessedModelInfo(
-            id=model_id,
-            provider_id=provider_id,
-            name=model_id,
-            api_id=model_id,
-        )
-
-    async def fake_default_model(cls):
-        return ("openai", "gpt-5")
-
-    async def fake_session_get(cls, _session_id: str):
-        return SimpleNamespace(agent="build")
-
-    async def fake_session_update(cls, _session_id: str, **_kwargs):
-        return SimpleNamespace(agent="build")
-
-    async def fake_agent_get(cls, _name: str):
-        return SimpleNamespace(mode="primary")
-
-    async def fake_default_agent(cls):
-        return "build"
-
-    async def fake_system_prompt(cls, **_kwargs):
-        return "system prompt"
-
-    long_output = "x" * 1500
-
-    async def fake_prompt(cls, **kwargs):
-        on_tool_update = kwargs.get("on_tool_update")
-        if on_tool_update:
-            on_tool_update(
-                {
-                    "id": "call_tool_1",
-                    "name": "bash",
-                    "input_json": '{"command":"echo hi"}',
-                    "input": {"command": "echo hi"},
-                    "status": "running",
-                    "output": "",
-                    "error": None,
-                    "title": "Running command",
-                    "metadata": {"progress": "start"},
-                    "attachments": [],
-                    "start_time": 10,
-                    "end_time": None,
-                }
-            )
-            on_tool_update(
-                {
-                    "id": "call_tool_1",
-                    "name": "bash",
-                    "input_json": '{"command":"echo hi"}',
-                    "input": {"command": "echo hi"},
-                    "status": "completed",
-                    "output": long_output,
-                    "error": None,
-                    "title": "Long output",
-                    "metadata": {"progress": "done"},
-                    "attachments": [],
-                    "start_time": 10,
-                    "end_time": 11,
-                }
-            )
-        return SimpleNamespace(result=SimpleNamespace(error=None, usage={"input_tokens": 1}))
-
-    monkeypatch.setattr(SDKContext, "_ensure_project", fake_ensure_project)
-    monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
-    monkeypatch.setattr("hotaru.provider.provider.Provider.default_model", classmethod(fake_default_model))
-    monkeypatch.setattr("hotaru.session.session.Session.get", classmethod(fake_session_get))
-    monkeypatch.setattr("hotaru.session.session.Session.update", classmethod(fake_session_update))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_agent_get))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.default_agent", classmethod(fake_default_agent))
-    monkeypatch.setattr("hotaru.session.system.SystemPrompt.build_full_prompt", classmethod(fake_system_prompt))
-    monkeypatch.setattr("hotaru.session.prompting.SessionPrompt.prompt", classmethod(fake_prompt))
-
-    events = []
-    async for event in sdk.send_message(
-        session_id="session_1",
-        content="hello",
-        agent="build",
-        model="openai/gpt-5",
-    ):
-        events.append(event)
-
-    tool_updates = [
-        event
-        for event in events
-        if event.get("type") == "message.part.updated"
-        and (event.get("data", {}).get("part", {}) or {}).get("type") == "tool"
-    ]
-    assert len(tool_updates) >= 2
-
-    completed = tool_updates[-1]["data"]["part"]
-    assert completed["tool"] == "bash"
-    assert completed["call_id"] == "call_tool_1"
-    assert completed["state"]["status"] == "completed"
-    assert completed["state"]["output"] == long_output
-    assert completed["state"]["title"] == "Long output"
-    assert completed["state"]["metadata"]["progress"] == "done"
-
-
-@pytest.mark.anyio
-async def test_compact_session_creates_manual_compaction_and_runs_loop(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    sdk = SDKContext(cwd=str(tmp_path))
-
-    async def fake_ensure_project(self):
-        self._project = SimpleNamespace(vcs="git")
-        self._sandbox = str(tmp_path)
-
-    async def fake_session_get(cls, session_id: str):
-        assert session_id == "session_1"
-        return SimpleNamespace(agent="build", provider_id="openai", model_id="gpt-5")
-
-    async def fake_get_model(cls, provider_id: str, model_id: str):
-        return ProcessedModelInfo(
-            id=model_id,
-            provider_id=provider_id,
-            name=model_id,
-            api_id=model_id,
-        )
-
-    async def fake_system_prompt(cls, **_kwargs):
-        return "system prompt"
-
-    compaction_calls = {}
-
-    async def fake_compaction_create(cls, **kwargs):
-        compaction_calls.update(kwargs)
-        return "message_compaction"
-
-    async def fake_loop(cls, **kwargs):
-        assert kwargs["session_id"] == "session_1"
-        assert kwargs["resume_history"] is True
-        assert kwargs["auto_compaction"] is False
-        return SimpleNamespace(
-            assistant_message_id="message_summary",
-            text="summary",
-            result=SimpleNamespace(status="stop", error=None, usage={"input_tokens": 10}),
-        )
-
-    monkeypatch.setattr(SDKContext, "_ensure_project", fake_ensure_project)
-    monkeypatch.setattr("hotaru.session.session.Session.get", classmethod(fake_session_get))
-    monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
-    monkeypatch.setattr("hotaru.session.system.SystemPrompt.build_full_prompt", classmethod(fake_system_prompt))
-    monkeypatch.setattr("hotaru.session.compaction.SessionCompaction.create", classmethod(fake_compaction_create))
-    monkeypatch.setattr("hotaru.session.prompting.SessionPrompt.loop", classmethod(fake_loop))
-
-    result = await sdk.compact_session(session_id="session_1")
-
-    assert compaction_calls["session_id"] == "session_1"
-    assert compaction_calls["agent"] == "build"
-    assert compaction_calls["provider_id"] == "openai"
-    assert compaction_calls["model_id"] == "gpt-5"
-    assert compaction_calls["auto"] is False
-    assert result["user_message_id"] == "message_compaction"
-    assert result["assistant_message_id"] == "message_summary"
-    assert result["status"] == "stop"
-    assert result["error"] is None
-
-
-@pytest.mark.anyio
-async def test_send_message_emits_reasoning_and_step_part_updates(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    sdk = SDKContext(cwd=str(tmp_path))
-
-    async def fake_ensure_project(self):
-        self._project = SimpleNamespace(vcs="git")
-        self._sandbox = str(tmp_path)
-
-    async def fake_get_model(cls, provider_id: str, model_id: str):
-        return ProcessedModelInfo(
-            id=model_id,
-            provider_id=provider_id,
-            name=model_id,
-            api_id=model_id,
-        )
-
-    async def fake_default_model(cls):
-        return ("openai", "gpt-5")
-
-    async def fake_session_get(cls, _session_id: str):
-        return SimpleNamespace(agent="build")
-
-    async def fake_session_update(cls, _session_id: str, **_kwargs):
-        return SimpleNamespace(agent="build")
-
-    async def fake_agent_get(cls, _name: str):
-        return SimpleNamespace(mode="primary")
-
-    async def fake_default_agent(cls):
-        return "build"
-
-    async def fake_system_prompt(cls, **_kwargs):
-        return "system prompt"
-
-    async def fake_prompt(cls, **kwargs):
-        on_reasoning_start = kwargs.get("on_reasoning_start")
-        on_reasoning_delta = kwargs.get("on_reasoning_delta")
-        on_reasoning_end = kwargs.get("on_reasoning_end")
-        on_step_start = kwargs.get("on_step_start")
-        on_step_finish = kwargs.get("on_step_finish")
-        on_patch = kwargs.get("on_patch")
-
-        assert on_reasoning_start is not None
-        assert on_reasoning_delta is not None
-        assert on_reasoning_end is not None
-        assert on_step_start is not None
-        assert on_step_finish is not None
-        assert on_patch is not None
-
-        def _maybe_await(result):
-            if inspect.isawaitable(result):
-                return result
-            return None
-
-        _maybe_await(on_step_start("snap_start"))
-        maybe = _maybe_await(on_reasoning_start("r1", {"provider": "openai"}))
-        if maybe:
-            await maybe
-        maybe = _maybe_await(on_reasoning_delta("r1", "plan ", {"provider": "openai"}))
-        if maybe:
-            await maybe
-        maybe = _maybe_await(on_reasoning_delta("r1", "done", {"provider": "openai"}))
-        if maybe:
-            await maybe
-        maybe = _maybe_await(on_reasoning_end("r1", {"provider": "openai"}))
-        if maybe:
-            await maybe
-        _maybe_await(on_step_finish("stop", "snap_end", {"input": 3, "output": 5, "reasoning": 7}, 0.12))
-        _maybe_await(on_patch("patch-hash", ["src/hotaru/tui/context/sdk.py"]))
-
-        return SimpleNamespace(result=SimpleNamespace(error=None, usage={"input_tokens": 1}))
-
-    monkeypatch.setattr(SDKContext, "_ensure_project", fake_ensure_project)
-    monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
-    monkeypatch.setattr("hotaru.provider.provider.Provider.default_model", classmethod(fake_default_model))
-    monkeypatch.setattr("hotaru.session.session.Session.get", classmethod(fake_session_get))
-    monkeypatch.setattr("hotaru.session.session.Session.update", classmethod(fake_session_update))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_agent_get))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.default_agent", classmethod(fake_default_agent))
-    monkeypatch.setattr("hotaru.session.system.SystemPrompt.build_full_prompt", classmethod(fake_system_prompt))
-    monkeypatch.setattr("hotaru.session.prompting.SessionPrompt.prompt", classmethod(fake_prompt))
-
-    events = []
-    async for event in sdk.send_message(
-        session_id="session_1",
-        content="hello",
-        agent="build",
-        model="openai/gpt-5",
-    ):
-        events.append(event)
-
-    part_updates = [
-        event.get("data", {}).get("part", {})
-        for event in events
-        if event.get("type") == "message.part.updated"
-    ]
-    part_types = [part.get("type") for part in part_updates]
-
-    assert "reasoning" in part_types
-    assert "step-start" in part_types
-    assert "step-finish" in part_types
-    assert "patch" in part_types
-
-    reasoning_part = [part for part in part_updates if part.get("type") == "reasoning"][-1]
-    assert reasoning_part.get("text") == "plan done"
-
-    step_finish_part = next(part for part in part_updates if part.get("type") == "step-finish")
-    assert step_finish_part.get("reason") == "stop"
-
-    patch_part = next(part for part in part_updates if part.get("type") == "patch")
-    assert patch_part.get("files") == ["src/hotaru/tui/context/sdk.py"]
-
-
-@pytest.mark.anyio
-async def test_send_message_splits_anonymous_reasoning_segments_around_tool_updates(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    sdk = SDKContext(cwd=str(tmp_path))
-
-    async def fake_ensure_project(self):
-        self._project = SimpleNamespace(vcs="git")
-        self._sandbox = str(tmp_path)
-
-    async def fake_get_model(cls, provider_id: str, model_id: str):
-        return ProcessedModelInfo(
-            id=model_id,
-            provider_id=provider_id,
-            name=model_id,
-            api_id=model_id,
-        )
-
-    async def fake_default_model(cls):
-        return ("openai", "gpt-5")
-
-    async def fake_session_get(cls, _session_id: str):
-        return SimpleNamespace(agent="build")
-
-    async def fake_session_update(cls, _session_id: str, **_kwargs):
-        return SimpleNamespace(agent="build")
-
-    async def fake_agent_get(cls, _name: str):
-        return SimpleNamespace(mode="primary")
-
-    async def fake_default_agent(cls):
-        return "build"
-
-    async def fake_system_prompt(cls, **_kwargs):
-        return "system prompt"
-
-    async def fake_prompt(cls, **kwargs):
-        on_reasoning_start = kwargs.get("on_reasoning_start")
-        on_reasoning_delta = kwargs.get("on_reasoning_delta")
-        on_reasoning_end = kwargs.get("on_reasoning_end")
-        on_tool_update = kwargs.get("on_tool_update")
-        assert on_reasoning_start is not None
-        assert on_reasoning_delta is not None
-        assert on_reasoning_end is not None
-        assert on_tool_update is not None
-
-        def _maybe_await(result):
-            if inspect.isawaitable(result):
-                return result
-            return None
-
-        maybe = _maybe_await(on_reasoning_start(None, {"provider": "openai"}))
-        if maybe:
-            await maybe
-        maybe = _maybe_await(on_reasoning_delta(None, "first", {"provider": "openai"}))
-        if maybe:
-            await maybe
-        maybe = _maybe_await(on_reasoning_end(None, {"provider": "openai"}))
-        if maybe:
-            await maybe
-
-        on_tool_update(
+    async def list_providers(self):
+        return [
             {
-                "id": "call_tool_1",
-                "name": "read",
-                "input_json": '{"filePath":"README.md"}',
-                "input": {"filePath": "README.md"},
-                "status": "running",
-                "output": "",
-                "error": None,
-                "title": "Read file",
-                "metadata": {},
-                "attachments": [],
-                "start_time": 10,
-                "end_time": None,
+                "id": "openai",
+                "name": "OpenAI",
+                "models": [
+                    {"id": "gpt-5", "name": "GPT-5", "api_id": "gpt-5"},
+                ],
             }
-        )
-        on_tool_update(
-            {
-                "id": "call_tool_1",
-                "name": "read",
-                "input_json": '{"filePath":"README.md"}',
-                "input": {"filePath": "README.md"},
-                "status": "completed",
-                "output": "ok",
-                "error": None,
-                "title": "Read file",
-                "metadata": {},
-                "attachments": [],
-                "start_time": 10,
-                "end_time": 11,
-            }
-        )
+        ]
 
-        maybe = _maybe_await(on_reasoning_start(None, {"provider": "openai"}))
-        if maybe:
-            await maybe
-        maybe = _maybe_await(on_reasoning_delta(None, "second", {"provider": "openai"}))
-        if maybe:
-            await maybe
-        maybe = _maybe_await(on_reasoning_end(None, {"provider": "openai"}))
-        if maybe:
-            await maybe
-
-        return SimpleNamespace(result=SimpleNamespace(error=None, usage={"input_tokens": 1}))
-
-    monkeypatch.setattr(SDKContext, "_ensure_project", fake_ensure_project)
-    monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
-    monkeypatch.setattr("hotaru.provider.provider.Provider.default_model", classmethod(fake_default_model))
-    monkeypatch.setattr("hotaru.session.session.Session.get", classmethod(fake_session_get))
-    monkeypatch.setattr("hotaru.session.session.Session.update", classmethod(fake_session_update))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_agent_get))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.default_agent", classmethod(fake_default_agent))
-    monkeypatch.setattr("hotaru.session.system.SystemPrompt.build_full_prompt", classmethod(fake_system_prompt))
-    monkeypatch.setattr("hotaru.session.prompting.SessionPrompt.prompt", classmethod(fake_prompt))
-
-    events = []
-    async for event in sdk.send_message(
-        session_id="session_1",
-        content="hello",
-        agent="build",
-        model="openai/gpt-5",
-    ):
-        events.append(event)
-
-    part_updates = [
-        event.get("data", {}).get("part", {})
-        for event in events
-        if event.get("type") == "message.part.updated"
-    ]
-    reasoning_parts = [part for part in part_updates if part.get("type") == "reasoning"]
-    reasoning_ids: list[str] = []
-    for part in reasoning_parts:
-        pid = str(part.get("id") or "")
-        if pid and pid not in reasoning_ids:
-            reasoning_ids.append(pid)
-
-    assert len(reasoning_ids) == 2
-    assert reasoning_ids[0] != reasoning_ids[1]
-
-    first_reasoning_index = next(
-        idx
-        for idx, part in enumerate(part_updates)
-        if part.get("type") == "reasoning" and part.get("id") == reasoning_ids[0]
-    )
-    tool_index = next(
-        idx
-        for idx, part in enumerate(part_updates)
-        if part.get("type") == "tool" and part.get("call_id") == "call_tool_1"
-    )
-    second_reasoning_index = next(
-        idx
-        for idx, part in enumerate(part_updates)
-        if part.get("type") == "reasoning" and part.get("id") == reasoning_ids[1]
-    )
-    assert first_reasoning_index < tool_index < second_reasoning_index
+    async def list_provider_models(self, _provider_id: str):
+        return []
 
 
 @pytest.mark.anyio
-async def test_send_message_starts_new_text_segment_after_reasoning_boundary(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    sdk = SDKContext(cwd=str(tmp_path))
+async def test_send_message_emits_error_event_when_api_stream_fails(tmp_path) -> None:
+    sdk = SDKContext(cwd=str(tmp_path), api_client=_ApiClientStub())
+    events = [event async for event in sdk.send_message(session_id="session_1", content="hello")]
+    assert events == [{"type": "error", "data": {"error": "stream failed"}}]
 
-    async def fake_ensure_project(self):
-        self._project = SimpleNamespace(vcs="git")
-        self._sandbox = str(tmp_path)
 
-    async def fake_get_model(cls, provider_id: str, model_id: str):
-        return ProcessedModelInfo(
-            id=model_id,
-            provider_id=provider_id,
-            name=model_id,
-            api_id=model_id,
-        )
+@pytest.mark.anyio
+async def test_get_session_returns_none_when_api_reports_not_found(tmp_path) -> None:
+    sdk = SDKContext(cwd=str(tmp_path), api_client=_ApiClientStub())
+    assert await sdk.get_session("missing") is None
 
-    async def fake_default_model(cls):
-        return ("openai", "gpt-5")
 
-    async def fake_session_get(cls, _session_id: str):
-        return SimpleNamespace(agent="build")
-
-    async def fake_session_update(cls, _session_id: str, **_kwargs):
-        return SimpleNamespace(agent="build")
-
-    async def fake_agent_get(cls, _name: str):
-        return SimpleNamespace(mode="primary")
-
-    async def fake_default_agent(cls):
-        return "build"
-
-    async def fake_system_prompt(cls, **_kwargs):
-        return "system prompt"
-
-    async def fake_prompt(cls, **kwargs):
-        on_text = kwargs.get("on_text")
-        on_reasoning_start = kwargs.get("on_reasoning_start")
-        on_reasoning_delta = kwargs.get("on_reasoning_delta")
-        on_reasoning_end = kwargs.get("on_reasoning_end")
-        assert on_text is not None
-        assert on_reasoning_start is not None
-        assert on_reasoning_delta is not None
-        assert on_reasoning_end is not None
-
-        def _maybe_await(result):
-            if inspect.isawaitable(result):
-                return result
-            return None
-
-        on_text("before ")
-        maybe = _maybe_await(on_reasoning_start("r1", {"provider": "openai"}))
-        if maybe:
-            await maybe
-        maybe = _maybe_await(on_reasoning_delta("r1", "thinking", {"provider": "openai"}))
-        if maybe:
-            await maybe
-        maybe = _maybe_await(on_reasoning_end("r1", {"provider": "openai"}))
-        if maybe:
-            await maybe
-        on_text("after")
-
-        return SimpleNamespace(result=SimpleNamespace(error=None, usage={"input_tokens": 1}))
-
-    monkeypatch.setattr(SDKContext, "_ensure_project", fake_ensure_project)
-    monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
-    monkeypatch.setattr("hotaru.provider.provider.Provider.default_model", classmethod(fake_default_model))
-    monkeypatch.setattr("hotaru.session.session.Session.get", classmethod(fake_session_get))
-    monkeypatch.setattr("hotaru.session.session.Session.update", classmethod(fake_session_update))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_agent_get))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.default_agent", classmethod(fake_default_agent))
-    monkeypatch.setattr("hotaru.session.system.SystemPrompt.build_full_prompt", classmethod(fake_system_prompt))
-    monkeypatch.setattr("hotaru.session.prompting.SessionPrompt.prompt", classmethod(fake_prompt))
-
-    events = []
-    async for event in sdk.send_message(
-        session_id="session_1",
-        content="hello",
-        agent="build",
-        model="openai/gpt-5",
-    ):
-        events.append(event)
-
-    text_parts = [
-        event.get("data", {}).get("part", {})
-        for event in events
-        if event.get("type") == "message.part.updated"
-        and (event.get("data", {}).get("part", {}) or {}).get("type") == "text"
+@pytest.mark.anyio
+async def test_list_providers_normalizes_model_payload_shape(tmp_path) -> None:
+    sdk = SDKContext(cwd=str(tmp_path), api_client=_ApiClientStub())
+    providers = await sdk.list_providers()
+    assert providers == [
+        {
+            "id": "openai",
+            "name": "OpenAI",
+            "models": {
+                "gpt-5": {
+                    "id": "gpt-5",
+                    "name": "GPT-5",
+                    "api_id": "gpt-5",
+                    "limit": {"context": 0, "output": 0},
+                }
+            },
+        }
     ]
-    text_ids: list[str] = []
-    for part in text_parts:
-        pid = str(part.get("id") or "")
-        if pid and pid not in text_ids:
-            text_ids.append(pid)
 
-    assert len(text_ids) == 2
+
+def test_event_subscription_and_emit_unsubscribe(tmp_path) -> None:
+    sdk = SDKContext(cwd=str(tmp_path))
+    observed: list[dict] = []
+
+    unsubscribe = sdk.on_event("runtime", lambda data: observed.append(data))
+    sdk.emit_event("runtime", {"state": "ready"})
+    unsubscribe()
+    sdk.emit_event("runtime", {"state": "stopped"})
+
+    assert observed == [{"state": "ready"}]
