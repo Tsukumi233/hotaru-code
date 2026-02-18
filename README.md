@@ -1,5 +1,101 @@
 # Hotaru Code
 
+## 架构图
+
+```mermaid
+flowchart TB
+    User["用户"]
+
+    subgraph Entry["入口层（CLI / TUI）"]
+        CLI["Typer CLI<br/>src/hotaru/cli/main.py"]
+        RunCmd["Run 命令<br/>src/hotaru/cli/cmd/run.py"]
+        TuiApp["Textual TUI<br/>src/hotaru/tui/app.py"]
+    end
+
+    subgraph Orchestration["会话编排层"]
+        Project["Project / Instance 上下文<br/>src/hotaru/project"]
+        SystemPrompt["SystemPrompt + InstructionPrompt<br/>src/hotaru/session/system.py"]
+        SessionPrompt["SessionPrompt（主循环入口）<br/>src/hotaru/session/prompting.py"]
+        Processor["SessionProcessor（Agentic Loop）<br/>src/hotaru/session/processor.py"]
+        LLM["LLM Streaming Adapter<br/>src/hotaru/session/llm.py"]
+        SessionStore["Session + MessageStore<br/>src/hotaru/session/session.py"]
+    end
+
+    subgraph ModelLayer["模型与 Agent 层"]
+        Agent["Agent Registry<br/>src/hotaru/agent/agent.py"]
+        Provider["Provider Registry<br/>src/hotaru/provider/provider.py"]
+        Transform["ProviderTransform<br/>src/hotaru/provider/transform.py"]
+        OpenAISDK["OpenAI SDK<br/>src/hotaru/provider/sdk/openai.py"]
+        AnthropicSDK["Anthropic SDK<br/>src/hotaru/provider/sdk/anthropic.py"]
+    end
+
+    subgraph Tooling["工具执行与扩展层"]
+        ToolRegistry["ToolRegistry<br/>src/hotaru/tool/registry.py"]
+        BuiltinTools["内置工具集<br/>read/edit/write/bash/apply_patch/task/skill/..."]
+        Permission["Permission 引擎<br/>src/hotaru/permission/permission.py"]
+        MCP["MCP 管理器<br/>src/hotaru/mcp/mcp.py"]
+        MCPServers["本地/远程 MCP Servers"]
+        Skill["Skill 发现与加载<br/>src/hotaru/skill"]
+        TaskTool["Task Tool（子 Agent 委派）<br/>src/hotaru/tool/task.py"]
+    end
+
+    subgraph Infra["基础设施层"]
+        Config["ConfigManager<br/>hotaru.json / AGENTS.md / env"]
+        Bus["Event Bus<br/>src/hotaru/core/bus.py"]
+        Storage["Storage(JSON + Lock)<br/>src/hotaru/storage/storage.py"]
+        GlobalPath["GlobalPath（config/data/cache）"]
+    end
+
+    User --> CLI
+    CLI -->|默认| TuiApp
+    CLI -->|run| RunCmd
+
+    TuiApp --> Project
+    RunCmd --> Project
+    TuiApp --> SessionPrompt
+    RunCmd --> SessionPrompt
+    Project --> SessionPrompt
+    SystemPrompt --> SessionPrompt
+    SessionPrompt --> Processor
+    Processor --> LLM
+    SessionPrompt --> SessionStore
+
+    Processor --> Agent
+    Processor --> Provider
+    LLM --> Transform
+    Transform --> OpenAISDK
+    Transform --> AnthropicSDK
+
+    Processor --> ToolRegistry
+    ToolRegistry --> BuiltinTools
+    BuiltinTools --> Permission
+    BuiltinTools --> TaskTool
+    BuiltinTools --> Skill
+
+    Processor --> MCP
+    MCP --> MCPServers
+    MCP --> Processor
+    TaskTool --> SessionPrompt
+
+    Agent --> Config
+    Provider --> Config
+    Skill --> Config
+    MCP --> Config
+    Permission --> Config
+
+    SessionStore --> Storage
+    Project --> Storage
+    Permission --> Storage
+    Storage --> GlobalPath
+
+    Permission --> Bus
+    MCP --> Bus
+    Project --> Bus
+    SessionStore --> Bus
+    TuiApp --> Bus
+    RunCmd --> Bus
+```
+
 Hotaru Code 是一个运行在终端里的 AI 编码助手。
 
 它提供 TUI 与一次性 Run 两种模式，并支持工具调用、权限控制、会话持久化、MCP 扩展、Skill 与 Agent 配置。
