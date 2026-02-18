@@ -14,6 +14,8 @@ from ...core.id import Identifier
 from ...project import Project
 from ...provider import Provider
 from ...session import Session, SessionCompaction, SessionPrompt, SystemPrompt
+from ...session.orchestration import prepare_send_message_context
+from ...session.part_callbacks import create_part_callbacks
 from ...session.stream_parts import PartStreamBuilder
 from ...util.log import Log
 from ..message_adapter import structured_messages_to_tui
@@ -81,22 +83,19 @@ class SDKContext:
             "model": model,
         })
 
-        # Parse model string
-        if model:
-            provider_id, model_id = Provider.parse_model(model)
-        else:
-            try:
-                provider_id, model_id = await Provider.default_model()
-            except RuntimeError as e:
-                yield {
-                    "type": "error",
-                    "data": {"error": str(e)}
-                }
-                return
-
-        # Validate model exists
         try:
-            model_info = await Provider.get_model(provider_id, model_id)
+            prompt_ctx = await prepare_send_message_context(
+                cwd=self._cwd,
+                sandbox=self._sandbox or self._cwd,
+                project_vcs=self._project.vcs if self._project else None,
+                session_id=session_id,
+                model=model,
+                requested_agent=agent,
+            )
+            provider_id = prompt_ctx.provider_id
+            model_id = prompt_ctx.model_id
+            agent_name = prompt_ctx.agent_name
+            system_prompt = prompt_ctx.system_prompt
         except Exception as e:
             yield {
                 "type": "error",
@@ -104,32 +103,8 @@ class SDKContext:
             }
             return
 
-        # Get agent name
-        session = await Session.get(session_id)
-        agent_name = agent or (session.agent if session else None)
-        if agent_name:
-            agent_info = await Agent.get(agent_name)
-            if not agent_info or agent_info.mode == "subagent":
-                agent_name = await Agent.default_agent()
-        else:
-            agent_name = await Agent.default_agent()
-
-        if session and session.agent != agent_name:
-            updated = await Session.update(session_id, agent=agent_name)
-            if updated:
-                session = updated
-
-        # Build system prompt
-        system_prompt = await SystemPrompt.build_full_prompt(
-            model=model_info,
-            directory=self._cwd,
-            worktree=self._sandbox or self._cwd,
-            is_git=self._project.vcs == "git" if self._project else False,
-        )
-
         # Track response state
         message_id = Identifier.ascending("message")
-        response_text = ""
         part_builder = PartStreamBuilder(session_id=session_id, message_id=message_id)
 
         # Yield message created event
@@ -166,93 +141,20 @@ class SDKContext:
                 "metadata": metadata or {},
             })
 
-        def on_tool_update(tool_state: Dict[str, Any]):
-            event_queue.put_nowait(
-                {
-                    "kind": "tool_update",
-                    "tool_state": dict(tool_state or {}),
-                }
-            )
-
-        async def on_reasoning_start(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None):
-            event_queue.put_nowait(
-                {
-                    "kind": "reasoning_start",
-                    "reasoning_id": reasoning_id,
-                    "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
-                }
-            )
-
-        async def on_reasoning_delta(
-            reasoning_id: Optional[str],
-            delta: str,
-            metadata: Optional[Dict[str, Any]] = None,
-        ):
-            event_queue.put_nowait(
-                {
-                    "kind": "reasoning_delta",
-                    "reasoning_id": reasoning_id,
-                    "delta": str(delta or ""),
-                    "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
-                }
-            )
-
-        async def on_reasoning_end(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None):
-            event_queue.put_nowait(
-                {
-                    "kind": "reasoning_end",
-                    "reasoning_id": reasoning_id,
-                    "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
-                }
-            )
-
-        def on_step_start(snapshot: Optional[str]):
-            event_queue.put_nowait(
-                {
-                    "kind": "step_start",
-                    "snapshot": snapshot,
-                }
-            )
-
-        def on_step_finish(
-            reason: str,
-            snapshot: Optional[str],
-            tokens: Optional[Dict[str, Any]] = None,
-            cost: float = 0.0,
-        ):
-            event_queue.put_nowait(
-                {
-                    "kind": "step_finish",
-                    "reason": reason,
-                    "snapshot": snapshot,
-                    "tokens": dict(tokens or {}),
-                    "cost": float(cost or 0.0),
-                }
-            )
-
-        def on_patch(patch_hash: Optional[str], files: Optional[List[str]] = None):
-            event_queue.put_nowait(
-                {
-                    "kind": "patch",
-                    "hash": str(patch_hash or ""),
-                    "files": list(files or []),
-                }
-            )
-
         # Process with streaming text/tool updates
         # We need to yield events as they come in
         event_queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
         result_holder: List[Any] = []
         error_holder: List[str] = []
 
+        def _queue_part_update(part: Dict[str, Any]) -> None:
+            event_queue.put_nowait({"kind": "part", "part": dict(part)})
+
+        part_callbacks = create_part_callbacks(part_builder=part_builder, on_part=_queue_part_update)
+
         async def process_with_queue():
             """Run processor and put events in queue."""
             try:
-                def queue_text(text: str):
-                    nonlocal response_text
-                    response_text += text
-                    event_queue.put_nowait({"kind": "text", "text": text})
-
                 prompt_result = await SessionPrompt.prompt(
                     session_id=session_id,
                     content=content,
@@ -262,16 +164,16 @@ class SDKContext:
                     cwd=self._cwd,
                     worktree=self._sandbox or self._cwd,
                     system_prompt=system_prompt,
-                    on_text=queue_text,
+                    on_text=part_callbacks.on_text,
                     on_tool_start=on_tool_start,
                     on_tool_end=on_tool_end,
-                    on_tool_update=on_tool_update,
-                    on_reasoning_start=on_reasoning_start,
-                    on_reasoning_delta=on_reasoning_delta,
-                    on_reasoning_end=on_reasoning_end,
-                    on_step_start=on_step_start,
-                    on_step_finish=on_step_finish,
-                    on_patch=on_patch,
+                    on_tool_update=part_callbacks.on_tool_update,
+                    on_reasoning_start=part_callbacks.on_reasoning_start,
+                    on_reasoning_delta=part_callbacks.on_reasoning_delta,
+                    on_reasoning_end=part_callbacks.on_reasoning_end,
+                    on_step_start=part_callbacks.on_step_start,
+                    on_step_finish=part_callbacks.on_step_finish,
+                    on_patch=part_callbacks.on_patch,
                     resume_history=True,
                     assistant_message_id=message_id,
                 )
@@ -287,14 +189,8 @@ class SDKContext:
         def _make_event(evt: Dict[str, Any]):
             """Convert a queue event dict to a yield-able event dict."""
             kind = evt.get("kind")
-            if kind == "text":
-                part = part_builder.text_delta(str(evt.get("text") or ""))
-                if part is None:
-                    return None
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
+            if kind == "part":
+                return {"type": "message.part.updated", "data": {"part": dict(evt.get("part") or {})}}
             elif kind == "tool_start":
                 return {
                     "type": "message.part.tool.start",
@@ -315,64 +211,6 @@ class SDKContext:
                         "title": evt.get("title", ""),
                         "metadata": evt.get("metadata", {}),
                     }
-                }
-            elif kind == "tool_update":
-                part = part_builder.tool_update(dict(evt.get("tool_state") or {}))
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
-            elif kind == "reasoning_start":
-                part = part_builder.reasoning_start(
-                    evt.get("reasoning_id"),
-                    dict(evt.get("metadata") or {}),
-                )
-                if part is None:
-                    return None
-                return {"type": "message.part.updated", "data": {"part": part}}
-            elif kind == "reasoning_delta":
-                part = part_builder.reasoning_delta(
-                    evt.get("reasoning_id"),
-                    str(evt.get("delta") or ""),
-                    dict(evt.get("metadata") or {}),
-                )
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
-            elif kind == "reasoning_end":
-                part = part_builder.reasoning_end(
-                    evt.get("reasoning_id"),
-                    dict(evt.get("metadata") or {}),
-                )
-                if part is None:
-                    return None
-                return {"type": "message.part.updated", "data": {"part": part}}
-            elif kind == "step_start":
-                part = part_builder.step_start(evt.get("snapshot"))
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
-            elif kind == "step_finish":
-                part = part_builder.step_finish(
-                    reason=str(evt.get("reason") or "completed"),
-                    snapshot=evt.get("snapshot"),
-                    tokens=dict(evt.get("tokens") or {}),
-                    cost=float(evt.get("cost") or 0.0),
-                )
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
-            elif kind == "patch":
-                part = part_builder.patch(
-                    patch_hash=str(evt.get("hash") or ""),
-                    files=list(evt.get("files") or []),
-                )
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
                 }
             return None
 

@@ -12,3 +12,5 @@ wheels/
 .claude/
 CLAUDE.md
 session-ses*
+.worktrees/
+docs/plans/

@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional
 from rich.console import Console
 from rich.prompt import Prompt
 
-from ...agent import Agent
 from ...command import (
     expand_builtin_slash_command,
     parse_builtin_slash_command,
@@ -21,11 +20,11 @@ from ...core.bus import Bus
 from ...core.id import Identifier
 from ...permission import Permission, PermissionAsked, PermissionReply
 from ...question import Question, QuestionAsked
-from ...project import Instance, Project
-from ...provider import Provider
-from ...session import Session, SessionPrompt, SystemPrompt
+from ...project import Project
+from ...session import SessionPrompt
+from ...session.orchestration import prepare_prompt_context
+from ...session.part_callbacks import create_part_callbacks
 from ...session.stream_parts import PartStreamBuilder
-from ...tool import ToolRegistry
 from ...util.log import Log
 
 # Use legacy_windows=True on Windows to avoid Unicode encoding issues with GBK
@@ -105,87 +104,45 @@ async def run_command(
         "message_length": len(message),
     })
 
-    # Determine model
-    if model:
-        provider_id, model_id = Provider.parse_model(model)
-    else:
-        try:
-            provider_id, model_id = await Provider.default_model()
-        except RuntimeError as e:
-            console.print(f"[red]Error:[/red] {e}")
-            console.print()
-            console.print("No AI providers are configured. Set an API key:")
-            console.print("  export ANTHROPIC_API_KEY=your-key")
-            console.print("  export OPENAI_API_KEY=your-key")
-            sys.exit(1)
-
-    # Validate model exists
     try:
-        model_info = await Provider.get_model(provider_id, model_id)
+        prompt_ctx = await prepare_prompt_context(
+            cwd=cwd,
+            sandbox=sandbox,
+            project_id=project.id,
+            project_vcs=project.vcs,
+            model=model,
+            requested_agent=agent,
+            session_id=session_id,
+            continue_session=continue_session,
+        )
+    except RuntimeError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        console.print()
+        console.print("No AI providers are configured. Set an API key:")
+        console.print("  export ANTHROPIC_API_KEY=your-key")
+        console.print("  export OPENAI_API_KEY=your-key")
+        sys.exit(1)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
-    # Validate requested agent (if provided)
-    requested_agent = agent
-    if requested_agent:
-        agent_info = await Agent.get(requested_agent)
-        if not agent_info:
-            console.print(f"[yellow]Warning:[/yellow] Agent '{requested_agent}' not found, using session/default")
-            requested_agent = None
-        elif agent_info.mode == "subagent":
-            console.print(f"[yellow]Warning:[/yellow] Agent '{requested_agent}' is a subagent, using session/default")
-            requested_agent = None
+    provider_id = prompt_ctx.provider_id
+    model_id = prompt_ctx.model_id
+    session = prompt_ctx.session
+    agent_name = prompt_ctx.agent_name
+    is_resuming = prompt_ctx.is_resuming
+    system_prompt = prompt_ctx.system_prompt
 
-    # Get or create session
-    if continue_session:
-        sessions = await Session.list(project.id)
-        if sessions:
-            session = sessions[0]
-        else:
-            initial_agent = requested_agent or await Agent.default_agent()
-            session = await Session.create(
-                project_id=project.id,
-                agent=initial_agent,
-                directory=cwd,
-                model_id=model_id,
-                provider_id=provider_id,
-            )
-    elif session_id:
-        session = await Session.get(session_id)
-        if not session:
-            console.print(f"[red]Error:[/red] Session '{session_id}' not found")
-            sys.exit(1)
-    else:
-        initial_agent = requested_agent or await Agent.default_agent()
-        session = await Session.create(
-            project_id=project.id,
-            agent=initial_agent,
-            directory=cwd,
-            model_id=model_id,
-            provider_id=provider_id,
-        )
-
-    agent_name = requested_agent or session.agent or await Agent.default_agent()
-    if agent_name != session.agent:
-        updated = await Session.update(session.id, agent=agent_name)
-        if updated:
-            session = updated
+    for warning in prompt_ctx.warnings:
+        console.print(f"[yellow]Warning:[/yellow] {warning}")
 
     if not json_output:
         console.print()
         console.print(f"> {agent_name} · {provider_id}/{model_id}")
         console.print()
-
-    is_resuming = continue_session or (session_id is not None)
-
-    # Build system prompt
-    system_prompt = await SystemPrompt.build_full_prompt(
-        model=model_info,
-        directory=cwd,
-        worktree=sandbox,
-        is_git=project.vcs == "git",
-    )
 
     assistant_message_id = Identifier.ascending("message")
     part_builder = PartStreamBuilder(session_id=session.id, message_id=assistant_message_id)
@@ -312,44 +269,7 @@ async def run_command(
         if json_output and part_type == "step-finish":
             _emit_json("step_finish", {"part": part})
 
-    def on_text(text: str) -> None:
-        part = part_builder.text_delta(text)
-        if part:
-            _handle_part(part)
-
-    def on_tool_update(tool_state: Dict[str, Any]) -> None:
-        _handle_part(part_builder.tool_update(tool_state))
-
-    async def on_reasoning_start(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> None:
-        part = part_builder.reasoning_start(reasoning_id, metadata)
-        if part:
-            _handle_part(part)
-
-    async def on_reasoning_delta(
-        reasoning_id: Optional[str],
-        delta: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        _handle_part(part_builder.reasoning_delta(reasoning_id, delta, metadata))
-
-    async def on_reasoning_end(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> None:
-        part = part_builder.reasoning_end(reasoning_id, metadata)
-        if part:
-            _handle_part(part)
-
-    def on_step_start(snapshot: Optional[str]) -> None:
-        _handle_part(part_builder.step_start(snapshot))
-
-    def on_step_finish(
-        reason: str,
-        snapshot: Optional[str],
-        tokens: Optional[Dict[str, Any]] = None,
-        cost: float = 0.0,
-    ) -> None:
-        _handle_part(part_builder.step_finish(reason=reason, snapshot=snapshot, tokens=tokens, cost=cost))
-
-    def on_patch(patch_hash: Optional[str], files_changed: Optional[List[str]] = None) -> None:
-        _handle_part(part_builder.patch(patch_hash=patch_hash, files=files_changed))
+    part_callbacks = create_part_callbacks(part_builder=part_builder, on_part=_handle_part)
 
     # Permission handling — auto-approve with --yes, otherwise terminal prompt
     async def on_permission_asked(payload):
@@ -487,14 +407,14 @@ async def run_command(
             cwd=cwd,
             worktree=sandbox,
             system_prompt=system_prompt,
-            on_text=on_text,
-            on_tool_update=on_tool_update,
-            on_reasoning_start=on_reasoning_start,
-            on_reasoning_delta=on_reasoning_delta,
-            on_reasoning_end=on_reasoning_end,
-            on_step_start=on_step_start,
-            on_step_finish=on_step_finish,
-            on_patch=on_patch,
+            on_text=part_callbacks.on_text,
+            on_tool_update=part_callbacks.on_tool_update,
+            on_reasoning_start=part_callbacks.on_reasoning_start,
+            on_reasoning_delta=part_callbacks.on_reasoning_delta,
+            on_reasoning_end=part_callbacks.on_reasoning_end,
+            on_step_start=part_callbacks.on_step_start,
+            on_step_finish=part_callbacks.on_step_finish,
+            on_patch=part_callbacks.on_patch,
             resume_history=is_resuming,
             assistant_message_id=assistant_message_id,
         )
