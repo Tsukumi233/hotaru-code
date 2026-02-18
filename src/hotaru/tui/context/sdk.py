@@ -1,745 +1,327 @@
-"""SDK context for API communication.
+"""SDK context for TUI <-> API communication."""
 
-This module provides SDK client context for communicating with
-the Hotaru backend API. Uses SessionPrompt for LLM interactions.
-"""
+from __future__ import annotations
 
-from typing import Optional, Dict, Any, Callable, List, AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextvars import ContextVar
 from pathlib import Path
-import asyncio
+from typing import Any
 
-from ...agent import Agent
-from ...core.id import Identifier
-from ...project import Project
-from ...provider import Provider
-from ...session import Session, SessionCompaction, SessionPrompt, SystemPrompt
-from ...session.stream_parts import PartStreamBuilder
+import httpx
+
+from ...api_client import ApiClientError, HotaruAPIClient
+from ...server.server import Server
 from ...util.log import Log
-from ..message_adapter import structured_messages_to_tui
 
 log = Log.create({"service": "tui.context.sdk"})
 
 
 class SDKContext:
-    """SDK context for API communication.
+    """TUI SDK context backed by the versioned API client."""
 
-    Provides methods for interacting with the Hotaru backend API,
-    including sending messages, managing sessions, and handling events.
-    Uses the real session prompt loop for LLM interactions.
-    """
-
-    def __init__(self, cwd: Optional[str] = None) -> None:
-        """Initialize SDK context.
-
-        Args:
-            cwd: Current working directory (defaults to cwd)
-        """
+    def __init__(
+        self,
+        cwd: str | None = None,
+        api_client: Any | None = None,
+    ) -> None:
         self._cwd = cwd or str(Path.cwd())
-        self._event_handlers: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
-        self._project: Optional[Any] = None
-        self._sandbox: Optional[str] = None
+        self._event_handlers: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
+        self._owns_api_client = api_client is None
+        self._api_client = api_client or self._build_default_api_client()
+
+    @staticmethod
+    def _build_default_api_client() -> HotaruAPIClient:
+        transport = httpx.ASGITransport(app=Server._create_app())
+        return HotaruAPIClient(
+            base_url="http://hotaru.local",
+            transport=transport,
+        )
 
     @property
     def cwd(self) -> str:
-        """Get the current working directory."""
         return self._cwd
 
-    async def _ensure_project(self) -> None:
-        """Ensure project context is initialized."""
-        if self._project is None:
-            self._project, self._sandbox = await Project.from_directory(self._cwd)
+    async def aclose(self) -> None:
+        if self._owns_api_client and hasattr(self._api_client, "aclose"):
+            await self._api_client.aclose()
+
+    @staticmethod
+    def _split_model_ref(model: str) -> tuple[str, str]:
+        provider_id, _, model_id = str(model).partition("/")
+        provider_id = provider_id.strip()
+        model_id = model_id.strip()
+        if not provider_id or not model_id:
+            raise ValueError("Model must be in 'provider/model' format")
+        return provider_id, model_id
+
+    @staticmethod
+    def _as_non_empty_string(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("Value cannot be empty")
+        return text
 
     async def send_message(
         self,
         session_id: str,
         content: str,
-        agent: Optional[str] = None,
-        model: Optional[str] = None,
-        files: Optional[List[Dict[str, Any]]] = None,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        """Send a message and stream the response.
-
-        Uses the real session prompt loop for LLM interactions.
-
-        Args:
-            session_id: Session ID
-            content: Message content
-            agent: Optional agent name
-            model: Optional model ID (format: provider/model)
-            files: Optional file attachments
-
-        Yields:
-            Event dictionaries from the stream
-        """
-        await self._ensure_project()
-
-        log.info("sending message", {
-            "session_id": session_id,
-            "content_length": len(content),
-            "agent": agent,
-            "model": model,
-        })
-
-        # Parse model string
+        agent: str | None = None,
+        model: str | None = None,
+        files: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        payload: dict[str, Any] = {"content": content}
+        if agent:
+            payload["agent"] = agent
         if model:
-            provider_id, model_id = Provider.parse_model(model)
-        else:
-            try:
-                provider_id, model_id = await Provider.default_model()
-            except RuntimeError as e:
-                yield {
-                    "type": "error",
-                    "data": {"error": str(e)}
-                }
-                return
+            payload["model"] = model
+        if files:
+            payload["files"] = files
 
-        # Validate model exists
         try:
-            model_info = await Provider.get_model(provider_id, model_id)
-        except Exception as e:
-            yield {
-                "type": "error",
-                "data": {"error": str(e)}
-            }
-            return
-
-        # Get agent name
-        session = await Session.get(session_id)
-        agent_name = agent or (session.agent if session else None)
-        if agent_name:
-            agent_info = await Agent.get(agent_name)
-            if not agent_info or agent_info.mode == "subagent":
-                agent_name = await Agent.default_agent()
-        else:
-            agent_name = await Agent.default_agent()
-
-        if session and session.agent != agent_name:
-            updated = await Session.update(session_id, agent=agent_name)
-            if updated:
-                session = updated
-
-        # Build system prompt
-        system_prompt = await SystemPrompt.build_full_prompt(
-            model=model_info,
-            directory=self._cwd,
-            worktree=self._sandbox or self._cwd,
-            is_git=self._project.vcs == "git" if self._project else False,
-        )
-
-        # Track response state
-        message_id = Identifier.ascending("message")
-        response_text = ""
-        part_builder = PartStreamBuilder(session_id=session_id, message_id=message_id)
-
-        # Yield message created event
-        yield {
-            "type": "message.created",
-            "data": {
-                "id": message_id,
-                "role": "assistant",
-                "sessionID": session_id,
-            }
-        }
-
-        # Callbacks for streaming
-        def on_tool_start(tool_name: str, tool_id: str, input_args: Optional[Dict[str, Any]] = None):
-            event_queue.put_nowait({
-                "kind": "tool_start",
-                "tool_name": tool_name,
-                "tool_id": tool_id,
-                "input": input_args or {},
-            })
-
-        def on_tool_end(
-            tool_name: str, tool_id: str,
-            output: Optional[str], error: Optional[str],
-            title: str = "", metadata: Optional[Dict[str, Any]] = None,
-        ):
-            event_queue.put_nowait({
-                "kind": "tool_end",
-                "tool_name": tool_name,
-                "tool_id": tool_id,
-                "output": output,
-                "error": error,
-                "title": title,
-                "metadata": metadata or {},
-            })
-
-        def on_tool_update(tool_state: Dict[str, Any]):
-            event_queue.put_nowait(
-                {
-                    "kind": "tool_update",
-                    "tool_state": dict(tool_state or {}),
-                }
-            )
-
-        async def on_reasoning_start(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None):
-            event_queue.put_nowait(
-                {
-                    "kind": "reasoning_start",
-                    "reasoning_id": reasoning_id,
-                    "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
-                }
-            )
-
-        async def on_reasoning_delta(
-            reasoning_id: Optional[str],
-            delta: str,
-            metadata: Optional[Dict[str, Any]] = None,
-        ):
-            event_queue.put_nowait(
-                {
-                    "kind": "reasoning_delta",
-                    "reasoning_id": reasoning_id,
-                    "delta": str(delta or ""),
-                    "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
-                }
-            )
-
-        async def on_reasoning_end(reasoning_id: Optional[str], metadata: Optional[Dict[str, Any]] = None):
-            event_queue.put_nowait(
-                {
-                    "kind": "reasoning_end",
-                    "reasoning_id": reasoning_id,
-                    "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
-                }
-            )
-
-        def on_step_start(snapshot: Optional[str]):
-            event_queue.put_nowait(
-                {
-                    "kind": "step_start",
-                    "snapshot": snapshot,
-                }
-            )
-
-        def on_step_finish(
-            reason: str,
-            snapshot: Optional[str],
-            tokens: Optional[Dict[str, Any]] = None,
-            cost: float = 0.0,
-        ):
-            event_queue.put_nowait(
-                {
-                    "kind": "step_finish",
-                    "reason": reason,
-                    "snapshot": snapshot,
-                    "tokens": dict(tokens or {}),
-                    "cost": float(cost or 0.0),
-                }
-            )
-
-        def on_patch(patch_hash: Optional[str], files: Optional[List[str]] = None):
-            event_queue.put_nowait(
-                {
-                    "kind": "patch",
-                    "hash": str(patch_hash or ""),
-                    "files": list(files or []),
-                }
-            )
-
-        # Process with streaming text/tool updates
-        # We need to yield events as they come in
-        event_queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
-        result_holder: List[Any] = []
-        error_holder: List[str] = []
-
-        async def process_with_queue():
-            """Run processor and put events in queue."""
-            try:
-                def queue_text(text: str):
-                    nonlocal response_text
-                    response_text += text
-                    event_queue.put_nowait({"kind": "text", "text": text})
-
-                prompt_result = await SessionPrompt.prompt(
-                    session_id=session_id,
-                    content=content,
-                    provider_id=provider_id,
-                    model_id=model_id,
-                    agent=agent_name,
-                    cwd=self._cwd,
-                    worktree=self._sandbox or self._cwd,
-                    system_prompt=system_prompt,
-                    on_text=queue_text,
-                    on_tool_start=on_tool_start,
-                    on_tool_end=on_tool_end,
-                    on_tool_update=on_tool_update,
-                    on_reasoning_start=on_reasoning_start,
-                    on_reasoning_delta=on_reasoning_delta,
-                    on_reasoning_end=on_reasoning_end,
-                    on_step_start=on_step_start,
-                    on_step_finish=on_step_finish,
-                    on_patch=on_patch,
-                    resume_history=True,
-                    assistant_message_id=message_id,
-                )
-                result_holder.append(prompt_result.result)
-            except Exception as e:
-                error_holder.append(str(e))
-            finally:
-                event_queue.put_nowait(None)  # Signal completion
-
-        # Start processing in background
-        process_task = asyncio.create_task(process_with_queue())
-
-        def _make_event(evt: Dict[str, Any]):
-            """Convert a queue event dict to a yield-able event dict."""
-            kind = evt.get("kind")
-            if kind == "text":
-                part = part_builder.text_delta(str(evt.get("text") or ""))
-                if part is None:
-                    return None
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
-            elif kind == "tool_start":
-                return {
-                    "type": "message.part.tool.start",
-                    "data": {
-                        "tool_name": evt["tool_name"],
-                        "tool_id": evt["tool_id"],
-                        "input": evt.get("input", {}),
-                    }
-                }
-            elif kind == "tool_end":
-                return {
-                    "type": "message.part.tool.end",
-                    "data": {
-                        "tool_name": evt["tool_name"],
-                        "tool_id": evt["tool_id"],
-                        "output": evt.get("output"),
-                        "error": evt.get("error"),
-                        "title": evt.get("title", ""),
-                        "metadata": evt.get("metadata", {}),
-                    }
-                }
-            elif kind == "tool_update":
-                part = part_builder.tool_update(dict(evt.get("tool_state") or {}))
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
-            elif kind == "reasoning_start":
-                part = part_builder.reasoning_start(
-                    evt.get("reasoning_id"),
-                    dict(evt.get("metadata") or {}),
-                )
-                if part is None:
-                    return None
-                return {"type": "message.part.updated", "data": {"part": part}}
-            elif kind == "reasoning_delta":
-                part = part_builder.reasoning_delta(
-                    evt.get("reasoning_id"),
-                    str(evt.get("delta") or ""),
-                    dict(evt.get("metadata") or {}),
-                )
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
-            elif kind == "reasoning_end":
-                part = part_builder.reasoning_end(
-                    evt.get("reasoning_id"),
-                    dict(evt.get("metadata") or {}),
-                )
-                if part is None:
-                    return None
-                return {"type": "message.part.updated", "data": {"part": part}}
-            elif kind == "step_start":
-                part = part_builder.step_start(evt.get("snapshot"))
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
-            elif kind == "step_finish":
-                part = part_builder.step_finish(
-                    reason=str(evt.get("reason") or "completed"),
-                    snapshot=evt.get("snapshot"),
-                    tokens=dict(evt.get("tokens") or {}),
-                    cost=float(evt.get("cost") or 0.0),
-                )
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
-            elif kind == "patch":
-                part = part_builder.patch(
-                    patch_hash=str(evt.get("hash") or ""),
-                    files=list(evt.get("files") or []),
-                )
-                return {
-                    "type": "message.part.updated",
-                    "data": {"part": part},
-                }
-            return None
-
-        while True:
-            try:
-                event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
-                if event is None:
-                    break
-                result_event = _make_event(event)
-                if result_event:
-                    yield result_event
-            except asyncio.TimeoutError:
-                # Check if task is done
-                if process_task.done():
-                    # Drain remaining items
-                    while not event_queue.empty():
-                        event = event_queue.get_nowait()
-                        if event is None:
-                            break
-                        result_event = _make_event(event)
-                        if result_event:
-                            yield result_event
-                    break
-
-        # Wait for task to complete
-        await process_task
-
-        # Check for errors
-        if error_holder:
-            yield {
-                "type": "error",
-                "data": {"error": error_holder[0]}
-            }
-            return
-
-        # Get result
-        if result_holder:
-            result = result_holder[0]
-            if result.error:
-                yield {
-                    "type": "error",
-                    "data": {"error": result.error}
-                }
-                return
-
-            # Yield completion event
-            yield {
-                "type": "message.completed",
-                "data": {
-                    "id": message_id,
-                    "finish": "stop",
-                    "usage": result.usage,
-                }
-            }
-        else:
-            yield {
-                "type": "message.completed",
-                "data": {
-                    "id": message_id,
-                    "finish": "stop",
-                }
-            }
+            async for event in self._api_client.stream_session_message(session_id, payload):
+                if isinstance(event, dict):
+                    yield event
+                else:
+                    yield {"type": "message.event", "data": {"value": event}}
+        except Exception as exc:
+            yield {"type": "error", "data": {"error": str(exc)}}
 
     async def create_session(
         self,
-        agent: Optional[str] = None,
-        model: Optional[str] = None,
-        title: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Create a new session.
-
-        Args:
-            agent: Agent name
-            model: Model ID (format: provider/model)
-            title: Session title
-
-        Returns:
-            Session data
-        """
-        await self._ensure_project()
-
-        # Parse model
+        agent: str | None = None,
+        model: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"cwd": self._cwd}
+        if agent:
+            payload["agent"] = agent
         if model:
-            provider_id, model_id = Provider.parse_model(model)
-        else:
-            try:
-                provider_id, model_id = await Provider.default_model()
-            except RuntimeError:
-                provider_id, model_id = "anthropic", "claude-sonnet-4-20250514"
+            payload["model"] = model
+        if title:
+            payload["title"] = title
 
-        # Get agent name
-        agent_name = agent or await Agent.default_agent()
-
-        # Create session
-        session = await Session.create(
-            project_id=self._project.id if self._project else "default",
-            agent=agent_name,
-            directory=self._cwd,
-            model_id=model_id,
-            provider_id=provider_id,
-        )
-
-        log.info("created session", {
-            "session_id": session.id,
-            "agent": agent_name,
-            "model": f"{provider_id}/{model_id}",
-        })
-
-        return {
-            "id": session.id,
-            "title": title or "New Session",
-            "agent": agent_name,
-            "time": {
-                "created": session.time.created,
-                "updated": session.time.updated,
-            }
-        }
+        session = await self._api_client.create_session(payload)
+        if "title" not in session:
+            session["title"] = title or "New Session"
+        return session
 
     async def compact_session(
         self,
         session_id: str,
-        model: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Run manual session compaction.
-
-        Args:
-            session_id: Session to compact
-            model: Optional model override (format: provider/model)
-
-        Returns:
-            Compact execution result metadata
-        """
-        await self._ensure_project()
-
-        session = await Session.get(session_id)
-        if not session:
-            raise ValueError(f"Session not found: {session_id}")
-
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
         if model:
-            provider_id, model_id = Provider.parse_model(model)
-        elif session.provider_id and session.model_id:
-            provider_id, model_id = session.provider_id, session.model_id
-        else:
-            provider_id, model_id = await Provider.default_model()
+            provider_id, model_id = self._split_model_ref(model)
+            payload["model"] = model
+            payload["provider_id"] = provider_id
+            payload["model_id"] = model_id
+        return await self._api_client.compact_session(session_id, payload)
 
-        model_info = await Provider.get_model(provider_id, model_id)
-        agent_name = session.agent or await Agent.default_agent()
+    async def get_session(self, session_id: str) -> dict[str, Any] | None:
+        try:
+            session = await self._api_client.get_session(session_id)
+        except ApiClientError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
 
-        system_prompt = await SystemPrompt.build_full_prompt(
-            model=model_info,
-            directory=self._cwd,
-            worktree=self._sandbox or self._cwd,
-            is_git=self._project.vcs == "git" if self._project else False,
-        )
+        if "title" not in session:
+            session["title"] = "Untitled"
+        return session
 
-        compaction_user_id = await SessionCompaction.create(
-            session_id=session_id,
-            agent=agent_name,
-            provider_id=provider_id,
-            model_id=model_id,
-            auto=False,
-        )
-
-        result = await SessionPrompt.loop(
-            session_id=session_id,
-            provider_id=provider_id,
-            model_id=model_id,
-            agent=agent_name,
-            cwd=self._cwd,
-            worktree=self._sandbox or self._cwd,
-            system_prompt=system_prompt,
-            resume_history=True,
-            auto_compaction=False,
-        )
-        return {
-            "user_message_id": compaction_user_id,
-            "assistant_message_id": result.assistant_message_id,
-            "status": result.result.status,
-            "error": result.result.error,
-            "text": result.text,
-            "usage": result.result.usage,
-        }
-
-    async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Get session data.
-
-        Args:
-            session_id: Session ID
-
-        Returns:
-            Session data or None
-        """
-        log.debug("getting session", {"session_id": session_id})
-        session = await Session.get(session_id)
-        if not session:
-            return None
-
-        return {
-            "id": session.id,
-            "title": session.title or "Untitled",
-            "agent": session.agent,
-            "time": {
-                "created": session.time.created,
-                "updated": session.time.updated,
-            }
-        }
-
-    async def list_sessions(self, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """List all sessions.
-
-        Args:
-            project_id: Optional project ID filter
-
-        Returns:
-            List of session data
-        """
-        await self._ensure_project()
-        log.debug("listing sessions")
-
-        pid = project_id or (self._project.id if self._project else None)
-        if not pid:
-            return []
-
-        sessions = await Session.list(pid)
-        return [
-            {
-                "id": s.id,
-                "title": s.title or "Untitled",
-                "agent": s.agent,
-                "time": {
-                    "created": s.time.created,
-                    "updated": s.time.updated,
-                }
-            }
-            for s in sessions
-        ]
+    async def list_sessions(self, project_id: str | None = None) -> list[dict[str, Any]]:
+        sessions = await self._api_client.list_sessions(project_id=project_id)
+        for session in sessions:
+            if "title" not in session:
+                session["title"] = "Untitled"
+        return sessions
 
     async def delete_session(self, session_id: str) -> None:
-        """Delete a session.
+        await self._api_client.delete_session(session_id)
 
-        Args:
-            session_id: Session ID
-        """
-        from ...session import Session
-        log.info("deleting session", {"session_id": session_id})
-        await Session.delete(session_id)
-
-    async def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
-        """Get messages for a session.
-
-        Args:
-            session_id: Session ID
-
-        Returns:
-            List of messages
-        """
-        log.debug("getting messages", {"session_id": session_id})
-        structured = await Session.messages(session_id=session_id)
-        return structured_messages_to_tui(structured)
+    async def get_messages(self, session_id: str) -> list[dict[str, Any]]:
+        try:
+            return await self._api_client.list_messages(session_id)
+        except ApiClientError as exc:
+            if exc.status_code == 404:
+                return []
+            raise
 
     async def abort_message(self, session_id: str) -> None:
-        """Abort the current message generation.
+        await self._api_client.abort_session(session_id)
 
-        Args:
-            session_id: Session ID
-        """
-        # TODO: Implement actual API call
-        log.info("aborting message", {"session_id": session_id})
+    @staticmethod
+    def _normalize_provider_models(models: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        normalized: dict[str, dict[str, Any]] = {}
+        for model in models:
+            if not isinstance(model, dict):
+                continue
 
-    async def list_providers(self) -> List[Dict[str, Any]]:
-        """List available providers.
+            model_id = str(model.get("id") or "").strip()
+            if not model_id:
+                continue
 
-        Returns:
-            List of provider data
-        """
-        log.debug("listing providers")
-        providers = await Provider.list()
-        return [
-            {
-                "id": p.id,
-                "name": p.name,
-                "models": {
-                    model_id: {
-                        "id": model_id,
-                        "name": model.name,
-                        "api_id": model.api_id,
-                        "limit": {
-                            "context": int(getattr(model.limit, "context", 0) or 0),
-                            "output": int(getattr(model.limit, "output", 0) or 0),
-                        },
-                    }
-                    for model_id, model in p.models.items()
+            limit = model.get("limit") if isinstance(model.get("limit"), dict) else {}
+            context_limit = int(limit.get("context", 0) or 0)
+            output_limit = int(limit.get("output", 0) or 0)
+
+            normalized[model_id] = {
+                "id": model_id,
+                "name": str(model.get("name") or model_id),
+                "api_id": str(model.get("api_id") or model.get("apiID") or model_id),
+                "limit": {
+                    "context": context_limit,
+                    "output": output_limit,
+                },
+            }
+        return normalized
+
+    async def list_providers(self) -> list[dict[str, Any]]:
+        providers = await self._api_client.list_providers()
+        result: list[dict[str, Any]] = []
+
+        for provider in providers:
+            if not isinstance(provider, dict):
+                continue
+            provider_id = str(provider.get("id") or "").strip()
+            if not provider_id:
+                continue
+
+            raw_models = provider.get("models")
+            model_items: list[dict[str, Any]]
+            if isinstance(raw_models, list):
+                model_items = [item for item in raw_models if isinstance(item, dict)]
+            elif isinstance(raw_models, dict):
+                model_items = [
+                    {"id": key, **value}
+                    for key, value in raw_models.items()
+                    if isinstance(value, dict)
+                ]
+            else:
+                model_items = []
+
+            if not model_items:
+                try:
+                    model_items = await self._api_client.list_provider_models(provider_id)
+                except ApiClientError as exc:
+                    if exc.status_code != 404:
+                        raise
+                    model_items = []
+
+            result.append(
+                {
+                    "id": provider_id,
+                    "name": str(provider.get("name") or provider_id),
+                    "models": self._normalize_provider_models(model_items),
                 }
-            }
-            for p in providers
-        ]
+            )
 
-    async def list_agents(self) -> List[Dict[str, Any]]:
-        """List available agents.
+        return result
 
-        Returns:
-            List of agent data
-        """
-        log.debug("listing agents")
-        agents = await Agent.list()
-        return [
-            {
-                "name": a.name,
-                "mode": a.mode,
-                "description": a.description or "",
-            }
-            for a in agents
-        ]
+    async def connect_provider(
+        self,
+        provider_id: str,
+        provider_type: str,
+        provider_name: str,
+        base_url: str,
+        api_key: str,
+        model_ids: list[str],
+    ) -> dict[str, Any]:
+        normalized_provider_id = self._as_non_empty_string(provider_id).lower()
+        normalized_provider_type = self._as_non_empty_string(provider_type)
+        normalized_provider_name = self._as_non_empty_string(provider_name)
+        normalized_base_url = self._as_non_empty_string(base_url)
+        normalized_api_key = self._as_non_empty_string(api_key)
 
-    def on_event(self, event_type: str, handler: Callable[[Dict[str, Any]], None]) -> Callable[[], None]:
-        """Register an event handler.
+        normalized_models: list[str] = []
+        seen: set[str] = set()
+        for item in model_ids:
+            model_id = str(item).strip()
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            normalized_models.append(model_id)
+        if not normalized_models:
+            raise ValueError("At least one model ID is required")
 
-        Args:
-            event_type: Event type to listen for
-            handler: Handler function
+        models = {model_id: {"name": model_id} for model_id in normalized_models}
+        payload = {
+            "provider_id": normalized_provider_id,
+            "api_key": normalized_api_key,
+            "config": {
+                "type": normalized_provider_type,
+                "name": normalized_provider_name,
+                "options": {"baseURL": normalized_base_url},
+                "models": models,
+            },
+        }
+        result = await self._api_client.connect_provider(payload)
+        return result if isinstance(result, dict) else {"ok": bool(result)}
 
-        Returns:
-            Unsubscribe function
-        """
+    async def list_agents(self) -> list[dict[str, Any]]:
+        return await self._api_client.list_agents()
+
+    async def list_permissions(self) -> list[dict[str, Any]]:
+        return await self._api_client.list_permissions()
+
+    async def reply_permission(
+        self,
+        request_id: str,
+        reply: str,
+        message: str | None = None,
+    ) -> bool:
+        return await self._api_client.reply_permission(request_id, reply, message)
+
+    async def list_questions(self) -> list[dict[str, Any]]:
+        return await self._api_client.list_questions()
+
+    async def reply_question(self, request_id: str, answers: list[list[str]]) -> bool:
+        return await self._api_client.reply_question(request_id, answers)
+
+    async def reject_question(self, request_id: str) -> bool:
+        return await self._api_client.reject_question(request_id)
+
+    async def get_paths(self) -> dict[str, Any]:
+        return await self._api_client.get_paths()
+
+    def on_event(self, event_type: str, handler: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
         if event_type not in self._event_handlers:
             self._event_handlers[event_type] = []
         self._event_handlers[event_type].append(handler)
 
-        def unsubscribe():
+        def unsubscribe() -> None:
             if event_type in self._event_handlers and handler in self._event_handlers[event_type]:
                 self._event_handlers[event_type].remove(handler)
 
         return unsubscribe
 
-    def emit_event(self, event_type: str, data: Dict[str, Any]) -> None:
-        """Emit an event to all registered handlers.
-
-        Args:
-            event_type: Event type
-            data: Event data
-        """
-        if event_type in self._event_handlers:
-            for handler in self._event_handlers[event_type]:
-                try:
-                    handler(data)
-                except Exception as e:
-                    log.error("event handler error", {
+    def emit_event(self, event_type: str, data: dict[str, Any]) -> None:
+        if event_type not in self._event_handlers:
+            return
+        for handler in self._event_handlers[event_type]:
+            try:
+                handler(data)
+            except Exception as exc:
+                log.error(
+                    "event handler error",
+                    {
                         "event_type": event_type,
-                        "error": str(e)
-                    })
+                        "error": str(exc),
+                    },
+                )
 
 
-# Context variable
-_sdk_context: ContextVar[Optional[SDKContext]] = ContextVar(
-    "sdk_context",
-    default=None
-)
+_sdk_context: ContextVar[SDKContext | None] = ContextVar("sdk_context", default=None)
 
 
 class SDKProvider:
     """Provider for SDK context."""
 
-    _instance: Optional[SDKContext] = None
+    _instance: SDKContext | None = None
 
     @classmethod
     def get(cls) -> SDKContext:
-        """Get the current SDK context."""
         ctx = _sdk_context.get()
         if ctx is None:
             ctx = SDKContext()
@@ -748,27 +330,21 @@ class SDKProvider:
         return ctx
 
     @classmethod
-    def provide(cls, cwd: Optional[str] = None) -> SDKContext:
-        """Create and provide SDK context.
-
-        Args:
-            cwd: Current working directory
-
-        Returns:
-            The SDK context
-        """
-        ctx = SDKContext(cwd)
+    def provide(
+        cls,
+        cwd: str | None = None,
+        api_client: Any | None = None,
+    ) -> SDKContext:
+        ctx = SDKContext(cwd=cwd, api_client=api_client)
         _sdk_context.set(ctx)
         cls._instance = ctx
         return ctx
 
     @classmethod
     def reset(cls) -> None:
-        """Reset the SDK context."""
         _sdk_context.set(None)
         cls._instance = None
 
 
 def use_sdk() -> SDKContext:
-    """Hook to access SDK context."""
     return SDKProvider.get()

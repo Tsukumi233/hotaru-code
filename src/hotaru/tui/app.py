@@ -15,7 +15,6 @@ from pathlib import Path
 import re
 from urllib.parse import urlparse
 from typing import Any, Callable, Dict, List, Optional
-from pydantic import ValidationError
 
 from .routes import HomeScreen, SessionScreen
 from .theme import ThemeManager
@@ -433,6 +432,7 @@ class TuiApp(App):
     async def on_unmount(self) -> None:
         """Release runtime resources before the app exits."""
         await self._stop_runtime_subscriptions()
+        await self.sdk_ctx.aclose()
 
         try:
             from ..mcp import MCP
@@ -450,46 +450,35 @@ class TuiApp(App):
         """Load persisted data into contexts before showing the first screen."""
         try:
             from ..project import Project
-            from ..session import Session
-            from ..provider import Provider as ProviderModule
-            from ..agent import Agent
-            from ..core.config import ConfigManager
             from .context.local import ModelSelection
 
             # Ensure project context
             project, _ = await Project.from_directory(self.sdk_ctx.cwd)
 
             # Load sessions into SyncContext
-            sessions = await Session.list(project.id)
-            session_dicts = [
-                {
-                    "id": s.id,
-                    "title": s.title or "Untitled",
-                    "agent": s.agent,
-                    "parentID": s.parent_id,
-                    "share": s.share.model_dump() if s.share else None,
-                    "time": {
-                        "created": s.time.created,
-                        "updated": s.time.updated,
-                    },
-                }
-                for s in sessions
-            ]
+            sessions = await self.sdk_ctx.list_sessions(project_id=project.id)
+            session_dicts = []
+            for session in sessions:
+                time_data = session.get("time", {}) if isinstance(session.get("time"), dict) else {}
+                session_dicts.append(
+                    {
+                        "id": session.get("id"),
+                        "title": session.get("title") or "Untitled",
+                        "agent": session.get("agent"),
+                        "parentID": session.get("parent_id"),
+                        "share": session.get("share"),
+                        "time": {
+                            "created": int(time_data.get("created", 0) or 0),
+                            "updated": int(time_data.get("updated", 0) or 0),
+                        },
+                    }
+                )
             self.sync_ctx.set_sessions(session_dicts)
 
             provider_dicts = await self._sync_providers()
 
             # Load agents into SyncContext
-            agents = await Agent.list()
-            agent_dicts = [
-                {
-                    "name": a.name,
-                    "mode": a.mode,
-                    "hidden": a.hidden,
-                    "description": a.description or "",
-                }
-                for a in agents
-            ]
+            agent_dicts = await self.sdk_ctx.list_agents()
             self.sync_ctx.set_agents(agent_dicts)
             self.local_ctx.update_agents(agent_dicts)
 
@@ -498,22 +487,15 @@ class TuiApp(App):
                 selected_model: Optional[ModelSelection] = None
 
                 if self.model:
-                    provider_id, model_id = ProviderModule.parse_model(self.model)
-                    candidate = ModelSelection(provider_id=provider_id, model_id=model_id)
-                    if self.local_ctx.model.is_available(candidate):
-                        selected_model = candidate
-                    else:
-                        log.warning("requested startup model unavailable", {"model": self.model})
-
-                if selected_model is None:
-                    config = await ConfigManager.get()
-                    if config.model:
-                        provider_id, model_id = ProviderModule.parse_model(config.model)
+                    provider_id, sep, model_id = self.model.partition("/")
+                    if sep and provider_id.strip() and model_id.strip():
                         candidate = ModelSelection(provider_id=provider_id, model_id=model_id)
                         if self.local_ctx.model.is_available(candidate):
                             selected_model = candidate
                         else:
-                            log.warning("configured default model unavailable", {"model": config.model})
+                            log.warning("requested startup model unavailable", {"model": self.model})
+                    else:
+                        log.warning("invalid startup model format", {"model": self.model})
 
                 if selected_model is None:
                     selected_model = self.local_ctx.model.current()
@@ -521,20 +503,22 @@ class TuiApp(App):
                 if selected_model is None:
                     selected_model = self.local_ctx.model.first_available()
 
-                if selected_model is None:
-                    provider_id, model_id = await ProviderModule.default_model()
-                    selected_model = ModelSelection(provider_id=provider_id, model_id=model_id)
-
-                self.local_ctx.model.set(
-                    selected_model,
-                    add_to_recent=bool(self.model),
-                )
+                if selected_model is not None:
+                    self.local_ctx.model.set(
+                        selected_model,
+                        add_to_recent=bool(self.model),
+                    )
             except Exception as e:
                 log.warning("failed to set initial model", {"error": str(e)})
 
             try:
-                agent_name = self.agent or await Agent.default_agent()
-                self.local_ctx.agent.set(agent_name)
+                default_agent = self.agent
+                if not default_agent and agent_dicts:
+                    first_agent = agent_dicts[0]
+                    if isinstance(first_agent, dict):
+                        default_agent = str(first_agent.get("name") or "")
+                if default_agent:
+                    self.local_ctx.agent.set(default_agent)
             except Exception as e:
                 log.warning("failed to set initial agent", {"error": str(e)})
 
@@ -552,28 +536,7 @@ class TuiApp(App):
 
     async def _sync_providers(self) -> List[dict]:
         """Load providers and publish them to sync/local contexts."""
-        from ..provider import Provider as ProviderModule
-
-        providers = await ProviderModule.list()
-        provider_dicts = [
-            {
-                "id": pid,
-                "name": provider.name,
-                "models": {
-                    model_id: {
-                        "id": model_id,
-                        "name": model.name,
-                        "api_id": model.api_id,
-                        "limit": {
-                            "context": int(getattr(model.limit, "context", 0) or 0),
-                            "output": int(getattr(model.limit, "output", 0) or 0),
-                        },
-                    }
-                    for model_id, model in provider.models.items()
-                },
-            }
-            for pid, provider in providers.items()
-        ]
+        provider_dicts = await self.sdk_ctx.list_providers()
         self.sync_ctx.set_providers(provider_dicts)
         self.local_ctx.update_providers(provider_dicts)
         return provider_dicts
@@ -1087,9 +1050,6 @@ class TuiApp(App):
         self.run_worker(self._provider_connect_flow(), exclusive=False)
 
     async def _provider_connect_flow(self) -> None:
-        from ..core.config import ConfigManager, ProviderConfig
-        from ..provider import Provider as ProviderModule
-        from ..provider.auth import ProviderAuth
         from .dialogs import InputDialog, SelectDialog
 
         preset_choice = await self.push_screen_wait(
@@ -1208,29 +1168,15 @@ class TuiApp(App):
             self.notify(str(exc), severity="error")
             return
 
-        models = {model_id: {"name": model_id} for model_id in model_ids}
-        provider_payload = {
-            "type": provider_type,
-            "name": provider_name,
-            "options": {"baseURL": base_url},
-            "models": models,
-        }
         try:
-            ProviderConfig.model_validate(provider_payload)
-        except ValidationError:
-            self.notify("Generated provider config is invalid.", severity="error")
-            return
-
-        updates = {
-            "provider": {
-                provider_id: provider_payload
-            }
-        }
-
-        try:
-            await ConfigManager.update_global(updates)
-            ProviderAuth.set(provider_id, api_key)
-            ProviderModule.reset()
+            await self.sdk_ctx.connect_provider(
+                provider_id=provider_id,
+                provider_type=str(provider_type),
+                provider_name=provider_name,
+                base_url=base_url,
+                api_key=api_key,
+                model_ids=model_ids,
+            )
             await self._sync_providers()
         except Exception as exc:
             self.notify(f"Failed to connect provider: {exc}", severity="error")
