@@ -6,14 +6,14 @@ including message displays, tool visualizations, and input components.
 
 import re
 from dataclasses import dataclass
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Static, Input, Button, Label, ListView, ListItem, OptionList
+from textual.widgets import Static, TextArea, Button, Label, ListView, ListItem, OptionList
 from textual.widgets.option_list import Option
 from textual.widget import Widget
 from textual.reactive import reactive
 from textual.message import Message
-from textual.binding import Binding
 from rich.text import Text
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -44,17 +44,23 @@ class Logo(Static):
         return Text(self.LOGO.strip(), style=f"bold {theme.accent}")
 
 
-class PromptInput(Input):
+class PromptInput(TextArea):
     """Custom input widget for the prompt.
 
     Supports multi-line input, special key bindings, and slash command completion.
     """
 
-    BINDINGS = [
-        Binding("up", "popover_up", "Up", show=False),
-        Binding("down", "popover_down", "Down", show=False),
-        Binding("escape", "popover_close", "Close", show=False),
-    ]
+    MAX_LINES = 8
+
+    DEFAULT_CSS = f"""
+    PromptInput {{
+        width: 100%;
+        height: auto;
+        min-height: 3;
+        max-height: {MAX_LINES + 2};
+        overflow-y: auto;
+    }}
+    """
 
     class Submitted(Message):
         """Message sent when prompt is submitted."""
@@ -77,11 +83,30 @@ class PromptInput(Input):
         commands: Optional[List["SlashCommandItem"]] = None,
         **kwargs
     ) -> None:
-        super().__init__(placeholder=placeholder, **kwargs)
+        super().__init__(placeholder=placeholder, show_line_numbers=False, highlight_cursor_line=False, **kwargs)
         self._commands = commands or []
         self._popover_visible = False
         self._filtered_list: Optional[FilteredList["SlashCommandItem"]] = None
         self._popover: Optional["SlashPopover"] = None
+
+    @property
+    def value(self) -> str:
+        """Backward-compatible alias for input text."""
+        return self.text
+
+    @value.setter
+    def value(self, value: str) -> None:
+        self.load_text(value)
+        self.cursor_position = len(value)
+
+    @property
+    def cursor_position(self) -> int:
+        """Backward-compatible alias for cursor offset."""
+        return self._offset_from_location(self.cursor_location)
+
+    @cursor_position.setter
+    def cursor_position(self, value: int) -> None:
+        self.cursor_location = self._location_from_offset(value)
 
     def set_commands(self, commands: List["SlashCommandItem"]) -> None:
         """Set available slash commands.
@@ -102,15 +127,43 @@ class PromptInput(Input):
             filter_keys=["trigger", "title", "description"],
         )
 
-    def watch_value(self, value: str) -> None:
-        """Watch for value changes to detect slash commands."""
-        # Check for slash command pattern at start
-        match = re.match(r"^/(\S*)$", value)
-        if match:
-            query = match.group(1)
-            self._show_popover(query)
-        else:
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Watch for text changes to detect slash commands."""
+        if event.text_area is not self:
+            return
+        if not self.is_mounted:
+            return
+
+        query = self._slash_query(self.value)
+        if query is None:
             self._hide_popover()
+            return
+        self._show_popover(query)
+
+    @staticmethod
+    def _slash_query(value: str) -> Optional[str]:
+        """Return slash query for single-line slash command values."""
+        match = re.fullmatch(r"/(\S*)", value)
+        if not match:
+            return None
+        return match.group(1)
+
+    def _location_from_offset(self, value: int) -> tuple[int, int]:
+        text = self.text
+        pos = max(0, min(int(value), len(text)))
+        head = text[:pos]
+        row = head.count("\n")
+        if row == 0:
+            return (0, pos)
+        return (row, pos - head.rfind("\n") - 1)
+
+    def _offset_from_location(self, value: tuple[int, int]) -> int:
+        lines = self.text.split("\n")
+        row = max(0, min(int(value[0]), len(lines) - 1))
+        col = max(0, min(int(value[1]), len(lines[row])))
+        if row == 0:
+            return col
+        return sum(len(line) + 1 for line in lines[:row]) + col
 
     def _show_popover(self, query: str) -> None:
         """Show slash command popover.
@@ -224,12 +277,26 @@ class PromptInput(Input):
             self.post_message(self.Submitted(self.value))
             self.value = ""
 
-    def on_key(self, event) -> None:
+    def on_key(self, event: events.Key) -> None:
         """Handle key events for popover navigation."""
+        if event.key == "shift+enter":
+            self.insert("\n")
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "enter":
+            if self._popover_visible:
+                self.action_popover_select()
+            else:
+                self.action_submit()
+            event.prevent_default()
+            event.stop()
+            return
+
         if not self._popover_visible:
             return
 
-        # Handle navigation keys
         if event.key == "up":
             self.action_popover_up()
             event.prevent_default()
@@ -244,10 +311,6 @@ class PromptInput(Input):
             event.stop()
         elif event.key == "escape":
             self.action_popover_close()
-            event.prevent_default()
-            event.stop()
-        elif event.key == "enter":
-            self.action_popover_select()
             event.prevent_default()
             event.stop()
 
