@@ -218,6 +218,34 @@ def run(
 
 
 @app.command()
+def web(
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Host to bind web server to",
+    ),
+    port: int = typer.Option(
+        4096,
+        "--port",
+        help="Port to bind web server to",
+    ),
+    open_browser: bool = typer.Option(
+        False,
+        "--open",
+        help="Open the browser after server startup",
+    ),
+):
+    """Start Hotaru WebUI server."""
+    from .cmd.web import web_command
+
+    web_command(
+        host=host,
+        port=port,
+        open_browser=open_browser,
+    )
+
+
+@app.command()
 def config(
     show: bool = typer.Option(
         False,

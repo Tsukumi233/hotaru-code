@@ -25,6 +25,7 @@ Example:
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -34,7 +35,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from ..app_services import (
@@ -94,6 +95,11 @@ class Server:
         routes = [
             # Health check
             Route("/health", cls._health, methods=["GET"]),
+            Route("/healthz/web", cls._health_web, methods=["GET"]),
+            Route("/", cls._web_index, methods=["GET"]),
+            Route("/web", cls._web_index, methods=["GET"]),
+            Route("/web/{path:path}", cls._web_asset, methods=["GET"]),
+            Route("/assets/{path:path}", cls._web_root_asset, methods=["GET"]),
             Route("/v1/path", cls._v1_get_paths, methods=["GET"]),
             Route("/v1/skill", cls._v1_list_skills, methods=["GET"]),
 
@@ -266,6 +272,101 @@ class Server:
                 "Connection": "keep-alive",
             },
         )
+
+    @classmethod
+    def _event_session_id(cls, event: dict[str, Any]) -> str:
+        session_id = event.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            return session_id
+
+        data = event.get("data")
+        if not isinstance(data, dict):
+            return ""
+
+        direct = data.get("session_id")
+        if isinstance(direct, str) and direct:
+            return direct
+
+        info = data.get("info")
+        if isinstance(info, dict):
+            scoped = info.get("session_id")
+            if isinstance(scoped, str) and scoped:
+                return scoped
+
+        part = data.get("part")
+        if isinstance(part, dict):
+            scoped = part.get("session_id")
+            if isinstance(scoped, str) and scoped:
+                return scoped
+
+        return ""
+
+    @classmethod
+    def _matches_session_filter(cls, event: dict[str, Any], session_id: str) -> bool:
+        if not session_id:
+            return True
+
+        event_type = str(event.get("type") or "")
+        if event_type in {"server.connected", "server.heartbeat"}:
+            return True
+
+        return cls._event_session_id(event) == session_id
+
+    @classmethod
+    def _web_dist_candidates(cls) -> list[Path]:
+        out: list[Path] = []
+        custom = str(os.getenv("HOTARU_WEB_DIST") or "").strip()
+        if custom:
+            out.append(Path(custom))
+
+        here = Path(__file__).resolve()
+        if len(here.parents) >= 4:
+            out.append(here.parents[3] / "frontend" / "dist")
+        if len(here.parents) >= 2:
+            out.append(here.parents[1] / "webui" / "dist")
+        return out
+
+    @classmethod
+    def _web_dist_path(cls) -> Path | None:
+        for path in cls._web_dist_candidates():
+            if (path / "index.html").is_file():
+                return path
+        return None
+
+    @classmethod
+    def _web_index_response(cls) -> FileResponse | HTMLResponse:
+        dist = cls._web_dist_path()
+        if dist is None:
+            return HTMLResponse(
+                "<!doctype html><html><body><h1>Hotaru WebUI is not built.</h1></body></html>",
+                status_code=200,
+            )
+        return FileResponse(dist / "index.html")
+
+    @classmethod
+    def _web_asset_path(cls, path: str) -> Path | None:
+        dist = cls._web_dist_path()
+        if dist is None:
+            return None
+
+        raw = str(path or "").strip("/")
+        if not raw:
+            return None
+
+        rel = Path(raw)
+        if any(part == ".." for part in rel.parts):
+            return None
+
+        root = dist.resolve()
+        target = (dist / rel).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            return None
+
+        if not target.is_file():
+            return None
+        return target
 
     # v1 transport handlers
 
@@ -451,12 +552,19 @@ class Server:
 
     @classmethod
     async def _v1_event_stream(cls, request: Request) -> StreamingResponse:
+        session_id = str(request.query_params.get("session_id") or "").strip()
         stream = EventService.stream()
 
         async def event_generator():
             try:
                 async for event in stream:
-                    yield cls._sse_data(event)
+                    if not cls._matches_session_filter(event, session_id):
+                        continue
+                    event_session_id = cls._event_session_id(event)
+                    yield cls._sse_data(
+                        event,
+                        session_id=event_session_id if event_session_id else None,
+                    )
             except Exception as exc:
                 yield cls._sse_data({"type": "error", "data": {"error": str(exc)}})
 
@@ -494,6 +602,33 @@ class Server:
     async def _health(cls, request: Request) -> JSONResponse:
         """Health check endpoint."""
         return JSONResponse({"status": "ok"})
+
+    @classmethod
+    async def _health_web(cls, request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok", "web": {"ready": cls._web_dist_path() is not None}})
+
+    @classmethod
+    async def _web_index(cls, request: Request) -> FileResponse | HTMLResponse:
+        return cls._web_index_response()
+
+    @classmethod
+    async def _web_asset(cls, request: Request) -> FileResponse | HTMLResponse:
+        target = cls._web_asset_path(str(request.path_params.get("path") or ""))
+        if target is None:
+            return cls._web_index_response()
+        return FileResponse(target)
+
+    @classmethod
+    async def _web_root_asset(cls, request: Request) -> FileResponse | JSONResponse:
+        raw = str(request.path_params.get("path") or "").strip()
+        target = cls._web_asset_path(f"assets/{raw}")
+        if target is None:
+            return cls._error_response(
+                status_code=404,
+                code="not_found",
+                message="Web asset not found",
+            )
+        return FileResponse(target)
 
     @classmethod
     async def start(

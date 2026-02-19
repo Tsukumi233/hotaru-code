@@ -15,6 +15,9 @@ Example:
 
 API Endpoints:
     GET /health - Health check
+    GET /healthz/web - WebUI readiness check
+    GET / - WebUI index
+    GET /web/{path} - WebUI static assets
     GET /v1/path - Get path information
     GET /v1/skill - List skills
     GET /v1/provider - List providers

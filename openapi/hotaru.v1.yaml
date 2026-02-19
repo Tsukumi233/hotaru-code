@@ -479,6 +479,8 @@ paths:
     get:
       operationId: v1.event.stream
       summary: Stream global events
+      parameters:
+        - $ref: '#/components/parameters/EventSessionIdQuery'
       responses:
         '200':
           description: SSE stream
@@ -504,6 +506,13 @@ components:
       name: directory
       required: false
       description: Optional workspace directory context fallback when header is not provided.
+      schema:
+        type: string
+    EventSessionIdQuery:
+      in: query
+      name: session_id
+      required: false
+      description: Optional session ID filter for scoped event streaming.
       schema:
         type: string
   responses:

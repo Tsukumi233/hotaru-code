@@ -96,15 +96,16 @@ flowchart TB
     RunCmd --> Bus
 ```
 
-Hotaru Code 是一个运行在终端里的 AI 编码助手。
+Hotaru Code 是一个 AI 编码助手。
 
-它提供 TUI 与一次性 Run 两种模式，并支持工具调用、权限控制、会话持久化、MCP 扩展、Skill 与 Agent 配置。
+它提供 TUI、WebUI 与一次性 Run 模式，并支持工具调用、权限控制、会话持久化、MCP 扩展、Skill 与 Agent 配置。
 
 ## 功能介绍
 
 ### 1. 多种交互模式
 
 - `hotaru`：默认进入 TUI（Textual）
+- `hotaru web`：启动 WebUI（HTTP + SSE）
 - `hotaru run "你的需求"`：一次性执行
 - 支持内置 `/init` 命令：自动生成/更新 `AGENTS.md`
 
@@ -224,7 +225,27 @@ hotaru run "/init 请补充 monorepo 规范"
 cat error.log | hotaru run "总结错误并给修复建议"
 ```
 
-### 3. 会话与配置管理
+### 3. WebUI 模式
+
+```bash
+# 启动 WebUI（默认绑定 127.0.0.1:4096）
+hotaru web
+
+# 自定义 host/port，并自动打开浏览器
+hotaru web --host 127.0.0.1 --port 4096 --open
+```
+
+若你在源码仓库开发前端：
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+然后回到项目根目录运行 `hotaru web`。
+
+### 4. 会话与配置管理
 
 ```bash
 hotaru providers            # 列出已可用 provider/model

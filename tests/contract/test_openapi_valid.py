@@ -53,3 +53,20 @@ def test_openapi_v1_contract_has_required_paths_and_schemas() -> None:
     sse = schemas["SseEnvelope"]
     assert {"type", "data", "timestamp"}.issubset(set(sse["properties"].keys()))
     assert set(sse.get("required", [])) == {"type", "data", "timestamp"}
+
+    event_get = paths["/v1/event"]["get"]
+    params = event_get.get("parameters", [])
+    parameter_components = spec.get("components", {}).get("parameters", {})
+    names: set[str | None] = set()
+    for item in params:
+        if not isinstance(item, dict):
+            continue
+        ref = item.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/components/parameters/"):
+            key = ref.rsplit("/", 1)[-1]
+            component = parameter_components.get(key, {})
+            if isinstance(component, dict):
+                names.add(component.get("name"))
+            continue
+        names.add(item.get("name"))
+    assert "session_id" in names

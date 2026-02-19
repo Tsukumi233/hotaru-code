@@ -3,6 +3,7 @@ __pycache__/
 *.py[oc]
 build/
 dist/
+frontend/node_modules/
 wheels/
 *.egg-info
 
@@ -15,3 +16,5 @@ session-ses*
 .worktrees/
 docs/plans/
 
+!src/hotaru/webui/dist/
+!src/hotaru/webui/dist/**
