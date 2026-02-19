@@ -32,6 +32,11 @@ hotaru = "hotaru.cli.main:app"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+artifacts = [
+    "src/hotaru/webui/dist/**",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/hotaru"]
 

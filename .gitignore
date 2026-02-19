@@ -15,6 +15,3 @@ CLAUDE.md
 session-ses*
 .worktrees/
 docs/plans/
-
-!src/hotaru/webui/dist/
-!src/hotaru/webui/dist/**

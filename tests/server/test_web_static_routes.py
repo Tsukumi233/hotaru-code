@@ -53,3 +53,10 @@ def test_web_health_reports_readiness(monkeypatch, tmp_path: Path) -> None:  # t
         response = client.get("/healthz/web")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "web": {"ready": True}}
+
+
+def test_web_dist_candidates_default_to_packaged_dist(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.delenv("HOTARU_WEB_DIST", raising=False)
+    out = [p.as_posix() for p in Server._web_dist_candidates()]
+    assert any(p.endswith("/src/hotaru/webui/dist") for p in out)
+    assert not any(p.endswith("/frontend/dist") for p in out)

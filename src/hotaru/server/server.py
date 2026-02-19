@@ -320,8 +320,6 @@ class Server:
             out.append(Path(custom))
 
         here = Path(__file__).resolve()
-        if len(here.parents) >= 4:
-            out.append(here.parents[3] / "frontend" / "dist")
         if len(here.parents) >= 2:
             out.append(here.parents[1] / "webui" / "dist")
         return out

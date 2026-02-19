@@ -239,11 +239,12 @@ hotaru web --host 127.0.0.1 --port 4096 --open
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run build
 ```
 
-然后回到项目根目录运行 `hotaru web`。
+构建产物会直接输出到 `src/hotaru/webui/dist`，然后回到项目根目录运行 `hotaru web`。
+PyPI 发布流程会在 `uv build` 前自动执行这一步，无需手工同步前端产物。
 
 ### 4. 会话与配置管理
 
