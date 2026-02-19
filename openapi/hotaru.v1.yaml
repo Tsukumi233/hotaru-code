@@ -186,6 +186,27 @@ paths:
           $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
+  /v1/session/{id}/interrupt:
+    post:
+      operationId: v1.session.interrupt
+      summary: Interrupt running session message processing
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Interrupt request result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterruptSessionResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
   /v1/session/{id}/compact:
     post:
       operationId: v1.session.compact
@@ -626,6 +647,16 @@ components:
           type: string
       required:
         - ok
+    InterruptSessionResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        interrupted:
+          type: boolean
+      required:
+        - ok
+        - interrupted
     StreamMessageRequest:
       type: object
       properties:

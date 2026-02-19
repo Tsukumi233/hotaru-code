@@ -35,6 +35,8 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
             return httpx.Response(200, json={"restored": 1})
         if route == ("POST", "/v1/session/session_1/message"):
             return httpx.Response(200, json={"ok": True, "assistant_message_id": "message_1", "status": "stop"})
+        if route == ("POST", "/v1/session/session_1/interrupt"):
+            return httpx.Response(200, json={"ok": True, "interrupted": True})
         if route == ("POST", "/v1/session/session_1/compact"):
             return httpx.Response(200, json={"ok": True})
         if route == ("GET", "/v1/path"):
@@ -79,6 +81,7 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     await client.delete_messages("session_1", {"message_ids": ["message_1"]})
     await client.restore_messages("session_1", {"messages": [{"id": "message_1"}]})
     message_result = await client.send_session_message("session_1", {"content": "hello"})
+    await client.interrupt_session("session_1")
     await client.compact_session("session_1")
     await client.get_paths()
     global_events = [event async for event in client.stream_events()]
@@ -114,6 +117,7 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
         ("POST", "/v1/session/session_1/message:delete"),
         ("POST", "/v1/session/session_1/message:restore"),
         ("POST", "/v1/session/session_1/message"),
+        ("POST", "/v1/session/session_1/interrupt"),
         ("POST", "/v1/session/session_1/compact"),
         ("GET", "/v1/path"),
         ("GET", "/v1/event"),

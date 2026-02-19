@@ -1,6 +1,7 @@
 """Screens for TUI application."""
 
 import asyncio
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -31,6 +32,9 @@ from .widgets import (
     StatusBar,
     ToolDisplay,
 )
+
+_INTERRUPT_WINDOW_SECONDS = 5.0
+
 
 def _build_slash_commands(registry: CommandRegistry) -> List[SlashCommandItem]:
     """Build slash command items from registry."""
@@ -236,7 +240,7 @@ class SessionScreen(Screen):
         Binding("ctrl+z", "undo", "Undo"),
         Binding("ctrl+y", "redo", "Redo"),
         Binding("tab", "cycle_agent", "Agents", show=False),
-        Binding("escape", "go_home", "Home"),
+        Binding("escape", "session_escape", "Esc"),
         Binding("pageup", "page_up", "Page Up", show=False),
         Binding("pagedown", "page_down", "Page Down", show=False),
         Binding("ctrl+c", "quit", "Quit", priority=True),
@@ -311,6 +315,8 @@ class SessionScreen(Screen):
         self._show_thinking = bool(use_kv().get("thinking_visibility", True))
         self._show_assistant_metadata = bool(use_kv().get("assistant_metadata_visibility", True))
         self._show_timestamps = str(use_kv().get("timestamps", "hide")) == "show"
+        self._interrupt_until = 0.0
+        self._interrupt_pending = False
         self._command_registry = CommandRegistry()
         for cmd in create_default_commands():
             self._command_registry.register(cmd)
@@ -663,8 +669,71 @@ class SessionScreen(Screen):
             header.cost = ""
 
         header.refresh()
+        if not self._is_busy():
+            self._reset_interrupt()
         self._refresh_prompt_meta()
         self._refresh_footer()
+
+    def _reset_interrupt(self) -> None:
+        self._interrupt_until = 0.0
+        self._interrupt_pending = False
+
+    def _interrupt_armed(self, now: float) -> bool:
+        if self._interrupt_until <= 0:
+            return False
+        if now <= self._interrupt_until:
+            return True
+        self._interrupt_until = 0.0
+        return False
+
+    def _session_status(self) -> str:
+        if not self.session_id:
+            return "idle"
+        status = use_sync().data.session_status.get(self.session_id)
+        if not isinstance(status, dict):
+            return "idle"
+        value = status.get("type")
+        if not isinstance(value, str) or not value:
+            return "idle"
+        return value
+
+    def _is_busy(self) -> bool:
+        if self._session_status() != "idle":
+            return True
+        if not self.is_mounted:
+            return False
+        prompt = self.query_one("#prompt-input", PromptInput)
+        return bool(prompt.disabled)
+
+    def _escape_mode(self, now: float) -> str:
+        if not self.session_id or not self._is_busy():
+            return "home"
+        if self._interrupt_pending:
+            return "pending"
+        if self._interrupt_armed(now):
+            self._interrupt_until = 0.0
+            self._interrupt_pending = True
+            return "interrupt"
+        self._interrupt_until = now + _INTERRUPT_WINDOW_SECONDS
+        return "armed"
+
+    async def _interrupt_session(self) -> None:
+        if not self.session_id:
+            self._reset_interrupt()
+            return
+
+        try:
+            result = await use_sdk().interrupt(self.session_id)
+        except Exception as exc:
+            self._interrupt_pending = False
+            self.app.notify(f"Interrupt failed: {exc}", severity="error")
+            return
+
+        if not bool(result.get("interrupted")):
+            self._interrupt_pending = False
+            self.app.notify("No active response to interrupt.", severity="warning")
+            return
+        self.app.notify("Interrupt requested.", severity="information")
 
     def _refresh_prompt_meta(self) -> None:
         """Refresh agent/model info below the prompt."""
@@ -701,6 +770,7 @@ class SessionScreen(Screen):
         content = content.strip()
         if not content:
             return
+        self._reset_interrupt()
 
         if self.session_id:
             self.app.clear_session_redo(self.session_id)
@@ -992,6 +1062,7 @@ class SessionScreen(Screen):
             prompt = self.query_one("#prompt-input", PromptInput)
             prompt.disabled = False
             prompt.focus()
+            self._reset_interrupt()
 
     def _should_hide_tool_part(self, part: Dict[str, Any]) -> bool:
         if self._show_tool_details:
@@ -1018,6 +1089,23 @@ class SessionScreen(Screen):
 
     def action_go_home(self) -> None:
         use_route().navigate(HomeRoute())
+
+    def action_session_escape(self) -> None:
+        mode = self._escape_mode(time.monotonic())
+        if mode == "home":
+            self.action_go_home()
+            return
+        if mode == "pending":
+            self.app.notify("Interrupt request in progress...", severity="information")
+            return
+        if mode == "armed":
+            self.app.notify(
+                f"Press Esc again within {int(_INTERRUPT_WINDOW_SECONDS)}s to interrupt.",
+                severity="warning",
+            )
+            return
+        self.app.notify("Interrupting...", severity="information")
+        self.run_worker(self._interrupt_session(), exclusive=False)
 
     def action_page_up(self) -> None:
         self.query_one("#messages-container", ScrollableContainer).scroll_page_up()

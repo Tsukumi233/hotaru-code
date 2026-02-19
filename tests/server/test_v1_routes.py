@@ -29,6 +29,10 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
         captured["list_messages"] = session_id
         return [{"id": "msg_1", "role": "assistant"}]
 
+    async def fake_interrupt(cls, session_id: str):
+        captured["interrupt"] = session_id
+        return {"ok": True, "interrupted": True}
+
     async def fake_delete_messages(cls, session_id: str, payload: dict[str, Any]):
         captured["delete_messages"] = {"session_id": session_id, "payload": payload}
         return {"deleted": 2}
@@ -46,6 +50,7 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.get", classmethod(fake_get))
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.update", classmethod(fake_update))
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.list_messages", classmethod(fake_list_messages))
+    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.interrupt", classmethod(fake_interrupt))
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.delete_messages", classmethod(fake_delete_messages))
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.restore_messages", classmethod(fake_restore_messages))
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.compact", classmethod(fake_compact))
@@ -72,6 +77,10 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
         assert messages.status_code == 200
         assert messages.json()[0]["id"] == "msg_1"
 
+        interrupted = client.post("/v1/session/ses_1/interrupt")
+        assert interrupted.status_code == 200
+        assert interrupted.json()["interrupted"] is True
+
         deleted = client.post("/v1/session/ses_1/message:delete", json={"message_ids": ["m1", "m2"]})
         assert deleted.status_code == 200
         assert deleted.json()["deleted"] == 2
@@ -92,6 +101,7 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
     assert captured["get"] == "ses_1"
     assert captured["update"]["payload"]["title"] == "Renamed"
     assert captured["list_messages"] == "ses_1"
+    assert captured["interrupt"] == "ses_1"
     assert captured["delete_messages"]["payload"]["message_ids"] == ["m1", "m2"]
     assert captured["restore_messages"]["payload"]["messages"][0]["info"]["id"] == "m1"
     assert captured["compact"]["payload"]["auto"] is True

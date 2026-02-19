@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +48,27 @@ def _session_to_dict(session: Any) -> dict[str, Any]:
 
 class SessionService:
     """Thin orchestration for session workflows."""
+
+    _tasks: dict[str, asyncio.Task[object]] = {}
+
+    @classmethod
+    def _register_task(cls, session_id: str, task: asyncio.Task[object]) -> None:
+        prev = cls._tasks.get(session_id)
+        if prev and not prev.done():
+            raise ValueError("Session already has an active request")
+        cls._tasks[session_id] = task
+
+    @classmethod
+    def _clear_task(cls, session_id: str, task: asyncio.Task[object]) -> None:
+        current = cls._tasks.get(session_id)
+        if current is task:
+            del cls._tasks[session_id]
+
+    @classmethod
+    def reset_runtime(cls) -> None:
+        for task in list(cls._tasks.values()):
+            task.cancel()
+        cls._tasks.clear()
 
     @classmethod
     async def _resolve_model(
@@ -283,13 +306,8 @@ class SessionService:
             raise ValueError("Field 'agent' must be a non-empty string")
 
         worktree = session.directory or cwd
-        await Bus.publish(
-            SessionStatus,
-            SessionStatusProperties(session_id=session_id, status={"type": "working"}),
-        )
-
-        try:
-            result = await SessionPrompt.prompt(
+        task = asyncio.create_task(
+            SessionPrompt.prompt(
                 session_id=session_id,
                 content=content,
                 provider_id=str(provider_id),
@@ -299,14 +317,57 @@ class SessionService:
                 worktree=str(Path(worktree)),
                 resume_history=True,
             )
+        )
+
+        try:
+            cls._register_task(session_id, task)
+        except ValueError:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            raise
+        working = False
+
+        try:
+            await Bus.publish(
+                SessionStatus,
+                SessionStatusProperties(session_id=session_id, status={"type": "working"}),
+            )
+            working = True
+            result = await task
             return {
                 "ok": result.result.error is None,
                 "assistant_message_id": result.assistant_message_id,
                 "status": result.result.status,
                 "error": result.result.error,
             }
+        except asyncio.CancelledError:
+            return {
+                "ok": False,
+                "assistant_message_id": "",
+                "status": "interrupted",
+                "error": None,
+            }
         finally:
-            await Bus.publish(
-                SessionStatus,
-                SessionStatusProperties(session_id=session_id, status={"type": "idle"}),
-            )
+            cls._clear_task(session_id, task)
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            if working:
+                await Bus.publish(
+                    SessionStatus,
+                    SessionStatusProperties(session_id=session_id, status={"type": "idle"}),
+                )
+
+    @classmethod
+    async def interrupt(cls, session_id: str) -> dict[str, Any]:
+        session = await Session.get(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+
+        task = cls._tasks.get(session_id)
+        if not task or task.done():
+            return {"ok": True, "interrupted": False}
+        task.cancel()
+        return {"ok": True, "interrupted": True}

@@ -257,6 +257,13 @@ class HotaruAPIClient:
         )
         return result if isinstance(result, dict) else {}
 
+    async def interrupt_session(self, session_id: str) -> dict[str, Any]:
+        result = await self._request_json(
+            "POST",
+            f"/v1/session/{session_id}/interrupt",
+        )
+        return result if isinstance(result, dict) else {}
+
     async def stream_events(self) -> AsyncIterator[dict[str, Any]]:
         response = await self._stream_request(
             "GET",

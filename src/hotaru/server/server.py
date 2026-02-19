@@ -104,6 +104,7 @@ class Server:
             Route("/v1/session/{id}", cls._v1_update_session, methods=["PATCH"]),
             Route("/v1/session/{id}/message", cls._v1_list_messages, methods=["GET"]),
             Route("/v1/session/{id}/message", cls._v1_message, methods=["POST"]),
+            Route("/v1/session/{id}/interrupt", cls._v1_interrupt_session, methods=["POST"]),
             Route("/v1/session/{id}/compact", cls._v1_compact_session, methods=["POST"]),
             Route("/v1/session/{id}/message:delete", cls._v1_delete_messages, methods=["POST"]),
             Route("/v1/session/{id}/message:restore", cls._v1_restore_messages, methods=["POST"]),
@@ -347,6 +348,14 @@ class Server:
                 cls._resolve_request_directory(request),
             )
             return JSONResponse(result)
+        except Exception as exc:
+            return cls._error_from_exception(exc)
+
+    @classmethod
+    async def _v1_interrupt_session(cls, request: Request) -> JSONResponse:
+        session_id = request.path_params["id"]
+        try:
+            return JSONResponse(await SessionService.interrupt(session_id))
         except Exception as exc:
             return cls._error_from_exception(exc)
 

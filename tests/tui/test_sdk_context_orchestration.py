@@ -7,6 +7,7 @@ class _ApiRecorder:
     def __init__(self) -> None:
         self.compact_payload: dict | None = None
         self.create_payload: dict | None = None
+        self.interrupt_session_id: str | None = None
 
     async def compact_session(self, _session_id: str, payload: dict | None = None):
         self.compact_payload = payload or {}
@@ -15,6 +16,10 @@ class _ApiRecorder:
     async def create_session(self, payload: dict):
         self.create_payload = payload
         return {"id": "session_1", "time": {"created": 1, "updated": 1}}
+
+    async def interrupt_session(self, session_id: str):
+        self.interrupt_session_id = session_id
+        return {"ok": True, "interrupted": True}
 
 
 @pytest.mark.anyio
@@ -45,3 +50,14 @@ async def test_create_session_includes_cwd_in_api_payload(tmp_path) -> None:
         "title": "Demo",
         "cwd": str(tmp_path),
     }
+
+
+@pytest.mark.anyio
+async def test_interrupt_delegates_to_api_client(tmp_path) -> None:
+    api = _ApiRecorder()
+    sdk = SDKContext(cwd=str(tmp_path), api_client=api)
+
+    result = await sdk.interrupt("session_1")
+
+    assert result == {"ok": True, "interrupted": True}
+    assert api.interrupt_session_id == "session_1"

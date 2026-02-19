@@ -9,6 +9,7 @@ REQUIRED_PATHS: dict[str, set[str]] = {
     "/v1/session": {"get", "post"},
     "/v1/session/{id}": {"get", "patch"},
     "/v1/session/{id}/message": {"get", "post"},
+    "/v1/session/{id}/interrupt": {"post"},
     "/v1/session/{id}/compact": {"post"},
     "/v1/session/{id}/message:delete": {"post"},
     "/v1/session/{id}/message:restore": {"post"},

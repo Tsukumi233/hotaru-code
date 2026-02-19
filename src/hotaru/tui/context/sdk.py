@@ -286,6 +286,9 @@ class SDKContext:
             payload["model_id"] = model_id
         return await self._api_client.compact_session(session_id, payload)
 
+    async def interrupt(self, session_id: str) -> dict[str, Any]:
+        return await self._api_client.interrupt_session(session_id)
+
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
         try:
             session = await self._api_client.get_session(session_id)
