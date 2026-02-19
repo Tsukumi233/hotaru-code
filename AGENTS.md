@@ -1,39 +1,127 @@
-# Repository Guidelines
+* Use `uv` commands for running and testing, not `python` directly.
+* ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.
+* The default branch in this repo is `master`.
+* Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
 
-## Project Structure & Module Organization
-- This repo is a python translation of the OpenCode project(at ../opencode).
-- This is not a toy project; it is intended to be a production-quality codebase for a real-world agent framework.
-- Core package code lives under `src/hotaru/` with domain modules such as `cli/`, `tui/`, `session/`, `tool/`, `provider/`, and `mcp/`.
-- CLI entrypoint is `src/hotaru/cli/main.py`; packaged command is `hotaru`.
-- Keep tests in `tests/`. Mirror package paths when possible.
-- Runtime/project config is in `hotaru.json`.
+## Style Guide
 
-## Build, Test, and Development Commands
-- `uv sync`
-- `uv run hotaru`
-- `uv run hotaru run -p "your prompt"`
-- `uv run pytest tests`
+### General Principles
 
-## Coding Style & Naming Conventions
-- Follow modern software engineering practices with an emphasis on readability, maintainability, and modularity.
-- Keep minimal technical debt. If there's breaking changes or refactors, no need to preserve API or compatibility; prioritize clean implementations.
-- Target Python 3.12+, use 4-space indentation, type hints, and `async`/`await` for I/O paths.
-- Follow existing naming: `snake_case` for modules/functions, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants.
-- Architecture & debugging discipline (no “shitsnowball” patches):
-  - Any bugfix/refactor must prioritize root-cause fixes over symptom patches.
-  - Do not add ad-hoc conditionals in upper layers (`session/`, `tui/`, `cli/`, generic core flow) for lower-layer quirks.
-  - Keep maximum loose coupling: one responsibility per layer, stable interfaces, dependency inversion where applicable.
-  - New compatibility logic must live at boundaries (`src/hotaru/provider/`, adapters, transforms, SDK wrappers), driven by capability/config, not scattered `if/else`.
-  - If a fix requires cross-layer hacks, stop and refactor ownership boundaries first, then implement the fix.
-  - NO HARD CODED CONFIG/MAGIC STRINGS.
+* Keep things in one function unless composable or reusable.
+* Avoid broad `try`/`except` blocks where possible; catch only specific exceptions if necessary.
+* Avoid using the `Any` type in Type Hints.
+* Prefer single word variable names where possible.
+* Use modern standard libraries when possible, like `pathlib.Path` instead of `os.path`.
+* Enforce strict type hinting (PEP 484) in function signatures, but rely on type inference for local variables to keep code clean.
+* Prefer list/dict comprehensions or generator expressions over `for` loops and `map()`/`filter()` for readability and performance.
 
-## Testing Guidelines
-- There is no formal coverage gate yet; include meaningful coverage for all changed code paths.
+### Naming
 
-## Commit Message Guidelines
-- We use release-please-action for automated semantic versioning and changelog generation. Follow the Conventional Commits format.
-- Do not mention OpenCode in commit messages.
+Prefer single word names for variables and functions (keeping strictly to PEP 8 `snake_case`). Only use multiple words if necessary.
 
-## Security & Configuration Tips
-- Never commit API keys or tokens.
-- Treat `hotaru.json` as local/developer configuration and sanitize provider details before sharing.
+```python
+# Good
+foo = 1
+def journal(dir: str) -> None:
+    pass
+
+# Bad
+foo_bar = 1
+def prepare_journal(dir: str) -> None:
+    pass
+
+```
+
+Reduce total variable count by inlining when a value is only used once.
+
+```python
+import json
+from pathlib import Path
+
+# Good
+journal = json.loads(Path(dir, "journal.json").read_text())
+
+# Bad
+journal_path = Path(dir, "journal.json")
+journal = json.loads(journal_path.read_text())
+
+```
+
+### Unpacking & Context
+
+Avoid unnecessary variable unpacking. Use dot notation (for objects) or dict keys to preserve context and namespaces.
+
+```python
+# Good
+obj.a
+obj.b
+data["a"]
+
+# Bad
+a, b = obj.a, obj.b
+a = data["a"]
+
+```
+
+### Variables
+
+Prefer immutability by design. Use conditional expressions (ternaries) or early returns instead of variable reassignment.
+
+```python
+# Good
+foo = 1 if condition else 2
+
+# Bad
+foo = None
+if condition:
+    foo = 1
+else:
+    foo = 2
+
+```
+
+### Control Flow
+
+Avoid `else` statements. Prefer early returns.
+
+```python
+# Good
+def foo() -> int:
+    if condition:
+        return 1
+    return 2
+
+# Bad
+def foo() -> int:
+    if condition:
+        return 1
+    else:
+        return 2
+
+```
+
+### Schema Definitions (SQLModel / SQLAlchemy)
+
+Use direct `snake_case` for class attributes so database column names map automatically without needing to be explicitly redefined as string overrides.
+
+```python
+from sqlmodel import Field, SQLModel
+
+# Good
+class Session(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    project_id: str
+    created_at: int
+
+# Bad
+class Session(SQLModel, table=True):
+    id: str = Field(primary_key=True, sa_column_name="id")
+    projectID: str = Field(sa_column_name="project_id")
+    createdAt: int = Field(sa_column_name="created_at")
+
+```
+
+## Testing
+
+* Avoid mocks as much as possible; favor integration or fixture-based testing.
+* Test actual implementation, do not duplicate logic into tests.
