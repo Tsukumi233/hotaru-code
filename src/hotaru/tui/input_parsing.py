@@ -5,10 +5,7 @@ from pathlib import Path
 import re
 from typing import List, Optional, Tuple
 
-
-SLASH_COMMAND_PATTERN = re.compile(
-    r"^/(?P<trigger>[A-Za-z0-9._-]+)(?:\s+(?P<args>.*))?$"
-)
+from ..command.slash import parse_slash_command_value
 FILE_REFERENCE_PATTERN = re.compile(
     r"""(?<!\S)@(?:"(?P<double>[^"]+)"|'(?P<single>[^']+)'|(?P<plain>\S+))"""
 )
@@ -27,13 +24,11 @@ def parse_slash_command(value: str) -> Optional[SlashCommandInput]:
 
     Returns ``None`` when the value is not a slash command.
     """
-    stripped = value.strip()
-    match = SLASH_COMMAND_PATTERN.match(stripped)
-    if not match:
+    parsed = parse_slash_command_value(value)
+    if parsed is None:
         return None
 
-    trigger = (match.group("trigger") or "").strip().lower()
-    args = (match.group("args") or "").strip()
+    trigger, args = parsed
     return SlashCommandInput(trigger=trigger, args=args)
 
 

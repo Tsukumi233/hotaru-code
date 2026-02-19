@@ -3,13 +3,13 @@
 This module ports OpenCode's built-in ``/init`` command behavior.
 """
 
-import re
 from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel
 
 from ..core.bus import Bus, BusEvent
+from .slash import parse_slash_command_value
 
 _PROMPT_DIR = Path(__file__).parent / "template"
 _INIT_TEMPLATE_FALLBACK = """Please analyze this codebase and create an AGENTS.md file containing:
@@ -29,11 +29,6 @@ try:
 except Exception:
     _INIT_TEMPLATE = _INIT_TEMPLATE_FALLBACK
 
-_SLASH_COMMAND_PATTERN = re.compile(
-    r"^/(?P<trigger>[A-Za-z0-9._-]+)(?:\s+(?P<args>.*))?$"
-)
-
-
 class CommandExecutedProperties(BaseModel):
     """Payload for command execution events."""
 
@@ -52,14 +47,7 @@ class CommandEvent:
 
 def parse_builtin_slash_command(value: str) -> Optional[tuple[str, str]]:
     """Parse built-in slash command trigger and arguments."""
-    stripped = value.strip()
-    match = _SLASH_COMMAND_PATTERN.match(stripped)
-    if not match:
-        return None
-
-    trigger = (match.group("trigger") or "").strip().lower()
-    args = (match.group("args") or "").strip()
-    return trigger, args
+    return parse_slash_command_value(value)
 
 
 def render_init_prompt(worktree: str, arguments: str = "") -> str:

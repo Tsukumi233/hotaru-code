@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -146,3 +148,34 @@ async def test_api_client_does_not_fallback_to_legacy_paths() -> None:
     await client.aclose()
 
     assert calls == [("GET", "/v1/provider")]
+
+
+@pytest.mark.anyio
+async def test_connect_provider_does_not_normalize_legacy_camel_case_fields() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/provider/connect":
+            captured["body"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(400, json={"error": {"message": "bad request"}})
+        return httpx.Response(404, json={"error": "unexpected route"})
+
+    client = HotaruAPIClient(
+        base_url="http://hotaru.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    payload = {
+        "providerID": "openai",
+        "providerType": "openai",
+        "providerName": "OpenAI",
+        "baseURL": "https://api.openai.com/v1",
+        "apiKey": "sk-test",
+        "modelIDs": ["gpt-5"],
+    }
+
+    with pytest.raises(ApiClientError):
+        await client.connect_provider(payload)
+    await client.aclose()
+
+    assert captured["body"] == payload

@@ -308,12 +308,12 @@ class HotaruAPIClient:
         if "config" in payload:
             return payload
 
-        provider_id = payload.get("provider_id") or payload.get("providerID")
-        api_key = payload.get("api_key") or payload.get("apiKey")
-        provider_type = payload.get("provider_type") or payload.get("providerType")
-        provider_name = payload.get("provider_name") or payload.get("providerName") or provider_id
-        base_url = payload.get("base_url") or payload.get("baseURL")
-        model_ids = payload.get("model_ids") or payload.get("modelIDs") or []
+        provider_id = payload.get("provider_id")
+        api_key = payload.get("api_key")
+        provider_type = payload.get("provider_type")
+        provider_name = payload.get("provider_name") or provider_id
+        base_url = payload.get("base_url")
+        model_ids = payload.get("model_ids") or []
 
         if not isinstance(provider_id, str):
             return payload

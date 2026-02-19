@@ -20,6 +20,14 @@ from ..session.message_store import parse_part
 from .session_payload import structured_messages_to_payload
 
 
+def _reject_legacy_fields(payload: dict[str, Any], aliases: dict[str, str]) -> None:
+    for legacy_name, canonical_name in aliases.items():
+        if legacy_name in payload:
+            raise ValueError(
+                f"Field '{legacy_name}' is not supported. Use '{canonical_name}' instead."
+            )
+
+
 def _session_to_dict(session: Any) -> dict[str, Any]:
     return {
         "id": session.id,
@@ -47,17 +55,20 @@ class SessionService:
         fallback_provider_id: str | None = None,
         fallback_model_id: str | None = None,
     ) -> tuple[str, str]:
+        _reject_legacy_fields(
+            payload,
+            {
+                "providerID": "provider_id",
+                "modelID": "model_id",
+            },
+        )
         model = payload.get("model")
         if isinstance(model, str) and model.strip():
             provider_id, model_id = Provider.parse_model(model)
             return provider_id, model_id
 
-        provider_id = (
-            payload.get("provider_id")
-            or payload.get("providerID")
-            or fallback_provider_id
-        )
-        model_id = payload.get("model_id") or payload.get("modelID") or fallback_model_id
+        provider_id = payload.get("provider_id") or fallback_provider_id
+        model_id = payload.get("model_id") or fallback_model_id
 
         if provider_id and model_id:
             return str(provider_id), str(model_id)
@@ -66,7 +77,14 @@ class SessionService:
 
     @classmethod
     async def create(cls, payload: dict[str, Any], cwd: str) -> dict[str, Any]:
-        project_id = payload.get("project_id") or payload.get("projectID") or "default"
+        _reject_legacy_fields(
+            payload,
+            {
+                "projectID": "project_id",
+                "parentID": "parent_id",
+            },
+        )
+        project_id = payload.get("project_id") or "default"
         if not isinstance(project_id, str) or not project_id.strip():
             raise ValueError("Field 'project_id' must be a non-empty string")
 
@@ -76,7 +94,7 @@ class SessionService:
             raise ValueError("Field 'agent' must be a non-empty string")
 
         directory = payload.get("directory") or payload.get("cwd") or cwd
-        parent_id = payload.get("parent_id") or payload.get("parentID")
+        parent_id = payload.get("parent_id")
 
         session = await Session.create(
             project_id=project_id.strip(),
@@ -126,7 +144,8 @@ class SessionService:
 
     @classmethod
     async def delete_messages(cls, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        raw_message_ids = payload.get("message_ids") or payload.get("messageIDs") or []
+        _reject_legacy_fields(payload, {"messageIDs": "message_ids"})
+        raw_message_ids = payload.get("message_ids") or []
         if not isinstance(raw_message_ids, list):
             raise ValueError("Field 'message_ids' must be a list of strings")
 

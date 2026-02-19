@@ -466,7 +466,7 @@ class TuiApp(App):
                         "id": session.get("id"),
                         "title": session.get("title") or "Untitled",
                         "agent": session.get("agent"),
-                        "parentID": session.get("parent_id"),
+                        "parent_id": session.get("parent_id"),
                         "share": session.get("share"),
                         "time": {
                             "created": int(time_data.get("created", 0) or 0),
@@ -690,7 +690,7 @@ class TuiApp(App):
                 key=lambda s: s.get("time", {}).get("updated", 0),
                 reverse=True,
             ):
-                if not session.get("parentID"):
+                if not session.get("parent_id"):
                     return SessionRoute(session_id=session["id"])
 
         # No sessions found, show home
@@ -794,7 +794,7 @@ class TuiApp(App):
                 "updated": s.get("time", {}).get("updated", ""),
             }
             for s in sessions
-            if not s.get("parentID")  # Only show parent sessions
+            if not s.get("parent_id")  # Only show parent sessions
         ]
 
         self.push_screen(
@@ -865,7 +865,7 @@ class TuiApp(App):
                 "id": updated.get("id", session_id),
                 "title": updated.get("title") or "Untitled",
                 "agent": updated.get("agent"),
-                "parentID": updated.get("parent_id") or updated.get("parentID"),
+                "parent_id": updated.get("parent_id"),
                 "share": updated.get("share"),
                 "time": {
                     "created": (updated.get("time") or {}).get("created"),

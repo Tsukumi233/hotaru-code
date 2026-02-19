@@ -9,6 +9,14 @@ from ..provider import Provider
 from ..provider.auth import ProviderAuth
 
 
+def _reject_legacy_fields(payload: dict[str, Any], aliases: dict[str, str]) -> None:
+    for legacy_name, canonical_name in aliases.items():
+        if legacy_name in payload:
+            raise ValueError(
+                f"Field '{legacy_name}' is not supported. Use '{canonical_name}' instead."
+            )
+
+
 def _provider_to_dict(provider: Any) -> dict[str, Any]:
     return {
         "id": provider.id,
@@ -44,12 +52,19 @@ class ProviderService:
 
     @classmethod
     async def connect(cls, payload: dict[str, Any]) -> dict[str, Any]:
-        provider_id = payload.get("provider_id") or payload.get("providerID")
+        _reject_legacy_fields(
+            payload,
+            {
+                "providerID": "provider_id",
+                "apiKey": "api_key",
+            },
+        )
+        provider_id = payload.get("provider_id")
         if not isinstance(provider_id, str) or not provider_id.strip():
             raise ValueError("Field 'provider_id' is required")
         provider_id = provider_id.strip().lower()
 
-        api_key = payload.get("api_key") or payload.get("apiKey")
+        api_key = payload.get("api_key")
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("Field 'api_key' is required")
 
