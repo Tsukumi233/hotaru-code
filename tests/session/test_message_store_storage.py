@@ -4,6 +4,7 @@ import pytest
 
 from hotaru.core.global_paths import GlobalPath
 from hotaru.core.id import Identifier
+from hotaru.provider.transform import ProviderTransform
 from hotaru.session.message_store import (
     CompactionPart,
     MessageInfo,
@@ -246,3 +247,24 @@ def test_to_model_messages_includes_interleaved_reasoning_field() -> None:
     assert model_messages[0]["content"] == "final text"
     assert model_messages[0]["reasoning_text"] == "reasoning path"
     assert model_messages[0]["reasoning_content"] == "reasoning path"
+
+
+def test_to_model_messages_delegates_to_provider_transform(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_from_structured_messages(cls, messages, *, interleaved_field=None):  # type: ignore[no-untyped-def]
+        seen["messages"] = list(messages)
+        seen["interleaved_field"] = interleaved_field
+        return [{"role": "user", "content": "ok"}]
+
+    monkeypatch.setattr(
+        ProviderTransform,
+        "from_structured_messages",
+        classmethod(fake_from_structured_messages),
+    )
+
+    out = to_model_messages([], interleaved_field="reasoning_content")
+
+    assert out == [{"role": "user", "content": "ok"}]
+    assert seen["messages"] == []
+    assert seen["interleaved_field"] == "reasoning_content"

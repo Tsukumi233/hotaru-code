@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Union
 
 from ..core.id import Identifier
 from ..permission import RejectedError, CorrectedError, DeniedError
+from ..provider.transform import ProviderTransform
 from ..question.question import RejectedError as QuestionRejectedError
 from ..tool import ToolContext
 from ..tool.registry import ToolRegistry
@@ -359,27 +360,29 @@ class SessionProcessor:
             turn_result.status = "stop"
             return turn_result
 
-        assistant_message: Dict[str, Any] = {"role": "assistant"}
-        assistant_message["content"] = turn_result.text if turn_result.text else None
-        assistant_message["tool_calls"] = [
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.name, "arguments": json.dumps(tc.input)},
-            }
-            for tc in turn_result.tool_calls
-        ]
-        if turn_result.reasoning_text:
-            assistant_message["reasoning_text"] = turn_result.reasoning_text
-        self.messages.append(assistant_message)
+        self.messages.append(
+            ProviderTransform.assistant_tool_message(
+                text=turn_result.text,
+                reasoning_text=turn_result.reasoning_text,
+                tool_calls=[
+                    {
+                        "id": tc.id,
+                        "name": tc.name,
+                        "input": tc.input,
+                    }
+                    for tc in turn_result.tool_calls
+                ],
+            )
+        )
 
         for tc in turn_result.tool_calls:
             self.messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": tc.output if tc.status == "completed" else tc.error or "Tool execution failed",
-                }
+                ProviderTransform.tool_result_message(
+                    tool_call_id=tc.id,
+                    status=tc.status,
+                    output=tc.output,
+                    error=tc.error,
+                )
             )
 
         if self._pending_synthetic_users:
