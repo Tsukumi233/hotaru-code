@@ -119,3 +119,16 @@ def test_resolve_variant_reads_model_variants() -> None:
     )
     resolved = ProviderTransform.resolve_variant(model=model, variant="high")
     assert resolved == {"thinking": {"type": "enabled", "budgetTokens": 16000}}
+
+
+def test_sampling_defaults_are_model_agnostic() -> None:
+    model = _model(provider_id="demo", model_id="my-custom-qwen-finetune")
+    assert ProviderTransform.temperature(model) is None
+    assert ProviderTransform.top_p(model) is None
+    assert ProviderTransform.top_k(model) is None
+
+
+def test_options_do_not_inject_model_specific_sampling_defaults() -> None:
+    model = _model(provider_id="moonshot", model_id="kimi-k2.5")
+    options = ProviderTransform.options(model=model, session_id="s1")
+    assert "top_p" not in options

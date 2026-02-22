@@ -24,6 +24,9 @@ class ProviderTransform:
     """Centralized provider transform pipeline."""
 
     OUTPUT_TOKEN_MAX = 32000
+    DEFAULT_TEMPERATURE: Optional[float] = None
+    DEFAULT_TOP_P: Optional[float] = None
+    DEFAULT_TOP_K: Optional[int] = None
 
     @staticmethod
     def sdk_key(*, provider_id: str, api_type: str) -> str:
@@ -551,18 +554,12 @@ class ProviderTransform:
         del session_id
         base: Dict[str, Any] = {}
 
-        model_id = str(getattr(model, "id", "") or "").lower()
         provider_id = str(getattr(model, "provider_id", "") or "").lower()
         api_type = str(getattr(model, "api_type", "openai") or "openai").lower()
 
         if provider_id == "openai" and api_type == "openai":
             # Follow OpenCode behavior: avoid server-side storage unless explicitly requested.
             base["store"] = False
-
-        # Keep Moonshot/Kimi compatible defaults centralized.
-        if "kimi-k2" in model_id:
-            if any(flag in model_id for flag in ("k2.5", "k2p5", "k2-5")):
-                base["top_p"] = 0.95
 
         if provider_options and provider_options.get("litellmProxy") is True:
             base["litellm_proxy"] = True
@@ -581,40 +578,18 @@ class ProviderTransform:
 
     @staticmethod
     def temperature(model: Any) -> Optional[float]:
-        model_id = str(getattr(model, "id", "") or "").lower()
-        if "qwen" in model_id:
-            return 0.55
-        if "claude" in model_id:
-            return None
-        if "gemini" in model_id:
-            return 1.0
-        if "glm-4.6" in model_id or "glm-4.7" in model_id:
-            return 1.0
-        if "minimax-m2" in model_id:
-            return 1.0
-        if "kimi-k2" in model_id:
-            return None
-        return None
+        del model
+        return ProviderTransform.DEFAULT_TEMPERATURE
 
     @staticmethod
     def top_p(model: Any) -> Optional[float]:
-        model_id = str(getattr(model, "id", "") or "").lower()
-        if "qwen" in model_id:
-            return 1.0
-        if any(flag in model_id for flag in ("minimax-m2", "gemini", "kimi-k2.5", "kimi-k2p5", "kimi-k2-5")):
-            return 0.95
-        return None
+        del model
+        return ProviderTransform.DEFAULT_TOP_P
 
     @staticmethod
     def top_k(model: Any) -> Optional[int]:
-        model_id = str(getattr(model, "id", "") or "").lower()
-        if "minimax-m2" in model_id:
-            if any(flag in model_id for flag in ("m2.", "m25", "m21")):
-                return 40
-            return 20
-        if "gemini" in model_id:
-            return 64
-        return None
+        del model
+        return ProviderTransform.DEFAULT_TOP_K
 
     @classmethod
     def max_output_tokens(cls, model: Any) -> int:

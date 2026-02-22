@@ -364,7 +364,7 @@ async def test_llm_stops_after_retry_budget_exhausted(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.anyio
-async def test_llm_kimi_default_omits_temperature_but_keeps_top_p(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_llm_kimi_default_omits_temperature_and_top_p(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = ProviderInfo(
         id="moonshot",
         name="Moonshot",
@@ -423,4 +423,4 @@ async def test_llm_kimi_default_omits_temperature_but_keeps_top_p(monkeypatch: p
 
     assert seen[-1].type == "message_delta"
     assert captured["temperature"] is None
-    assert captured["top_p"] == 0.95
+    assert captured["top_p"] is None
