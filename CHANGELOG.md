@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0](https://github.com/Tsukumi233/hotaru-code/compare/v0.2.1...v1.0.0) (2026-02-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* v1 request bodies no longer accept legacy camelCase alias fields (for example projectID/providerID/modelID/parentID/messageIDs and provider connect camelCase payload aliases).
+
+### Features
+
+* add auto-scroll functionality and theme management ([ab54edf](https://github.com/Tsukumi233/hotaru-code/commit/ab54edfe8faa74202004554afdcddf5adf7167ac))
+* add Hotaru WebUI with React and Vite ([48ed9e9](https://github.com/Tsukumi233/hotaru-code/commit/48ed9e9aa3798895a4acfca8816f2f34109eae4e))
+* add PTY session management with WebSocket support and API endpoints ([e96269f](https://github.com/Tsukumi233/hotaru-code/commit/e96269f66fd26a9888aefb48de3d1eac908fc62b))
+* add QuestionCard, ResizeHandle, Sidebar, StatusBadge, ToolPart components ([ab54edf](https://github.com/Tsukumi233/hotaru-code/commit/ab54edfe8faa74202004554afdcddf5adf7167ac))
+* **client:** add typed api client for v1 contract ([29a514a](https://github.com/Tsukumi233/hotaru-code/commit/29a514a4c99eae774a8cf9b91ecb78a1d29f504c))
+* decouple server request context and event streams ([c1d9da0](https://github.com/Tsukumi233/hotaru-code/commit/c1d9da00f45a61dbfa35fb89763ce5e767585d56))
+* enhance storage system with transaction support and cross-process consistency tests ([bb9d2ff](https://github.com/Tsukumi233/hotaru-code/commit/bb9d2ff6cc239c647f4f7a3ddb796a931980213a))
+* implement hooks for session, messages, permissions, providers, and pty management ([ab54edf](https://github.com/Tsukumi233/hotaru-code/commit/ab54edfe8faa74202004554afdcddf5adf7167ac))
+* implement session retry mechanism with exponential backoff for LLM streaming ([9e8ae45](https://github.com/Tsukumi233/hotaru-code/commit/9e8ae4546ee7393495cca0d08ca1a887a6be9399))
+* implement shared prompt context and part callbacks for improved orchestration ([9d8013f](https://github.com/Tsukumi233/hotaru-code/commit/9d8013fdc6dad561ffe874a56b001ea8c9eee00e))
+* **server:** add versioned api routes over app services ([81b1dae](https://github.com/Tsukumi233/hotaru-code/commit/81b1dae3638fe5bb60ac80b72644e632b89af06d))
+* **tui:** enhance PromptInput with multi-line support and slash command handling ([bd3c559](https://github.com/Tsukumi233/hotaru-code/commit/bd3c559d762735536409e7670d6656beaa69c369))
+
+
+### Bug Fixes
+
+* **tui:** sync streaming behavior ([f436bd4](https://github.com/Tsukumi233/hotaru-code/commit/f436bd4028816dbb26bdb9f6d1360374c82ca63a))
+* utility functions for message normalization and upserting ([ab54edf](https://github.com/Tsukumi233/hotaru-code/commit/ab54edfe8faa74202004554afdcddf5adf7167ac))
+
+
+### Documentation
+
+* **plan:** add loose-coupling design and execution plan ([99b7f27](https://github.com/Tsukumi233/hotaru-code/commit/99b7f278a13227d8e9dae8228f56aed2eead52c4))
+
+
+### Code Refactoring
+
+* remove legacy request aliases and unify slash parsing ([67a552d](https://github.com/Tsukumi233/hotaru-code/commit/67a552d68328593fe573a31a16b827a6b8cecd7f))
+
 ## [0.2.1](https://github.com/Tsukumi233/hotaru-code/compare/v0.2.0...v0.2.1) (2026-02-17)
 
 
