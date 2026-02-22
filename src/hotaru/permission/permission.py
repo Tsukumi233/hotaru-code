@@ -138,6 +138,7 @@ class Permission:
 
     # Pending permission requests
     _pending: Dict[str, Dict[str, Any]] = {}
+    _pending_guard = asyncio.Lock()
 
     # Approved rules per scope
     _approved_session: Dict[str, List[PermissionRule]] = {}
@@ -439,7 +440,7 @@ class Permission:
                     tool=tool,
                 )
 
-                cls._pending[rid] = {
+                item = {
                     "request": request,
                     "session_id": session_id,
                     "project_id": project_id,
@@ -449,6 +450,8 @@ class Permission:
                     "resolve": lambda f=future: f.set_result(None) if not f.done() else None,
                     "reject": lambda e, f=future: f.set_exception(e) if not f.done() else None,
                 }
+                async with cls._pending_guard:
+                    cls._pending[rid] = item
 
                 await Bus.publish(PermissionAsked, request)
                 await future  # Block until user responds
@@ -474,11 +477,10 @@ class Permission:
             reply: Reply type
             message: Optional message for rejection
         """
-        pending = cls._pending.get(request_id)
+        async with cls._pending_guard:
+            pending = cls._pending.pop(request_id, None)
         if not pending:
             return
-
-        del cls._pending[request_id]
 
         session_id = pending["session_id"]
 
@@ -496,12 +498,13 @@ class Permission:
                 pending["reject"](RejectedError())
 
             # Also reject ALL other pending requests for this session
-            session_pending = [
-                (rid, p) for rid, p in list(cls._pending.items())
-                if p["session_id"] == session_id
-            ]
+            async with cls._pending_guard:
+                session_pending = [
+                    (rid, cls._pending.pop(rid))
+                    for rid, p in list(cls._pending.items())
+                    if p["session_id"] == session_id
+                ]
             for rid, p in session_pending:
-                del cls._pending[rid]
                 await Bus.publish(PermissionReplied, PermissionRepliedProperties(
                     session_id=session_id,
                     request_id=rid,
@@ -526,24 +529,26 @@ class Permission:
             pending["resolve"]()
 
             # Auto-resolve any other pending requests that now match
-            for rid, p in list(cls._pending.items()):
-                if p["session_id"] != session_id:
-                    continue
-                approved = cls._approved_rules(
-                    scope=str(p.get("scope") or "session"),
-                    session_id=session_id,
-                    project_id=p.get("project_id"),
-                )
-                # Check if all patterns are now approved
-                all_approved = True
-                for pat in p["request"].patterns:
-                    rule = cls.evaluate(p["permission"], pat, [], approved)
-                    if rule.action != PermissionAction.ALLOW:
-                        all_approved = False
-                        break
-                if not all_approved:
-                    continue
-                p = cls._pending.pop(rid)
+            auto_pending = []
+            async with cls._pending_guard:
+                for rid, p in list(cls._pending.items()):
+                    if p["session_id"] != session_id:
+                        continue
+                    approved = cls._approved_rules(
+                        scope=str(p.get("scope") or "session"),
+                        session_id=session_id,
+                        project_id=p.get("project_id"),
+                    )
+                    all_approved = True
+                    for pat in p["request"].patterns:
+                        rule = cls.evaluate(p["permission"], pat, [], approved)
+                        if rule.action != PermissionAction.ALLOW:
+                            all_approved = False
+                            break
+                    if not all_approved:
+                        continue
+                    auto_pending.append((rid, cls._pending.pop(rid)))
+            for rid, p in auto_pending:
                 await Bus.publish(PermissionReplied, PermissionRepliedProperties(
                     session_id=session_id,
                     request_id=rid,
@@ -587,12 +592,14 @@ class Permission:
         Returns:
             List of pending requests
         """
-        return [p["request"] for p in cls._pending.values()]
+        async with cls._pending_guard:
+            return [p["request"] for p in cls._pending.values()]
 
     @classmethod
     def reset(cls) -> None:
         """Reset permission state."""
         cls._pending.clear()
+        cls._pending_guard = asyncio.Lock()
         cls._approved_session.clear()
         cls._approved_project.clear()
         cls._persisted_loaded.clear()

@@ -75,6 +75,56 @@ async def test_permission_replied_event_emitted_for_auto_resolved_requests() -> 
 
 
 @pytest.mark.anyio
+async def test_permission_reply_always_handles_concurrent_pending_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    Permission.reset()
+
+    tasks = [
+        asyncio.create_task(
+            Permission.ask(
+                session_id="session_test",
+                permission="bash",
+                patterns=[pattern],
+                ruleset=[],
+                always=["git *"],
+            )
+        )
+        for pattern in ["git status", "git diff", "git log"]
+    ]
+
+    await asyncio.sleep(0)
+    pending = await Permission.list_pending()
+    assert len(pending) == 3
+
+    main_id = pending[0].id
+    rest = [item.id for item in pending[1:]]
+    assert len(rest) == 2
+    hook_id, rival_id = rest
+
+    publish = Bus.publish
+    fired = False
+
+    async def fake_publish(cls, event, properties) -> None:  # type: ignore[no-untyped-def]
+        nonlocal fired
+        if (
+            not fired
+            and event == PermissionReplied
+            and properties.request_id == hook_id
+            and properties.reply == PermissionReply.ALWAYS
+        ):
+            fired = True
+            await Permission.reply(rival_id, PermissionReply.ALWAYS)
+        await publish(event, properties)
+
+    monkeypatch.setattr(Bus, "publish", classmethod(fake_publish))
+
+    await Permission.reply(main_id, PermissionReply.ALWAYS)
+    await asyncio.gather(*tasks)
+    assert await Permission.list_pending() == []
+
+
+@pytest.mark.anyio
 async def test_project_scope_shares_always_approvals_between_sessions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
