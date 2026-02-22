@@ -121,3 +121,29 @@ async def test_refresh_lsp_status_runs_in_instance_context(monkeypatch: pytest.M
 
     assert len(app.sync_ctx.data.lsp) == 1
     assert app.sync_ctx.data.lsp[0]["id"] == "pyright"
+
+
+@pytest.mark.anyio
+async def test_server_connection_events_notify_users(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = TuiApp()
+    notices: list[tuple[str, str]] = []
+
+    def fake_notify(message: str, *, severity: str = "information", **_kwargs) -> None:
+        notices.append((message, severity))
+
+    monkeypatch.setattr(app, "notify", fake_notify)
+
+    app._start_runtime_subscriptions()
+    try:
+        app.sdk_ctx.emit_event("server.connection", {"state": "retrying", "attempt": 1, "delay": 0.25})
+        app.sdk_ctx.emit_event("server.connection", {"state": "retrying", "attempt": 2, "delay": 0.5})
+        app.sdk_ctx.emit_event("server.connection", {"state": "connected"})
+        app.sdk_ctx.emit_event("server.connection", {"state": "exhausted", "attempt": 50})
+    finally:
+        await app._stop_runtime_subscriptions()
+
+    assert notices == [
+        ("Server connection lost. Retrying in 0.25s.", "warning"),
+        ("Server connection restored.", "information"),
+        ("Server unavailable after 50 retries.", "error"),
+    ]

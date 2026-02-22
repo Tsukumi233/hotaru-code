@@ -14,6 +14,16 @@ from ...util.log import Log
 
 log = Log.create({"service": "tui.context.sdk"})
 _DEFAULT_API_BASE_URL = "http://127.0.0.1:4096"
+_EVENT_STREAM_BASE_DELAY = 0.25
+_EVENT_STREAM_MAX_DELAY = 30.0
+_EVENT_STREAM_BACKOFF = 2.0
+_EVENT_STREAM_MAX_RETRIES = 50
+
+
+def _event_stream_delay(attempt: int) -> float:
+    turn = max(int(attempt), 1)
+    backoff = _EVENT_STREAM_BASE_DELAY * (_EVENT_STREAM_BACKOFF ** (turn - 1))
+    return min(backoff, _EVENT_STREAM_MAX_DELAY)
 
 
 class SDKContext:
@@ -50,10 +60,27 @@ class SDKContext:
     def _supports_event_stream(self) -> bool:
         return hasattr(self._api_client, "stream_events")
 
+    def _emit_connection_state(
+        self,
+        state: str,
+        attempt: int | None = None,
+        delay: float | None = None,
+        error: str | None = None,
+    ) -> None:
+        data: dict[str, Any] = {"state": state}
+        if attempt is not None:
+            data["attempt"] = attempt
+        if delay is not None:
+            data["delay"] = delay
+        if error:
+            data["error"] = error
+        self.emit_event("server.connection", data)
+
     async def _run_event_stream(self) -> None:
         if not self._supports_event_stream():
             return
 
+        attempt = 0
         while True:
             self._event_stream_ready.clear()
             try:
@@ -61,7 +88,11 @@ class SDKContext:
                     if not isinstance(event, dict):
                         continue
                     if not self._event_stream_ready.is_set():
+                        if attempt > 0:
+                            log.info("event stream recovered", {"attempt": attempt})
+                        attempt = 0
                         self._event_stream_ready.set()
+                        self._emit_connection_state("connected")
                     event_type = str(event.get("type", "server.event"))
                     data = event.get("data", {})
                     if not isinstance(data, dict):
@@ -70,10 +101,51 @@ class SDKContext:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.warning("event stream failed", {"error": str(exc)})
-                await asyncio.sleep(0.25)
+                attempt += 1
+                delay = _event_stream_delay(attempt)
+                error = str(exc)
+                if attempt == 1:
+                    log.warning(
+                        "event stream failed",
+                        {"error": error, "retry_in": delay},
+                    )
+                else:
+                    log.debug(
+                        "event stream retry scheduled",
+                        {"attempt": attempt, "retry_in": delay},
+                    )
+                self._emit_connection_state(
+                    "retrying",
+                    attempt=attempt,
+                    delay=delay,
+                    error=error,
+                )
+                if attempt >= _EVENT_STREAM_MAX_RETRIES:
+                    log.error("event stream retries exhausted", {"attempt": attempt})
+                    self._emit_connection_state("exhausted", attempt=attempt)
+                    return
+                await asyncio.sleep(delay)
             else:
-                await asyncio.sleep(0.25)
+                attempt += 1
+                delay = _event_stream_delay(attempt)
+                if attempt == 1:
+                    log.warning("event stream closed", {"retry_in": delay})
+                else:
+                    log.debug(
+                        "event stream closed, retry scheduled",
+                        {"attempt": attempt, "retry_in": delay},
+                    )
+                self._emit_connection_state(
+                    "retrying",
+                    attempt=attempt,
+                    delay=delay,
+                    error="stream closed",
+                )
+                if attempt >= _EVENT_STREAM_MAX_RETRIES:
+                    log.error("event stream retries exhausted", {"attempt": attempt})
+                    self._emit_connection_state("exhausted", attempt=attempt)
+                    return
+                await asyncio.sleep(delay)
 
     def _ensure_event_stream_started(self) -> None:
         if not self._supports_event_stream():

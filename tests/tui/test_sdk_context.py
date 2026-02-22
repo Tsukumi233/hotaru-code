@@ -93,6 +93,35 @@ class _ApiReadyStreamStub:
         self.closed = True
 
 
+class _ApiFlakyEventStreamStub:
+    def __init__(self, failures: int = 3) -> None:
+        self.failures = failures
+        self.started = 0
+        self.cancelled = False
+        self._stop = asyncio.Event()
+
+    async def stream_events(self):
+        self.started += 1
+        if self.started <= self.failures:
+            raise RuntimeError(f"connection failed {self.started}")
+        yield {"type": "runtime", "data": {"state": "ready"}}
+        try:
+            await self._stop.wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+class _ApiAlwaysFailEventStreamStub:
+    def __init__(self) -> None:
+        self.started = 0
+
+    async def stream_events(self):
+        self.started += 1
+        raise RuntimeError("server offline")
+        yield  # pragma: no cover
+
+
 @pytest.mark.anyio
 async def test_send_message_emits_error_event_when_api_request_fails(tmp_path) -> None:
     sdk = SDKContext(cwd=str(tmp_path), api_client=_ApiClientStub())
@@ -195,3 +224,56 @@ async def test_start_event_stream_does_not_manage_server_lifecycle(
 
     assert starts == []
     assert stops == []
+
+
+@pytest.mark.anyio
+async def test_event_stream_uses_exponential_backoff_and_emits_connection_events(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    api = _ApiFlakyEventStreamStub(failures=3)
+    sdk = SDKContext(cwd=str(tmp_path), api_client=api)
+    states: list[dict] = []
+    delays: list[float] = []
+    wait = asyncio.sleep
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(float(delay))
+        await wait(0)
+
+    monkeypatch.setattr("hotaru.tui.context.sdk.asyncio.sleep", fake_sleep)
+    sdk.on_event("server.connection", lambda data: states.append(dict(data)))
+
+    await sdk.start_event_stream()
+    await sdk.aclose()
+
+    assert delays[:3] == [0.25, 0.5, 1.0]
+    assert [item.get("state") for item in states[:4]] == [
+        "retrying",
+        "retrying",
+        "retrying",
+        "connected",
+    ]
+
+
+@pytest.mark.anyio
+async def test_event_stream_stops_after_retry_limit_and_emits_exhausted_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    api = _ApiAlwaysFailEventStreamStub()
+    sdk = SDKContext(cwd=str(tmp_path), api_client=api)
+    states: list[dict] = []
+    wait = asyncio.sleep
+
+    async def fake_sleep(_delay: float) -> None:
+        await wait(0)
+
+    monkeypatch.setattr("hotaru.tui.context.sdk.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("hotaru.tui.context.sdk._EVENT_STREAM_MAX_RETRIES", 3)
+    sdk.on_event("server.connection", lambda data: states.append(dict(data)))
+
+    await asyncio.wait_for(sdk._run_event_stream(), timeout=0.2)
+
+    assert api.started == 3
+    assert states[-1] == {"state": "exhausted", "attempt": 3}

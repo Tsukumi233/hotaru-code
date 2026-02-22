@@ -230,6 +230,7 @@ class TuiApp(App):
         self._redo_turns: Dict[str, List[List[Dict[str, Any]]]] = {}
         self._runtime_unsubscribers: List[Callable[[], None]] = []
         self._lsp_refresh_task: Optional[asyncio.Task[None]] = None
+        self._server_retry_alert = False
 
         # Load theme preference
         ThemeManager.load_preference()
@@ -634,12 +635,54 @@ class TuiApp(App):
                 return
             self.sync_ctx.remove_question(session_id, request_id)
 
+        def on_server_connection(data: Any) -> None:
+            if not isinstance(data, dict):
+                return
+            state = str(data.get("state") or "")
+            if state == "retrying":
+                try:
+                    attempt = int(data.get("attempt") or 0)
+                except (TypeError, ValueError):
+                    attempt = 0
+                if attempt != 1:
+                    return
+                try:
+                    delay = float(data.get("delay") or 0)
+                except (TypeError, ValueError):
+                    delay = 0
+                self._server_retry_alert = True
+                self.notify(
+                    f"Server connection lost. Retrying in {delay:.2f}s.",
+                    severity="warning",
+                )
+                return
+
+            if state == "connected":
+                if not self._server_retry_alert:
+                    return
+                self._server_retry_alert = False
+                self.notify("Server connection restored.", severity="information")
+                return
+
+            if state != "exhausted":
+                return
+            self._server_retry_alert = False
+            try:
+                attempt = int(data.get("attempt") or 0)
+            except (TypeError, ValueError):
+                attempt = 0
+            self.notify(
+                f"Server unavailable after {attempt} retries.",
+                severity="error",
+            )
+
         self._runtime_unsubscribers.append(Bus.subscribe(LSPUpdated, on_lsp_updated))
         self._runtime_unsubscribers.append(Bus.subscribe(PermissionAsked, on_permission_asked))
         self._runtime_unsubscribers.append(Bus.subscribe(PermissionReplied, on_permission_replied))
         self._runtime_unsubscribers.append(Bus.subscribe(QuestionAsked, on_question_asked))
         self._runtime_unsubscribers.append(Bus.subscribe(QuestionReplied, on_question_resolved))
         self._runtime_unsubscribers.append(Bus.subscribe(QuestionRejected, on_question_resolved))
+        self._runtime_unsubscribers.append(self.sdk_ctx.on_event("server.connection", on_server_connection))
 
         def bind_sdk_event(event_type: str) -> None:
             def on_event(data: Any) -> None:
