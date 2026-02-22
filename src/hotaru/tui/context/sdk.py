@@ -241,10 +241,7 @@ class SDKContext:
         if title:
             payload["title"] = title
 
-        session = await self._api_client.create_session(payload)
-        if "title" not in session:
-            session["title"] = title or "New Session"
-        return session
+        return await self._api_client.create_session(payload)
 
     async def compact_session(
         self,
@@ -269,9 +266,6 @@ class SDKContext:
             if exc.status_code == 404:
                 return None
             raise
-
-        if "title" not in session:
-            session["title"] = "Untitled"
         return session
 
     async def update_session(self, session_id: str, *, title: str | None = None) -> dict[str, Any] | None:
@@ -284,17 +278,10 @@ class SDKContext:
             if exc.status_code == 404:
                 return None
             raise
-
-        if "title" not in session:
-            session["title"] = "Untitled"
         return session
 
     async def list_sessions(self, project_id: str | None = None) -> list[dict[str, Any]]:
-        sessions = await self._api_client.list_sessions(project_id=project_id)
-        for session in sessions:
-            if "title" not in session:
-                session["title"] = "Untitled"
-        return sessions
+        return await self._api_client.list_sessions(project_id=project_id)
 
     async def delete_session(self, session_id: str) -> None:
         await self._api_client.delete_session(session_id)

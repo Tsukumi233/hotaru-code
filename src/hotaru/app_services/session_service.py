@@ -23,6 +23,8 @@ from ..session.message_store import parse_part
 from .errors import NotFoundError
 from .session_payload import structured_messages_to_payload
 
+SESSION_TITLE_DEFAULT = "New Session"
+
 
 def _reject_legacy_fields(payload: dict[str, Any], aliases: dict[str, str]) -> None:
     for legacy_name, canonical_name in aliases.items():
@@ -32,10 +34,19 @@ def _reject_legacy_fields(payload: dict[str, Any], aliases: dict[str, str]) -> N
             )
 
 
+def _session_title(value: object) -> str:
+    if isinstance(value, str):
+        title = value.strip()
+        if title:
+            return title
+    return SESSION_TITLE_DEFAULT
+
+
 def _session_to_dict(session: Any) -> dict[str, Any]:
     return {
         "id": session.id,
         "project_id": session.project_id,
+        "title": _session_title(getattr(session, "title", None)),
         "agent": session.agent,
         "model_id": session.model_id,
         "provider_id": session.provider_id,
@@ -126,11 +137,15 @@ class SessionService:
         agent_name = payload.get("agent") or await Agent.default_agent()
         if not isinstance(agent_name, str) or not agent_name.strip():
             raise ValueError("Field 'agent' must be a non-empty string")
+        title = payload.get("title")
+        if title is not None and not isinstance(title, str):
+            raise ValueError("Field 'title' must be a string")
 
         parent_id = payload.get("parent_id")
 
         session = await Session.create(
             project_id=project_id.strip(),
+            title=title.strip() if isinstance(title, str) else None,
             agent=agent_name.strip(),
             directory=directory,
             model_id=str(model_id),

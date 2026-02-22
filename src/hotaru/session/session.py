@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..core.bus import Bus, BusEvent
 from ..core.id import Identifier
@@ -40,7 +40,7 @@ class SessionInfo(BaseModel):
     id: str
     slug: Optional[str] = None
     project_id: str
-    title: Optional[str] = None
+    title: str = "New Session"
     agent: str = "build"
     model_id: Optional[str] = None
     provider_id: Optional[str] = None
@@ -50,6 +50,15 @@ class SessionInfo(BaseModel):
     share: Optional[SessionShare] = None
 
     model_config = ConfigDict(extra="allow")
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _normalize_title(cls, value: object) -> str:
+        if isinstance(value, str):
+            title = value.strip()
+            if title:
+                return title
+        return "New Session"
 
 
 # Session events
@@ -171,6 +180,7 @@ class Session:
     async def create(
         cls,
         project_id: str,
+        title: Optional[str] = None,
         agent: str = "build",
         directory: Optional[str] = None,
         model_id: Optional[str] = None,
@@ -181,6 +191,7 @@ class Session:
 
         Args:
             project_id: Project ID
+            title: Session title
             agent: Agent name
             directory: Working directory
             model_id: Model ID
@@ -197,6 +208,7 @@ class Session:
             id=session_id,
             slug=session_id,
             project_id=project_id,
+            title=title,
             agent=agent,
             directory=directory,
             model_id=model_id,

@@ -51,6 +51,7 @@ class SessionTimeResponse(BaseModel):
 class SessionResponse(BaseModel):
     id: str
     project_id: str | None = None
+    title: str = "New Session"
     agent: str | None = None
     model_id: str | None = None
     provider_id: str | None = None
@@ -64,6 +65,7 @@ class SessionResponse(BaseModel):
 class SessionCreateRequest(BaseModel):
     project_id: str | None = None
     parent_id: str | None = None
+    title: str | None = None
     agent: str | None = None
     model: str | None = None
     provider_id: str | None = None
