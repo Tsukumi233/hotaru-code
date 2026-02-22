@@ -717,7 +717,7 @@ async def test_resolve_tools_strictifies_mcp_and_structured_schema(
             }
         }
 
-    monkeypatch.setattr("hotaru.session.prompting.ToolRegistry.get_tool_definitions", classmethod(fake_defs))
+    monkeypatch.setattr("hotaru.tool.resolver.ToolRegistry.get_tool_definitions", classmethod(fake_defs))
     monkeypatch.setattr("hotaru.mcp.MCP.tools", classmethod(fake_mcp_tools))
 
     tools = await SessionPrompt.resolve_tools(

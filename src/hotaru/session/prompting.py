@@ -22,7 +22,7 @@ from ..provider import Provider
 from ..provider.provider import ModelNotFoundError, ProcessedModelInfo
 from ..provider.transform import ProviderTransform
 from ..snapshot import SnapshotTracker
-from ..tool.registry import ToolRegistry
+from ..tool.resolver import ToolResolver
 from ..tool.schema import strictify_schema
 from ..util.log import Log
 from .compaction import SessionCompaction
@@ -1086,58 +1086,20 @@ class SessionPrompt:
         model_id: str,
         output_format: Optional[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        tools = await ToolRegistry.get_tool_definitions(
+        agent_info = await Agent.get(agent_name)
+        session = await Session.get(session_id)
+        rules = []
+        if agent_info and agent_info.permission:
+            rules.extend(agent_info.permission)
+        session_rules = getattr(session, "permission", None) if session else None
+        if isinstance(session_rules, list):
+            rules.extend(session_rules)
+        tools = await ToolResolver.resolve(
             caller_agent=agent_name,
             provider_id=provider_id,
             model_id=model_id,
+            permission_rules=rules or None,
         )
-        try:
-            from ..mcp import MCP
-
-            mcp_tools = await MCP.tools()
-            for tool_id, tool_info in mcp_tools.items():
-                schema = dict(tool_info.get("input_schema") or {})
-                schema.setdefault("type", "object")
-                schema = strictify_schema(schema)
-                tools.append(
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": tool_id,
-                            "description": tool_info.get("description", ""),
-                            "parameters": schema,
-                        },
-                    }
-                )
-        except asyncio.CancelledError as e:
-            log.warn("failed to load MCP tools", {"error": str(e)})
-        except Exception as e:
-            log.warn("failed to load MCP tools", {"error": str(e)})
-
-        try:
-            from ..permission import Permission
-
-            agent_info = await Agent.get(agent_name)
-            session = await Session.get(session_id)
-            merged_rules = []
-            if agent_info and agent_info.permission:
-                merged_rules.extend(agent_info.permission)
-            session_rules = getattr(session, "permission", None) if session else None
-            if isinstance(session_rules, list):
-                merged_rules.extend(session_rules)
-
-            if merged_rules:
-                ruleset = Permission.from_config_list(merged_rules)
-                tool_names = [
-                    str(item.get("function", {}).get("name"))
-                    for item in tools
-                    if isinstance(item, dict) and isinstance(item.get("function"), dict)
-                ]
-                disabled = Permission.disabled_tools(tool_names, ruleset)
-                if disabled:
-                    tools = [item for item in tools if item.get("function", {}).get("name") not in disabled]
-        except Exception as e:
-            log.warn("failed to resolve tool permissions", {"error": str(e)})
 
         if output_format and output_format.get("type") == "json_schema":
             schema = dict(output_format.get("schema") or {})

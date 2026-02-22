@@ -492,3 +492,54 @@ async def test_processor_includes_interleaved_reasoning_in_assistant_tool_messag
 
     assistant = next(msg for msg in processor.messages if msg.get("role") == "assistant")
     assert assistant["reasoning_content"] == "plan step"
+
+
+@pytest.mark.anyio
+async def test_processor_routes_unknown_tool_to_resolver_mcp_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    async def fake_mcp_info(cls, tool_id: str):
+        if tool_id != "mcp_demo":
+            return None
+        return {
+            "client": "demo",
+            "name": "echo",
+            "timeout": 30.0,
+        }
+
+    captured: dict[str, object] = {}
+
+    async def fake_exec_mcp(
+        self,
+        tool_id: str,
+        mcp_info: dict,
+        tool_input: dict,
+    ) -> dict:
+        captured["tool_id"] = tool_id
+        captured["mcp_info"] = mcp_info
+        captured["tool_input"] = tool_input
+        return {"output": "ok", "title": "", "metadata": {}}
+
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.session.processor.ToolRegistry.get", lambda _tool_id: None)
+    monkeypatch.setattr("hotaru.session.processor.ToolResolver.mcp_info", classmethod(fake_mcp_info))
+    monkeypatch.setattr(SessionProcessor, "_execute_mcp_tool", fake_exec_mcp)
+
+    processor = SessionProcessor(
+        session_id="ses_mcp_lookup",
+        model_id="model",
+        provider_id="provider",
+        agent="build",
+        cwd="/tmp",
+        worktree="/tmp",
+    )
+
+    result = await processor._execute_tool("mcp_demo", {"query": "hello"})
+
+    assert result["output"] == "ok"
+    assert captured["tool_id"] == "mcp_demo"
+    assert captured["mcp_info"] == {"client": "demo", "name": "echo", "timeout": 30.0}
+    assert captured["tool_input"] == {"query": "hello"}

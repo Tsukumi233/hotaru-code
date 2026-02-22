@@ -13,7 +13,7 @@ from ..question.question import RejectedError as QuestionRejectedError
 from ..provider.transform import ProviderTransform
 from ..tool import ToolContext
 from ..tool.registry import ToolRegistry
-from ..tool.schema import strictify_schema
+from ..tool.resolver import ToolResolver
 from ..util.log import Log
 from .llm import LLM, StreamInput, StreamChunk
 
@@ -304,54 +304,15 @@ class SessionProcessor:
         if tool_definitions is not None:
             effective_tools = list(tool_definitions)
         else:
-            effective_tools: List[Dict[str, Any]] = []
+            effective_tools = []
             if not is_last_step:
-                effective_tools = await ToolRegistry.get_tool_definitions(
+                rules = list(agent_info.permission) if agent_info and agent_info.permission else None
+                effective_tools = await ToolResolver.resolve(
                     caller_agent=self.agent,
                     provider_id=self.provider_id,
                     model_id=self.model_id,
+                    permission_rules=rules,
                 )
-
-            if not is_last_step:
-                try:
-                    from ..mcp import MCP
-
-                    mcp_tools = await MCP.tools()
-                    for tool_id, tool_info in mcp_tools.items():
-                        schema = dict(tool_info.get("input_schema") or {})
-                        schema.setdefault("type", "object")
-                        schema = strictify_schema(schema)
-                        effective_tools.append(
-                            {
-                                "type": "function",
-                                "function": {
-                                    "name": tool_id,
-                                    "description": tool_info.get("description", ""),
-                                    "parameters": schema,
-                                },
-                            }
-                        )
-                except asyncio.CancelledError as e:
-                    # Some MCP client transports may surface connection failures as
-                    # CancelledError. Treat that as MCP unavailable instead of
-                    # cancelling the whole assistant turn.
-                    log.warn("failed to load MCP tools", {"error": str(e)})
-                except Exception as e:
-                    log.warn("failed to load MCP tools", {"error": str(e)})
-
-            if not is_last_step:
-                try:
-                    from ..permission import Permission
-
-                    if agent_info and agent_info.permission:
-                        ruleset = Permission.from_config_list(agent_info.permission)
-                        tool_names = [d["function"]["name"] for d in effective_tools]
-                        disabled = Permission.disabled_tools(tool_names, ruleset)
-                        if disabled:
-                            log.info("filtering disabled tools", {"disabled": list(disabled)})
-                            effective_tools = [d for d in effective_tools if d["function"]["name"] not in disabled]
-                except Exception as e:
-                    log.warn("failed to filter disabled tools", {"error": str(e)})
 
         if is_last_step:
             effective_tools = []
@@ -843,14 +804,9 @@ class SessionProcessor:
 
         tool = ToolRegistry.get(tool_name)
         if not tool:
-            # Check if it's an MCP tool
-            try:
-                from ..mcp import MCP
-                mcp_tools = await MCP.tools()
-                if tool_name in mcp_tools:
-                    return await self._execute_mcp_tool(tool_name, mcp_tools[tool_name], tool_input)
-            except Exception as e:
-                log.error("MCP tool lookup failed", {"tool": tool_name, "error": str(e)})
+            mcp_info = await ToolResolver.mcp_info(tool_name)
+            if mcp_info:
+                return await self._execute_mcp_tool(tool_name, mcp_info, tool_input)
             return {"error": f"Unknown tool: {tool_name}"}
 
         # Load agent + session permission rulesets.
