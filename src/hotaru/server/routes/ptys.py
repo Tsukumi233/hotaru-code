@@ -66,4 +66,4 @@ async def pty_ws(websocket: WebSocket, pty_id: str) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        cleanup()
+        await cleanup()

@@ -13,7 +13,7 @@ import struct
 import subprocess
 import termios
 from dataclasses import dataclass, field
-from typing import Callable, Literal
+from typing import Awaitable, Callable, Literal
 
 from pydantic import BaseModel
 from starlette.websockets import WebSocket
@@ -91,68 +91,85 @@ class _Session:
     closed: bool = False
 
 
-_sessions: dict[str, _Session] = {}
-_sub_counter = 0
-
-
 def _meta(cursor: int) -> bytes:
     """Build a WebSocket control frame: 0x00 + JSON cursor payload."""
     return b"\x00" + json.dumps({"cursor": cursor}).encode()
 
 
-async def _send(session: _Session, ws: WebSocket, data: bytes) -> None:
-    try:
-        await ws.send_bytes(data)
-    except Exception:
-        session.subscribers.pop(ws, None)
+class PtyManager:
+    def __init__(self) -> None:
+        self._sessions: dict[str, _Session] = {}
+        self._lock = asyncio.Lock()
+        self._counter = 0
 
+    async def _send(self, sid: str, ws: WebSocket, data: bytes) -> None:
+        try:
+            await ws.send_bytes(data)
+            return
+        except Exception:
+            pass
+        await self._disconnect(sid, ws)
 
-def _on_read(sid: str) -> None:
-    """Callback for asyncio add_reader — reads PTY output and broadcasts."""
-    session = _sessions.get(sid)
-    if not session or session.closed:
-        return
-    try:
-        data = os.read(session.master_fd, 65536)
-    except OSError:
-        return
-    if not data:
-        return
+    async def _handle_read(self, sid: str) -> None:
+        data = b""
+        sockets: list[WebSocket] = []
+        async with self._lock:
+            session = self._sessions.get(sid)
+            if not session or session.closed:
+                return
+            try:
+                data = os.read(session.master_fd, 65536)
+            except OSError:
+                return
+            if not data:
+                return
 
-    chunk = data.decode("utf-8", errors="replace")
-    session.cursor += len(chunk)
+            chunk = data.decode("utf-8", errors="replace")
+            session.cursor += len(chunk)
+            sockets = list(session.subscribers)
+            session.buffer += chunk
+            if len(session.buffer) > BUFFER_LIMIT:
+                excess = len(session.buffer) - BUFFER_LIMIT
+                session.buffer = session.buffer[excess:]
+                session.buffer_cursor += excess
 
-    for ws in list(session.subscribers):
-        asyncio.ensure_future(_send(session, ws, data))
+        for ws in sockets:
+            asyncio.create_task(self._send(sid, ws, data))
 
-    session.buffer += chunk
-    if len(session.buffer) > BUFFER_LIMIT:
-        excess = len(session.buffer) - BUFFER_LIMIT
-        session.buffer = session.buffer[excess:]
-        session.buffer_cursor += excess
+    def _on_read(self, sid: str) -> None:
+        asyncio.create_task(self._handle_read(sid))
 
+    def _cleanup(self, session: _Session) -> None:
+        """Remove reader and close master fd (idempotent)."""
+        if session.closed:
+            return
+        session.closed = True
+        try:
+            asyncio.get_event_loop().remove_reader(session.master_fd)
+        except Exception:
+            pass
+        try:
+            os.close(session.master_fd)
+        except OSError:
+            pass
 
-def _cleanup(session: _Session) -> None:
-    """Remove reader and close master fd (idempotent)."""
-    if session.closed:
-        return
-    session.closed = True
-    try:
-        asyncio.get_event_loop().remove_reader(session.master_fd)
-    except Exception:
-        pass
-    try:
-        os.close(session.master_fd)
-    except OSError:
-        pass
+    def _resize(self, session: _Session, cols: int, rows: int) -> None:
+        if session.info.status != "running":
+            return
+        fcntl.ioctl(
+            session.master_fd,
+            termios.TIOCSWINSZ,
+            struct.pack("HHHH", rows, cols, 0, 0),
+        )
 
+    async def _disconnect(self, sid: str, ws: WebSocket) -> None:
+        async with self._lock:
+            session = self._sessions.get(sid)
+            if not session:
+                return
+            session.subscribers.pop(ws, None)
 
-# --- Public API ---
-
-class Pty:
-
-    @staticmethod
-    async def create(input: PtyCreateInput) -> PtyInfo:
+    async def create(self, input: PtyCreateInput) -> PtyInfo:
         sid = Identifier.ascending("pty")
         command = input.command or Shell.preferred()
         args = list(input.args or [])
@@ -191,114 +208,161 @@ class Pty:
             pid=process.pid,
         )
         session = _Session(info=info, process=process, master_fd=master)
-        _sessions[sid] = session
+        async with self._lock:
+            self._sessions[sid] = session
 
         loop = asyncio.get_event_loop()
-        loop.add_reader(master, _on_read, sid)
+        loop.add_reader(master, self._on_read, sid)
 
-        async def _wait():
+        async def _wait() -> None:
             code = await loop.run_in_executor(None, process.wait)
             log.info("pty exited", {"id": sid, "exit_code": code})
             session.info.status = "exited"
-            _cleanup(session)
-            for ws in list(session.subscribers):
+            async with self._lock:
+                self._cleanup(session)
+                sockets = list(session.subscribers)
+                session.subscribers.clear()
+                self._sessions.pop(sid, None)
+
+            for ws in sockets:
                 try:
                     await ws.close()
                 except Exception:
                     pass
-            session.subscribers.clear()
             await Bus.publish(Event["Exited"], _ExitProps(id=sid, exit_code=code))
-            _sessions.pop(sid, None)
 
         asyncio.create_task(_wait())
         await Bus.publish(Event["Created"], _InfoProps(info=info.model_dump()))
         return info
 
-    @staticmethod
-    def list() -> list[PtyInfo]:
-        return [s.info for s in _sessions.values()]
+    def list(self) -> list[PtyInfo]:
+        return [s.info for s in self._sessions.values()]
 
-    @staticmethod
-    def get(sid: str) -> PtyInfo | None:
-        session = _sessions.get(sid)
+    def get(self, sid: str) -> PtyInfo | None:
+        session = self._sessions.get(sid)
         return session.info if session else None
 
-    @staticmethod
-    async def update(sid: str, input: PtyUpdateInput) -> PtyInfo | None:
-        session = _sessions.get(sid)
-        if not session:
-            return None
-        if input.title:
-            session.info.title = input.title
-        if input.size:
-            Pty.resize(sid, input.size["cols"], input.size["rows"])
-        await Bus.publish(Event["Updated"], _InfoProps(info=session.info.model_dump()))
+    async def update(self, sid: str, input: PtyUpdateInput) -> PtyInfo | None:
+        async with self._lock:
+            session = self._sessions.get(sid)
+            if not session:
+                return None
+            if input.title:
+                session.info.title = input.title
+            if input.size:
+                self._resize(session, input.size["cols"], input.size["rows"])
+            info = session.info.model_dump()
+        await Bus.publish(Event["Updated"], _InfoProps(info=info))
         return session.info
 
-    @staticmethod
-    async def remove(sid: str) -> None:
-        session = _sessions.get(sid)
-        if not session:
-            return
-        log.info("removing pty", {"id": sid})
-        try:
-            session.process.kill()
-        except ProcessLookupError:
-            pass
-        _cleanup(session)
-        for ws in list(session.subscribers):
+    async def remove(self, sid: str) -> None:
+        async with self._lock:
+            session = self._sessions.get(sid)
+            if not session:
+                return
+            log.info("removing pty", {"id": sid})
+            try:
+                session.process.kill()
+            except ProcessLookupError:
+                pass
+            self._cleanup(session)
+            sockets = list(session.subscribers)
+            session.subscribers.clear()
+            self._sessions.pop(sid, None)
+
+        for ws in sockets:
             try:
                 await ws.close()
             except Exception:
                 pass
-        session.subscribers.clear()
-        _sessions.pop(sid, None)
         await Bus.publish(Event["Deleted"], _IdProps(id=sid))
 
-    @staticmethod
-    def resize(sid: str, cols: int, rows: int) -> None:
-        session = _sessions.get(sid)
-        if session and session.info.status == "running":
-            fcntl.ioctl(
-                session.master_fd,
-                termios.TIOCSWINSZ,
-                struct.pack("HHHH", rows, cols, 0, 0),
-            )
+    def resize(self, sid: str, cols: int, rows: int) -> None:
+        session = self._sessions.get(sid)
+        if not session:
+            return
+        self._resize(session, cols, rows)
 
-    @staticmethod
-    def write(sid: str, data: str) -> None:
-        session = _sessions.get(sid)
+    def write(self, sid: str, data: str) -> None:
+        session = self._sessions.get(sid)
         if session and session.info.status == "running":
             os.write(session.master_fd, data.encode())
 
-    @staticmethod
-    async def connect(sid: str, ws: WebSocket, cursor: int = 0) -> Callable[[], None]:
+    async def connect(self, sid: str, ws: WebSocket, cursor: int = 0) -> Callable[[], Awaitable[None]]:
         """Attach a WebSocket to a PTY session, replay buffer, return cleanup fn."""
-        global _sub_counter
-        session = _sessions.get(sid)
-        if not session:
+        replay = b""
+        end = 0
+        session: _Session | None = None
+        async with self._lock:
+            session = self._sessions.get(sid)
+            if not session:
+                session_missing = True
+            else:
+                session_missing = False
+                log.info("ws connected", {"id": sid})
+                self._counter += 1
+                session.subscribers[ws] = self._counter
+                start = session.buffer_cursor
+                end = session.cursor
+                replay_from = end if cursor == -1 else max(0, cursor)
+                if session.buffer and replay_from < end:
+                    offset = max(0, replay_from - start)
+                    if offset < len(session.buffer):
+                        replay = session.buffer[offset:].encode("utf-8", errors="replace")
+
+        if session_missing:
             await ws.close()
-            return lambda: None
+            async def noop() -> None:
+                return None
 
-        log.info("ws connected", {"id": sid})
-        _sub_counter += 1
-        session.subscribers[ws] = _sub_counter
+            return noop
 
-        start = session.buffer_cursor
-        end = session.cursor
-        replay_from = end if cursor == -1 else max(0, cursor)
-
-        if session.buffer and replay_from < end:
-            offset = max(0, replay_from - start)
-            if offset < len(session.buffer):
-                encoded = session.buffer[offset:].encode("utf-8", errors="replace")
-                for i in range(0, len(encoded), BUFFER_CHUNK):
-                    await ws.send_bytes(encoded[i : i + BUFFER_CHUNK])
-
+        for i in range(0, len(replay), BUFFER_CHUNK):
+            await ws.send_bytes(replay[i : i + BUFFER_CHUNK])
         await ws.send_bytes(_meta(end))
 
-        def cleanup() -> None:
+        async def cleanup() -> None:
             log.info("ws disconnected", {"id": sid})
-            session.subscribers.pop(ws, None)
+            await self._disconnect(sid, ws)
 
         return cleanup
+
+
+_manager = PtyManager()
+
+
+# --- Public API ---
+
+class Pty:
+
+    @staticmethod
+    async def create(input: PtyCreateInput) -> PtyInfo:
+        return await _manager.create(input)
+
+    @staticmethod
+    def list() -> list[PtyInfo]:
+        return _manager.list()
+
+    @staticmethod
+    def get(sid: str) -> PtyInfo | None:
+        return _manager.get(sid)
+
+    @staticmethod
+    async def update(sid: str, input: PtyUpdateInput) -> PtyInfo | None:
+        return await _manager.update(sid, input)
+
+    @staticmethod
+    async def remove(sid: str) -> None:
+        await _manager.remove(sid)
+
+    @staticmethod
+    def resize(sid: str, cols: int, rows: int) -> None:
+        _manager.resize(sid, cols, rows)
+
+    @staticmethod
+    def write(sid: str, data: str) -> None:
+        _manager.write(sid, data)
+
+    @staticmethod
+    async def connect(sid: str, ws: WebSocket, cursor: int = 0) -> Callable[[], Awaitable[None]]:
+        return await _manager.connect(sid, ws, cursor)
