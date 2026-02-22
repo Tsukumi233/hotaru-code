@@ -438,7 +438,7 @@ class ProviderTransform:
         output = getattr(limit, "output", None)
         if isinstance(output, int) and output > 0:
             return min(output, cls.OUTPUT_TOKEN_MAX)
-        return 4096
+        return cls.OUTPUT_TOKEN_MAX
 
     @staticmethod
     def variants(model: Any) -> Dict[str, Dict[str, Any]]:

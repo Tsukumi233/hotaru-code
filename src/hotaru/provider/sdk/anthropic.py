@@ -21,6 +21,7 @@ from anthropic.types import (
     ToolUseBlock,
 )
 
+from ..transform import ProviderTransform
 from ...util.log import Log
 
 log = Log.create({"service": "sdk.anthropic"})
@@ -81,7 +82,7 @@ class AnthropicSDK:
         system: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
-        max_tokens: int = 4096,
+        max_tokens: int = ProviderTransform.OUTPUT_TOKEN_MAX,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         stop_sequences: Optional[List[str]] = None,
@@ -294,7 +295,7 @@ class AnthropicSDK:
         system: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
-        max_tokens: int = 4096,
+        max_tokens: int = ProviderTransform.OUTPUT_TOKEN_MAX,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         stop_sequences: Optional[List[str]] = None,
