@@ -1526,3 +1526,21 @@ def run_tui(
         continue_session=continue_session,
     )
     app.run()
+
+
+async def run_tui_async(
+    session_id: Optional[str] = None,
+    initial_prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    agent: Optional[str] = None,
+    continue_session: bool = False,
+) -> None:
+    """Run the TUI application in an existing event loop."""
+    app = TuiApp(
+        session_id=session_id,
+        initial_prompt=initial_prompt,
+        model=model,
+        agent=agent,
+        continue_session=continue_session,
+    )
+    await app.run_async()

@@ -164,28 +164,25 @@ async def test_send_message_finishes_without_idle_when_status_event_missing(tmp_
 
 
 @pytest.mark.anyio
-async def test_start_event_stream_bootstraps_embedded_server_for_default_client(
+async def test_start_event_stream_does_not_manage_server_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    from hotaru.server.server import DEFAULT_PORT, Server, ServerInfo
+    from hotaru.server.server import Server, ServerInfo
 
-    state: dict[str, ServerInfo | None] = {"info": None}
-    starts: list[tuple[str, int]] = []
+    info = ServerInfo(host="127.0.0.1", port=4096)
+    starts: list[bool] = []
     stops: list[bool] = []
 
     def fake_info(cls):
-        return state["info"]
-
-    async def fake_start(cls, host: str = "127.0.0.1", port: int = DEFAULT_PORT):
-        starts.append((host, port))
-        info = ServerInfo(host=host, port=port)
-        state["info"] = info
         return info
+
+    async def fake_start(cls, host: str = "127.0.0.1", port: int = 4096):
+        starts.append(True)
+        return ServerInfo(host=host, port=port)
 
     async def fake_stop(cls) -> None:
         stops.append(True)
-        state["info"] = None
 
     monkeypatch.setattr(Server, "info", classmethod(fake_info))
     monkeypatch.setattr(Server, "start", classmethod(fake_start))
@@ -196,5 +193,5 @@ async def test_start_event_stream_bootstraps_embedded_server_for_default_client(
     await sdk.start_event_stream()
     await sdk.aclose()
 
-    assert starts == [("127.0.0.1", DEFAULT_PORT)]
-    assert stops == [True]
+    assert starts == []
+    assert stops == []

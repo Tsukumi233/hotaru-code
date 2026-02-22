@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from ...api_client import ApiClientError, HotaruAPIClient
-from ...server.server import DEFAULT_PORT, Server
 from ...util.log import Log
 
 log = Log.create({"service": "tui.context.sdk"})
+_DEFAULT_API_BASE_URL = "http://127.0.0.1:4096"
 
 
 class SDKContext:
@@ -30,36 +30,13 @@ class SDKContext:
         self._api_client = api_client or self._build_default_api_client(self._cwd)
         self._event_task: asyncio.Task[None] | None = None
         self._event_stream_ready = asyncio.Event()
-        self._owns_embedded_server = False
-        self._server_lock = asyncio.Lock()
 
     @staticmethod
     def _build_default_api_client(cwd: str) -> HotaruAPIClient:
-        info = Server.info()
-        base_url = info.url if info else f"http://127.0.0.1:{DEFAULT_PORT}"
         return HotaruAPIClient(
-            base_url=base_url,
+            base_url=_DEFAULT_API_BASE_URL,
             directory=cwd,
         )
-
-    async def _ensure_embedded_server(self) -> None:
-        if not self._owns_api_client:
-            return
-
-        if Server.info() is not None:
-            return
-
-        async with self._server_lock:
-            if Server.info() is not None:
-                return
-            await Server.start(host="127.0.0.1", port=DEFAULT_PORT)
-            self._owns_embedded_server = True
-            try:
-                if hasattr(self._api_client, "aclose"):
-                    await self._api_client.aclose()
-            except Exception:
-                pass
-            self._api_client = self._build_default_api_client(self._cwd)
 
     @property
     def cwd(self) -> str:
@@ -69,9 +46,6 @@ class SDKContext:
         await self.stop_event_stream()
         if self._owns_api_client and hasattr(self._api_client, "aclose"):
             await self._api_client.aclose()
-        if self._owns_embedded_server:
-            self._owns_embedded_server = False
-            await Server.stop()
 
     def _supports_event_stream(self) -> bool:
         return hasattr(self._api_client, "stream_events")
@@ -113,7 +87,6 @@ class SDKContext:
         self._event_task = loop.create_task(self._run_event_stream())
 
     async def start_event_stream(self) -> None:
-        await self._ensure_embedded_server()
         self._ensure_event_stream_started()
         if self._event_task is not None:
             try:
