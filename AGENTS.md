@@ -1,7 +1,86 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 * Use `uv` commands for running and testing, not `python` directly.
 * ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.
 * The default branch in this repo is `master`.
 * Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
+* If you have no idea, read ../opencode project and learn its solution.
+
+## Commands
+
+```bash
+# Install dependencies
+uv sync
+
+# Run the app (TUI mode)
+uv run hotaru
+
+# Run WebUI server (default 127.0.0.1:4096)
+uv run hotaru web
+
+# One-shot run mode
+uv run hotaru run "your prompt"
+
+# Run all tests
+uv run pytest tests
+
+# Run a single test file
+uv run pytest tests/session/test_processor.py
+
+# Run a single test function
+uv run pytest tests/session/test_processor.py::test_function_name -v
+
+# Build package (frontend is built automatically by CI, but locally: cd frontend && npm ci && npm run build)
+uv build
+```
+
+### Frontend (React + Vite)
+
+```bash
+cd frontend
+npm ci
+npm run dev    # Dev server on :5173, proxies /v1 to :4096
+npm run build  # Outputs to src/hotaru/webui/dist
+```
+
+## Architecture
+
+Hotaru Code is an AI coding agent with three interfaces: TUI (Textual), WebUI (React + Starlette/SSE), and one-shot CLI (`hotaru run`).
+
+### Session Loop (core execution path)
+
+`SessionPrompt` (prompting.py) orchestrates the multi-turn loop: message persistence, compaction, structured output, and tool-call dispatch. Each turn, `SessionProcessor` (processor.py) runs a single streaming LLM response via `LLM` (llm.py), executes tool calls through `ToolRegistry`, and returns results. The processor includes doom-loop detection (repeated identical tool failures).
+
+### Provider Abstraction
+
+`Provider` (provider/provider.py) is a registry of AI backends (Anthropic, OpenAI, OpenAI-compatible). `ProviderTransform` (provider/transform.py) normalizes messages, tool-call IDs, and cache hints across providers. SDK wrappers live in `provider/sdk/`.
+
+### Event Bus
+
+`Bus` (core/bus.py) is a type-safe pub/sub system using Pydantic models. Events are defined via `BusEvent.define(name, PropsModel)` and published/subscribed globally. Used by permission, MCP, project, session store, TUI, and server layers.
+
+### Configuration
+
+`ConfigManager` (core/config.py) merges configs from multiple sources (lowest to highest priority): global config dir, project `hotaru.json`/`.hotaru/hotaru.json`, env var `HOTARU_CONFIG_CONTENT`, managed config. Paths resolved via `platformdirs` in `core/global_paths.py`.
+
+### Key Directories
+
+- `src/hotaru/session/` - Session loop, processor, LLM adapter, compaction, message store
+- `src/hotaru/tool/` - 40+ built-in tools and `ToolRegistry`
+- `src/hotaru/provider/` - Provider registry, transform layer, SDK wrappers
+- `src/hotaru/agent/` - Agent registry and markdown agent loading
+- `src/hotaru/permission/` - Permission engine (allow/ask/deny rules)
+- `src/hotaru/mcp/` - MCP client (stdio and HTTP/SSE)
+- `src/hotaru/skill/` - Skill discovery and loading
+- `src/hotaru/core/` - Config, event bus, global paths, context
+- `src/hotaru/server/` - Starlette HTTP/WebSocket server (port 4096)
+- `src/hotaru/tui/` - Textual TUI (app, widgets, screens, dialogs)
+- `src/hotaru/cli/` - Typer CLI entry point and subcommands
+- `src/hotaru/pty/` - PTY session management for WebSocket terminal
+- `frontend/` - React + TypeScript WebUI (builds into `src/hotaru/webui/dist`)
+- `tests/` - Mirrors `src/hotaru/` structure
 
 ## Style Guide
 

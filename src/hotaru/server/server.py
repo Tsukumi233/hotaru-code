@@ -319,6 +319,8 @@ class Server:
         event_type = str(event.get("type") or "")
         if event_type in {"server.connected", "server.heartbeat"}:
             return True
+        if event_type.startswith("pty."):
+            return True
 
         return cls._event_session_id(event) == session_id
 

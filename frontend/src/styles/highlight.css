@@ -1,0 +1,107 @@
+/* highlight.js theme using CSS variables for light/dark support */
+
+.hljs {
+  color: var(--syntax-variable);
+  background: var(--md-code-bg);
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag {
+  color: var(--syntax-keyword);
+  font-weight: 500;
+}
+
+.hljs-string,
+.hljs-template-variable,
+.hljs-addition {
+  color: var(--syntax-string);
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--syntax-number);
+}
+
+.hljs-title,
+.hljs-section {
+  color: var(--syntax-function);
+  font-weight: 500;
+}
+
+.hljs-title.function_ {
+  color: var(--syntax-function);
+}
+
+.hljs-name,
+.hljs-tag {
+  color: var(--syntax-tag);
+}
+
+.hljs-attr {
+  color: var(--syntax-attr);
+}
+
+.hljs-attribute {
+  color: var(--syntax-string);
+}
+
+.hljs-variable,
+.hljs-template-tag {
+  color: var(--syntax-variable);
+}
+
+.hljs-type,
+.hljs-built_in {
+  color: var(--syntax-type);
+}
+
+.hljs-params {
+  color: var(--syntax-variable);
+}
+
+.hljs-regexp {
+  color: var(--syntax-string);
+}
+
+.hljs-meta {
+  color: var(--syntax-comment);
+}
+
+.hljs-deletion {
+  color: var(--error-text);
+  background: var(--error-soft);
+}
+
+.hljs-addition {
+  background: var(--success-soft);
+}
+
+.hljs-selector-class,
+.hljs-selector-id {
+  color: var(--syntax-selector);
+}
+
+.hljs-property {
+  color: var(--syntax-property);
+}
+
+.hljs-operator,
+.hljs-punctuation {
+  color: var(--syntax-punctuation);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 700;
+}

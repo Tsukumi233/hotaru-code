@@ -10,6 +10,8 @@ wheels/
 # Virtual environments
 .venv
 
+.tmp-tsc/
+
 .claude/
 CLAUDE.md
 session-ses*

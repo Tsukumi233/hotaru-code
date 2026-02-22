@@ -23,6 +23,7 @@ dependencies = [
     "textual>=0.50",
     "mcp>=1.0",
     "python-lsp-jsonrpc>=1.1.2",
+    "websockets>=16.0",
 ]
 
 [project.scripts]
