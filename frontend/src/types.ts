@@ -6,6 +6,8 @@ export type Session = {
   id: string;
   title?: string;
   agent?: string;
+  provider_id?: string;
+  model_id?: string;
   time?: SessionTime;
 };
 
@@ -43,6 +45,9 @@ export type Provider = {
 
 export type Agent = {
   name: string;
+  description?: string;
+  mode?: string;
+  hidden?: boolean;
 };
 
 export type Permission = {

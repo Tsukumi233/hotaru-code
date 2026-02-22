@@ -2,7 +2,7 @@
 
 ## Contract
 - `tests/contract/test_openapi_valid.py`
-  - `/v1/event` exposes `session_id` query parameter
+  - `/v1/events` exposes `session_id` query parameter
   - SSE envelope schema remains present
 
 ## Server Integration

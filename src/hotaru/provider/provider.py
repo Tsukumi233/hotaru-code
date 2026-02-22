@@ -344,6 +344,8 @@ class Provider:
         config = await ConfigManager.get()
         disabled = set(config.disabled_providers or [])
         enabled = set(config.enabled_providers) if config.enabled_providers else None
+        configured = set(config.provider.keys()) if config.provider else set()
+        config_only = bool(configured)
 
         def is_allowed(provider_id: str) -> bool:
             if enabled and provider_id not in enabled:
@@ -359,6 +361,8 @@ class Provider:
 
             provider = provider.model_copy()
             provider_config = config.provider.get(provider_id) if config.provider else None
+            if config_only and not provider_config:
+                continue
             if provider_config and provider_config.options:
                 provider.options.update(provider_config.options)
                 base_url = provider_config.options.get("baseURL")

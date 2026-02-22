@@ -39,12 +39,20 @@ class ProviderService:
     """Thin orchestration for provider operations."""
 
     @classmethod
-    async def list(cls) -> list[dict[str, Any]]:
+    async def _reload(cls, cwd: str) -> None:
+        ConfigManager.reset()
+        Provider.reset()
+        await ConfigManager.load(cwd)
+
+    @classmethod
+    async def list(cls, cwd: str) -> list[dict[str, Any]]:
+        await cls._reload(cwd)
         providers = await Provider.list()
         return [_provider_to_dict(provider) for provider in providers.values()]
 
     @classmethod
-    async def list_models(cls, provider_id: str) -> list[dict[str, Any]]:
+    async def list_models(cls, provider_id: str, cwd: str) -> list[dict[str, Any]]:
+        await cls._reload(cwd)
         provider = await Provider.get(provider_id)
         if not provider:
             raise KeyError(f"Provider '{provider_id}' not found")

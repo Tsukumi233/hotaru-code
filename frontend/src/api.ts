@@ -15,59 +15,71 @@ export async function requestJson<T>(path: string, init?: RequestInit): Promise<
 }
 
 export const sessions = {
-  list: (projectId: string) =>
-    requestJson<Session[]>(`/v1/session?project_id=${encodeURIComponent(projectId)}`),
+  list: (projectId?: string) =>
+    requestJson<Session[]>(
+      projectId ? `/v1/sessions?project_id=${encodeURIComponent(projectId)}` : "/v1/sessions"
+    ),
   create: (payload: Record<string, unknown>) =>
-    requestJson<Session>("/v1/session", { method: "POST", body: JSON.stringify(payload) }),
+    requestJson<Session>("/v1/sessions", { method: "POST", body: JSON.stringify(payload) }),
   messages: (id: string) =>
-    requestJson<Array<Record<string, unknown>>>(`/v1/session/${encodeURIComponent(id)}/message`),
+    requestJson<Array<Record<string, unknown>>>(`/v1/sessions/${encodeURIComponent(id)}/messages`),
   send: (id: string, payload: Record<string, unknown>) =>
-    requestJson(`/v1/session/${encodeURIComponent(id)}/message`, {
+    requestJson(`/v1/sessions/${encodeURIComponent(id)}/messages`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
   interrupt: (id: string) =>
-    requestJson(`/v1/session/${encodeURIComponent(id)}/interrupt`, { method: "POST" }),
+    requestJson(`/v1/sessions/${encodeURIComponent(id)}/interrupt`, { method: "POST" }),
 };
 
 export const providers = {
-  list: () => requestJson<Array<Record<string, unknown>>>("/v1/provider"),
+  list: () => requestJson<Array<Record<string, unknown>>>("/v1/providers"),
   models: (id: string) =>
-    requestJson<ProviderModel[]>(`/v1/provider/${encodeURIComponent(id)}/model`),
+    requestJson<ProviderModel[]>(`/v1/providers/${encodeURIComponent(id)}/models`),
 };
 
 export const agents = {
-  list: () => requestJson<Agent[]>("/v1/agent"),
+  list: () => requestJson<Agent[]>("/v1/agents"),
+};
+
+export const preferences = {
+  current: () =>
+    requestJson<{ agent?: string; provider_id?: string; model_id?: string }>("/v1/preferences/current"),
+  update: (payload: { agent?: string; provider_id?: string; model_id?: string }) =>
+    requestJson<{ agent?: string; provider_id?: string; model_id?: string }>("/v1/preferences/current", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
 };
 
 export const permissions = {
-  list: () => requestJson<Permission[]>("/v1/permission"),
+  list: () => requestJson<Permission[]>("/v1/permissions"),
   reply: (id: string, reply: string) =>
-    requestJson(`/v1/permission/${encodeURIComponent(id)}/reply`, {
+    requestJson(`/v1/permissions/${encodeURIComponent(id)}/reply`, {
       method: "POST",
       body: JSON.stringify({ reply }),
     }),
 };
 
 export const questions = {
-  list: () => requestJson<Question[]>("/v1/question"),
+  list: () => requestJson<Question[]>("/v1/questions"),
   reply: (id: string, answers: string[][]) =>
-    requestJson(`/v1/question/${encodeURIComponent(id)}/reply`, {
+    requestJson(`/v1/questions/${encodeURIComponent(id)}/reply`, {
       method: "POST",
       body: JSON.stringify({ answers }),
     }),
   reject: (id: string) =>
-    requestJson(`/v1/question/${encodeURIComponent(id)}/reject`, { method: "POST" }),
+    requestJson(`/v1/questions/${encodeURIComponent(id)}/reject`, { method: "POST" }),
 };
 
 export const pty = {
-  create: () => requestJson<{ id: string }>("/v1/pty", { method: "POST", body: JSON.stringify({}) }),
+  create: () => requestJson<{ id: string }>("/v1/ptys", { method: "POST", body: JSON.stringify({}) }),
   close: (id: string) =>
-    requestJson(`/v1/pty/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {}),
+    requestJson(`/v1/ptys/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {}),
   resize: (id: string, cols: number, rows: number) =>
-    fetch(`/v1/pty/${id}`, {
+    fetch(`/v1/ptys/${id}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cols, rows }),
+      body: JSON.stringify({ size: { cols, rows } }),
     }).catch(() => {}),
 };

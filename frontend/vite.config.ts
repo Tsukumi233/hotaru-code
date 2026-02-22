@@ -11,7 +11,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/v1/pty": {
+      "/v1/ptys": {
         target: "http://127.0.0.1:4096",
         ws: true,
       },

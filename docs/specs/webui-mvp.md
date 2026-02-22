@@ -4,10 +4,10 @@
 Deliver a browser UI that reuses existing `/v1` APIs and provides session/message streaming parity with the current TUI for single-user local usage.
 
 ## In Scope
-- Session list and create flow (`/v1/session`)
-- Session message history (`/v1/session/{id}/message`)
-- Send message and interrupt (`/v1/session/{id}/message`, `/interrupt`)
-- Runtime event stream via SSE (`/v1/event`)
+- Session list and create flow (`/v1/sessions`)
+- Session message history (`/v1/sessions/{session_id}/messages`)
+- Send message and interrupt (`/v1/sessions/{session_id}/messages`, `/interrupt`)
+- Runtime event stream via SSE (`/v1/events`)
 - Pending permission/question list and reply actions
 - Provider/agent selection before sending
 - New CLI entrypoint: `hotaru web`
@@ -20,7 +20,7 @@ Deliver a browser UI that reuses existing `/v1` APIs and provides session/messag
 ## Runtime Contract
 - Web client consumes REST for initial state and mutation.
 - Web client consumes SSE for incremental runtime updates.
-- Server supports optional `session_id` query filter on `/v1/event`.
+- Server supports optional `session_id` query filter on `/v1/events`.
 - SSE envelopes keep current shape: `{type, data, timestamp, session_id?}`.
 
 ## Error Handling

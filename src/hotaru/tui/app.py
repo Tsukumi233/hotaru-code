@@ -454,10 +454,10 @@ class TuiApp(App):
             from .context.local import ModelSelection
 
             # Ensure project context
-            project, _ = await Project.from_directory(self.sdk_ctx.cwd)
+            await Project.from_directory(self.sdk_ctx.cwd)
 
             # Load sessions into SyncContext
-            sessions = await self.sdk_ctx.list_sessions(project_id=project.id)
+            sessions = await self.sdk_ctx.list_sessions()
             session_dicts = []
             for session in sessions:
                 time_data = session.get("time", {}) if isinstance(session.get("time"), dict) else {}
@@ -482,6 +482,7 @@ class TuiApp(App):
             agent_dicts = await self.sdk_ctx.list_agents()
             self.sync_ctx.set_agents(agent_dicts)
             self.local_ctx.update_agents(agent_dicts)
+            preference = await self.sdk_ctx.get_current_preference()
 
             # Initialize model and agent selection
             try:
@@ -499,6 +500,17 @@ class TuiApp(App):
                         log.warning("invalid startup model format", {"model": self.model})
 
                 if selected_model is None:
+                    preferred_provider_id = preference.get("provider_id")
+                    preferred_model_id = preference.get("model_id")
+                    if isinstance(preferred_provider_id, str) and isinstance(preferred_model_id, str):
+                        preferred = ModelSelection(
+                            provider_id=preferred_provider_id,
+                            model_id=preferred_model_id,
+                        )
+                        if self.local_ctx.model.is_available(preferred):
+                            selected_model = preferred
+
+                if selected_model is None:
                     selected_model = self.local_ctx.model.current()
 
                 if selected_model is None:
@@ -514,6 +526,10 @@ class TuiApp(App):
 
             try:
                 default_agent = self.agent
+                if not default_agent:
+                    preferred_agent = preference.get("agent")
+                    if isinstance(preferred_agent, str) and preferred_agent.strip():
+                        default_agent = preferred_agent.strip()
                 if not default_agent and agent_dicts:
                     first_agent = agent_dicts[0]
                     if isinstance(first_agent, dict):
@@ -522,6 +538,8 @@ class TuiApp(App):
                     self.local_ctx.agent.set(default_agent)
             except Exception as e:
                 log.warning("failed to set initial agent", {"error": str(e)})
+
+            await self._persist_current_preference()
 
             await self._refresh_runtime_status()
 
@@ -1194,6 +1212,7 @@ class TuiApp(App):
             return
 
         if self.local_ctx.agent.set(agent_name):
+            self.run_worker(self._persist_current_preference(), exclusive=False)
             self.notify(f"Switched to {agent_name}")
             return
         self.notify(f"Agent '{agent_name}' is unavailable", severity="warning")
@@ -1430,7 +1449,24 @@ class TuiApp(App):
             ModelSelection(provider_id=provider_id, model_id=model_id),
             add_to_recent=True
         )
+        self.run_worker(self._persist_current_preference(), exclusive=False)
         self.notify(f"Switched to {provider_id}/{model_id}")
+
+    async def _persist_current_preference(self) -> None:
+        """Persist current model and agent selection through backend API."""
+        try:
+            payload: dict[str, Any] = {}
+            current = self.local_ctx.model.current()
+            if current:
+                payload["provider_id"] = current.provider_id
+                payload["model_id"] = current.model_id
+            agent = self.local_ctx.agent.current().get("name")
+            if isinstance(agent, str) and agent.strip():
+                payload["agent"] = agent.strip()
+            if payload:
+                await self.sdk_ctx.update_current_preference(payload)
+        except Exception as e:
+            log.warning("failed to persist current preference", {"error": str(e)})
 
     def action_quit(self) -> None:
         """Quit the application."""

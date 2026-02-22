@@ -32,14 +32,14 @@ def test_permission_routes_list_and_reply(monkeypatch) -> None:  # type: ignore[
 
     app = Server._create_app()
     with TestClient(app) as client:
-        listed = client.get("/v1/permission")
+        listed = client.get("/v1/permissions")
         assert listed.status_code == 200
         payload = listed.json()
         assert len(payload) == 1
         assert payload[0]["id"] == "per_1"
         assert payload[0]["tool"] == {"message_id": "msg_1", "call_id": "call_1"}
 
-        replied = client.post("/v1/permission/per_1/reply", json={"reply": "always", "message": "approved"})
+        replied = client.post("/v1/permissions/per_1/reply", json={"reply": "always", "message": "approved"})
         assert replied.status_code == 200
         assert replied.json() is True
 
@@ -84,17 +84,17 @@ def test_question_routes_list_reply_and_reject(monkeypatch) -> None:  # type: ig
 
     app = Server._create_app()
     with TestClient(app) as client:
-        listed = client.get("/v1/question")
+        listed = client.get("/v1/questions")
         assert listed.status_code == 200
         payload = listed.json()
         assert len(payload) == 1
         assert payload[0]["id"] == "q_1"
 
-        replied = client.post("/v1/question/q_1/reply", json={"answers": [["Yes"]]})
+        replied = client.post("/v1/questions/q_1/reply", json={"answers": [["Yes"]]})
         assert replied.status_code == 200
         assert replied.json() is True
 
-        rejected = client.post("/v1/question/q_1/reject")
+        rejected = client.post("/v1/questions/q_1/reject")
         assert rejected.status_code == 200
         assert rejected.json() is True
 

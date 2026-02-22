@@ -49,6 +49,12 @@ class QuestionReplyPayload(TypedDict):
     answers: list[list[str]]
 
 
+class PreferenceCurrentPayload(TypedDict, total=False):
+    agent: str | None
+    provider_id: str
+    model_id: str
+
+
 class StreamEvent(TypedDict, total=False):
     type: str
     data: JSONDict

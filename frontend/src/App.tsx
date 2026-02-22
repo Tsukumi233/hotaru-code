@@ -1,4 +1,4 @@
-import { type FormEvent, useState, useCallback } from "react";
+import { type FormEvent, useState, useCallback, useEffect } from "react";
 import { useTheme } from "./hooks/useTheme";
 import { useProviders } from "./hooks/useProviders";
 import { useSession } from "./hooks/useSession";
@@ -41,9 +41,9 @@ export default function App() {
   });
 
   // Bootstrap on mount
-  useState(() => {
+  useEffect(() => {
     void Promise.all([loadSessions(), loadPending()]);
-  });
+  }, []);
 
   async function onSend(evt: FormEvent): Promise<void> {
     evt.preventDefault();

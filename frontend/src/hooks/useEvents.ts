@@ -12,7 +12,7 @@ type UseEventsProps = {
 export function useEvents({ active, applyEvent, loadPending, setStatus, onPtyRemoved }: UseEventsProps) {
   useEffect(() => {
     if (!active) return;
-    const stream = new EventSource(`/v1/event?session_id=${encodeURIComponent(active)}`);
+    const stream = new EventSource(`/v1/events?session_id=${encodeURIComponent(active)}`);
     stream.onmessage = (msg) => {
       let env: EventEnvelope;
       try {

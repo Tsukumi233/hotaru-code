@@ -1,36 +1,33 @@
-from pathlib import Path
-
-import yaml
+from hotaru.server.server import Server
 
 
 REQUIRED_PATHS: dict[str, set[str]] = {
     "/v1/path": {"get"},
     "/v1/skill": {"get"},
-    "/v1/session": {"get", "post"},
-    "/v1/session/{id}": {"get", "patch"},
-    "/v1/session/{id}/message": {"get", "post"},
-    "/v1/session/{id}/interrupt": {"post"},
-    "/v1/session/{id}/compact": {"post"},
-    "/v1/session/{id}/message:delete": {"post"},
-    "/v1/session/{id}/message:restore": {"post"},
-    "/v1/provider": {"get"},
-    "/v1/provider/{id}/model": {"get"},
-    "/v1/provider/connect": {"post"},
-    "/v1/agent": {"get"},
-    "/v1/permission": {"get"},
-    "/v1/permission/{id}/reply": {"post"},
-    "/v1/question": {"get"},
-    "/v1/question/{id}/reply": {"post"},
-    "/v1/question/{id}/reject": {"post"},
-    "/v1/event": {"get"},
+    "/v1/sessions": {"get", "post"},
+    "/v1/sessions/{session_id}": {"get", "patch", "delete"},
+    "/v1/sessions/{session_id}/messages": {"get", "post", "delete"},
+    "/v1/sessions/{session_id}/interrupt": {"post"},
+    "/v1/sessions/{session_id}/compact": {"post"},
+    "/v1/sessions/{session_id}/messages/restore": {"post"},
+    "/v1/providers": {"get"},
+    "/v1/providers/{provider_id}/models": {"get"},
+    "/v1/providers/connect": {"post"},
+    "/v1/agents": {"get"},
+    "/v1/preferences/current": {"get", "patch"},
+    "/v1/permissions": {"get"},
+    "/v1/permissions/{request_id}/reply": {"post"},
+    "/v1/questions": {"get"},
+    "/v1/questions/{request_id}/reply": {"post"},
+    "/v1/questions/{request_id}/reject": {"post"},
+    "/v1/events": {"get"},
+    "/v1/ptys": {"get", "post"},
+    "/v1/ptys/{pty_id}": {"get", "put", "delete"},
 }
 
 
 def test_openapi_v1_contract_has_required_paths_and_schemas() -> None:
-    spec_path = Path("openapi/hotaru.v1.yaml")
-    assert spec_path.exists(), "openapi/hotaru.v1.yaml must exist"
-
-    spec = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
+    spec = Server._create_app().openapi()
 
     assert spec.get("openapi") == "3.1.0"
 
@@ -45,7 +42,11 @@ def test_openapi_v1_contract_has_required_paths_and_schemas() -> None:
     assert "ErrorResponse" in schemas
     assert "SseEnvelope" in schemas
 
-    error_props = schemas["ErrorResponse"]["properties"]["error"]["properties"]
+    error = schemas["ErrorResponse"]["properties"]["error"]
+    if "$ref" in error:
+        key = str(error["$ref"]).rsplit("/", 1)[-1]
+        error = schemas[key]
+    error_props = error["properties"]
     assert "code" in error_props
     assert "message" in error_props
     assert "details" in error_props
@@ -54,7 +55,7 @@ def test_openapi_v1_contract_has_required_paths_and_schemas() -> None:
     assert {"type", "data", "timestamp"}.issubset(set(sse["properties"].keys()))
     assert set(sse.get("required", [])) == {"type", "data", "timestamp"}
 
-    event_get = paths["/v1/event"]["get"]
+    event_get = paths["/v1/events"]["get"]
     params = event_get.get("parameters", [])
     parameter_components = spec.get("components", {}).get("parameters", {})
     names: set[str | None] = set()

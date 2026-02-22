@@ -9,6 +9,7 @@ import httpx
 
 from .types import (
     PermissionReplyPayload,
+    PreferenceCurrentPayload,
     ProviderConnectPayload,
     QuestionReplyPayload,
     SessionCompactPayload,
@@ -171,7 +172,7 @@ class HotaruAPIClient:
     async def create_session(self, payload: SessionCreatePayload | dict[str, Any] | None = None) -> dict[str, Any]:
         result = await self._request_json(
             "POST",
-            "/v1/session",
+            "/v1/sessions",
             json_body=dict(payload or {}),
         )
         return result if isinstance(result, dict) else {}
@@ -180,7 +181,7 @@ class HotaruAPIClient:
         params = {"project_id": project_id} if project_id else None
         result = await self._request_json(
             "GET",
-            "/v1/session",
+            "/v1/sessions",
             params=params,
         )
         return result if isinstance(result, list) else []
@@ -188,7 +189,7 @@ class HotaruAPIClient:
     async def get_session(self, session_id: str) -> dict[str, Any]:
         result = await self._request_json(
             "GET",
-            f"/v1/session/{session_id}",
+            f"/v1/sessions/{session_id}",
         )
         return result if isinstance(result, dict) else {}
 
@@ -199,7 +200,7 @@ class HotaruAPIClient:
     ) -> dict[str, Any]:
         result = await self._request_json(
             "PATCH",
-            f"/v1/session/{session_id}",
+            f"/v1/sessions/{session_id}",
             json_body=dict(payload or {}),
         )
         return result if isinstance(result, dict) else {}
@@ -207,13 +208,13 @@ class HotaruAPIClient:
     async def delete_session(self, session_id: str) -> None:
         await self._request_json(
             "DELETE",
-            f"/v1/session/{session_id}",
+            f"/v1/sessions/{session_id}",
         )
 
     async def list_messages(self, session_id: str) -> list[dict[str, Any]]:
         result = await self._request_json(
             "GET",
-            f"/v1/session/{session_id}/message",
+            f"/v1/sessions/{session_id}/messages",
         )
         return result if isinstance(result, list) else []
 
@@ -223,8 +224,8 @@ class HotaruAPIClient:
         payload: SessionDeleteMessagesPayload | dict[str, Any],
     ) -> int:
         result = await self._request_json(
-            "POST",
-            f"/v1/session/{session_id}/message:delete",
+            "DELETE",
+            f"/v1/sessions/{session_id}/messages",
             json_body=dict(payload),
         )
         if isinstance(result, dict):
@@ -238,7 +239,7 @@ class HotaruAPIClient:
     ) -> int:
         result = await self._request_json(
             "POST",
-            f"/v1/session/{session_id}/message:restore",
+            f"/v1/sessions/{session_id}/messages/restore",
             json_body=dict(payload),
         )
         if isinstance(result, dict):
@@ -252,7 +253,7 @@ class HotaruAPIClient:
     ) -> dict[str, Any]:
         result = await self._request_json(
             "POST",
-            f"/v1/session/{session_id}/message",
+            f"/v1/sessions/{session_id}/messages",
             json_body=payload,
         )
         return result if isinstance(result, dict) else {}
@@ -260,14 +261,14 @@ class HotaruAPIClient:
     async def interrupt_session(self, session_id: str) -> dict[str, Any]:
         result = await self._request_json(
             "POST",
-            f"/v1/session/{session_id}/interrupt",
+            f"/v1/sessions/{session_id}/interrupt",
         )
         return result if isinstance(result, dict) else {}
 
     async def stream_events(self) -> AsyncIterator[dict[str, Any]]:
         response = await self._stream_request(
             "GET",
-            "/v1/event",
+            "/v1/events",
         )
         try:
             async for event in self._iter_stream_events(response):
@@ -282,7 +283,7 @@ class HotaruAPIClient:
     ) -> dict[str, Any]:
         result = await self._request_json(
             "POST",
-            f"/v1/session/{session_id}/compact",
+            f"/v1/sessions/{session_id}/compact",
             json_body=dict(payload or {}),
         )
         return result if isinstance(result, dict) else {}
@@ -290,14 +291,14 @@ class HotaruAPIClient:
     async def list_providers(self) -> list[dict[str, Any]]:
         result = await self._request_json(
             "GET",
-            "/v1/provider",
+            "/v1/providers",
         )
         return result if isinstance(result, list) else []
 
     async def list_provider_models(self, provider_id: str) -> list[dict[str, Any]]:
         result = await self._request_json(
             "GET",
-            f"/v1/provider/{provider_id}/model",
+            f"/v1/providers/{provider_id}/models",
         )
         return result if isinstance(result, list) else []
 
@@ -305,7 +306,7 @@ class HotaruAPIClient:
         request_payload = self._normalize_provider_connect_payload(dict(payload))
         result = await self._request_json(
             "POST",
-            "/v1/provider/connect",
+            "/v1/providers/connect",
             json_body=request_payload,
         )
         return result if isinstance(result, dict) else {"ok": bool(result)}
@@ -352,14 +353,32 @@ class HotaruAPIClient:
     async def list_agents(self) -> list[dict[str, Any]]:
         result = await self._request_json(
             "GET",
-            "/v1/agent",
+            "/v1/agents",
         )
         return result if isinstance(result, list) else []
+
+    async def get_current_preference(self) -> dict[str, Any]:
+        result = await self._request_json(
+            "GET",
+            "/v1/preferences/current",
+        )
+        return result if isinstance(result, dict) else {}
+
+    async def update_current_preference(
+        self,
+        payload: PreferenceCurrentPayload | dict[str, Any],
+    ) -> dict[str, Any]:
+        result = await self._request_json(
+            "PATCH",
+            "/v1/preferences/current",
+            json_body=dict(payload),
+        )
+        return result if isinstance(result, dict) else {}
 
     async def list_permissions(self) -> list[dict[str, Any]]:
         result = await self._request_json(
             "GET",
-            "/v1/permission",
+            "/v1/permissions",
         )
         return result if isinstance(result, list) else []
 
@@ -374,7 +393,7 @@ class HotaruAPIClient:
             payload["message"] = message
         result = await self._request_json(
             "POST",
-            f"/v1/permission/{request_id}/reply",
+            f"/v1/permissions/{request_id}/reply",
             json_body=payload,
         )
         return bool(result)
@@ -382,7 +401,7 @@ class HotaruAPIClient:
     async def list_questions(self) -> list[dict[str, Any]]:
         result = await self._request_json(
             "GET",
-            "/v1/question",
+            "/v1/questions",
         )
         return result if isinstance(result, list) else []
 
@@ -390,7 +409,7 @@ class HotaruAPIClient:
         payload: QuestionReplyPayload = {"answers": answers}
         result = await self._request_json(
             "POST",
-            f"/v1/question/{request_id}/reply",
+            f"/v1/questions/{request_id}/reply",
             json_body=payload,
         )
         return bool(result)
@@ -398,7 +417,7 @@ class HotaruAPIClient:
     async def reject_question(self, request_id: str) -> bool:
         result = await self._request_json(
             "POST",
-            f"/v1/question/{request_id}/reject",
+            f"/v1/questions/{request_id}/reject",
         )
         return bool(result)
 

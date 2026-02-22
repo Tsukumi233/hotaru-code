@@ -46,7 +46,7 @@ export default function Terminal({ pty, onPersist }: TerminalProps) {
 
     const start = pty.cursor ?? 0;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${location.host}/v1/pty/${pty.id}/connect?cursor=${start}`);
+    const ws = new WebSocket(`${proto}//${location.host}/v1/ptys/${pty.id}/connect?cursor=${start}`);
     ws.binaryType = "arraybuffer";
 
     ws.onmessage = (evt) => {
@@ -73,10 +73,10 @@ export default function Terminal({ pty, onPersist }: TerminalProps) {
     term.onResize(({ cols, rows }) => {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        fetch(`/v1/pty/${pty.id}`, {
+        fetch(`/v1/ptys/${pty.id}`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ cols, rows }),
+          body: JSON.stringify({ size: { cols, rows } }),
         }).catch(() => {});
       }, 100);
     });

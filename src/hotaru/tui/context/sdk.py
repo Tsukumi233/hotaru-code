@@ -467,6 +467,18 @@ class SDKContext:
     async def list_agents(self) -> list[dict[str, Any]]:
         return await self._api_client.list_agents()
 
+    async def get_current_preference(self) -> dict[str, Any]:
+        if not hasattr(self._api_client, "get_current_preference"):
+            return {}
+        result = await self._api_client.get_current_preference()
+        return result if isinstance(result, dict) else {}
+
+    async def update_current_preference(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not hasattr(self._api_client, "update_current_preference"):
+            return {}
+        result = await self._api_client.update_current_preference(payload)
+        return result if isinstance(result, dict) else {}
+
     async def list_permissions(self) -> list[dict[str, Any]]:
         return await self._api_client.list_permissions()
 

@@ -16,7 +16,7 @@ class AgentService:
         return [
             {
                 "name": agent.name,
-                "description": agent.description,
+                "description": str(agent.description or ""),
                 "mode": agent.mode,
                 "hidden": agent.hidden,
             }

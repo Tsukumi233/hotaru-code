@@ -17,7 +17,7 @@ flowchart TB
     subgraph ApiLayer["传输与 API 层"]
         SDKCtx["SDKContext<br/>src/hotaru/tui/context/sdk.py"]
         ApiClient["HotaruAPIClient<br/>src/hotaru/api_client/client.py"]
-        Server["Starlette Server + SSE/WebSocket<br/>src/hotaru/server/server.py"]
+        Server["FastAPI Server + SSE/WebSocket<br/>src/hotaru/server/server.py"]
         AppServices["App Services<br/>src/hotaru/app_services/*"]
         Pty["PTY 服务<br/>src/hotaru/pty/pty.py"]
     end

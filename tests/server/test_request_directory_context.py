@@ -20,7 +20,7 @@ def test_request_directory_prefers_header_over_query(monkeypatch) -> None:  # ty
     app = Server._create_app()
     with TestClient(app) as client:
         response = client.post(
-            "/v1/session",
+            "/v1/sessions",
             params={"directory": "/query/path"},
             headers={"x-hotaru-directory": "/header/path"},
             json={"project_id": "proj_1"},
@@ -42,7 +42,7 @@ def test_request_directory_uses_query_when_header_missing(monkeypatch) -> None: 
     app = Server._create_app()
     with TestClient(app) as client:
         response = client.post(
-            "/v1/session/ses_1/message",
+            "/v1/sessions/ses_1/messages",
             params={"directory": "/query/path"},
             json={"content": "hello"},
         )
@@ -62,7 +62,7 @@ def test_request_directory_falls_back_to_process_cwd(monkeypatch) -> None:  # ty
 
     app = Server._create_app()
     with TestClient(app) as client:
-        response = client.post("/v1/session/ses_1/compact", json={"auto": True})
+        response = client.post("/v1/sessions/ses_1/compact", json={"auto": True})
 
     assert response.status_code == 200
     assert captured["cwd"] == str(Path.cwd())
@@ -81,7 +81,7 @@ def test_request_directory_decodes_percent_encoded_header(monkeypatch) -> None: 
     app = Server._create_app()
     with TestClient(app) as client:
         response = client.post(
-            "/v1/session",
+            "/v1/sessions",
             headers={"x-hotaru-directory": encoded},
             json={"project_id": "proj_1"},
         )
@@ -101,3 +101,25 @@ def test_get_paths_reports_request_directory(monkeypatch) -> None:  # type: igno
     assert response.status_code == 200
     payload = response.json()
     assert payload["cwd"] == "/workspace/one"
+
+
+def test_list_sessions_uses_resolved_directory(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    captured: dict[str, str | None] = {}
+
+    async def fake_list(cls, project_id: str | None, cwd: str):
+        captured["project_id"] = project_id
+        captured["cwd"] = cwd
+        return []
+
+    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.list", classmethod(fake_list))
+
+    app = Server._create_app()
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/sessions",
+            headers={"x-hotaru-directory": "/workspace/two"},
+        )
+
+    assert response.status_code == 200
+    assert captured["project_id"] is None
+    assert captured["cwd"] == "/workspace/two"

@@ -9,6 +9,7 @@ from typing import Any
 
 from ..agent import Agent
 from ..core.bus import Bus
+from ..project import Project
 from ..provider import Provider
 from ..session import (
     Session,
@@ -99,6 +100,17 @@ class SessionService:
         return await Provider.default_model()
 
     @classmethod
+    async def _resolve_project_id(cls, payload: dict[str, Any], cwd: str) -> str:
+        project_id = payload.get("project_id")
+        if project_id is not None:
+            if not isinstance(project_id, str) or not project_id.strip():
+                raise ValueError("Field 'project_id' must be a non-empty string")
+            return project_id.strip()
+
+        project, _ = await Project.from_directory(cwd)
+        return project.id
+
+    @classmethod
     async def create(cls, payload: dict[str, Any], cwd: str) -> dict[str, Any]:
         _reject_legacy_fields(
             payload,
@@ -107,22 +119,19 @@ class SessionService:
                 "parentID": "parent_id",
             },
         )
-        project_id = payload.get("project_id") or "default"
-        if not isinstance(project_id, str) or not project_id.strip():
-            raise ValueError("Field 'project_id' must be a non-empty string")
-
+        directory = str(payload.get("directory") or payload.get("cwd") or cwd)
+        project_id = await cls._resolve_project_id(payload, directory)
         provider_id, model_id = await cls._resolve_model(payload)
         agent_name = payload.get("agent") or await Agent.default_agent()
         if not isinstance(agent_name, str) or not agent_name.strip():
             raise ValueError("Field 'agent' must be a non-empty string")
 
-        directory = payload.get("directory") or payload.get("cwd") or cwd
         parent_id = payload.get("parent_id")
 
         session = await Session.create(
             project_id=project_id.strip(),
             agent=agent_name.strip(),
-            directory=str(directory),
+            directory=directory,
             model_id=str(model_id),
             provider_id=str(provider_id),
             parent_id=str(parent_id) if isinstance(parent_id, str) and parent_id else None,
@@ -130,10 +139,12 @@ class SessionService:
         return _session_to_dict(session)
 
     @classmethod
-    async def list(cls, project_id: str) -> list[dict[str, Any]]:
-        if not project_id:
-            raise ValueError("Query parameter 'project_id' is required")
-        sessions = await Session.list(project_id)
+    async def list(cls, project_id: str | None, cwd: str) -> list[dict[str, Any]]:
+        resolved_project_id = await cls._resolve_project_id(
+            {"project_id": project_id} if project_id is not None else {},
+            cwd,
+        )
+        sessions = await Session.list(resolved_project_id)
         return [_session_to_dict(session) for session in sessions]
 
     @classmethod
@@ -156,6 +167,13 @@ class SessionService:
         if not updated:
             return None
         return _session_to_dict(updated)
+
+    @classmethod
+    async def delete(cls, session_id: str) -> dict[str, bool]:
+        deleted = await Session.delete(session_id)
+        if not deleted:
+            raise KeyError(f"Session '{session_id}' not found")
+        return {"ok": True}
 
     @classmethod
     async def list_messages(cls, session_id: str) -> list[dict[str, Any]]:

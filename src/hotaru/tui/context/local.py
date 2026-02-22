@@ -105,20 +105,23 @@ class AgentState:
 class ModelState:
     """State management for model selection."""
 
-    def __init__(self, providers: List[Dict[str, Any]]) -> None:
+    def __init__(self, providers: List[Dict[str, Any]], *, persist: bool = True) -> None:
         """Initialize model state.
 
         Args:
             providers: List of available providers
+            persist: Whether to persist selections in local state file
         """
         self._providers = providers
+        self._persist = persist
         self._current: Optional[ModelSelection] = None
         self._recent: List[ModelSelection] = []
         self._favorite: List[ModelSelection] = []
         self._per_agent: Dict[str, ModelSelection] = {}
         self._listeners: List[Callable[[Optional[ModelSelection]], None]] = []
         self._path = Path(GlobalPath.state()) / "model.json"
-        self._load()
+        if self._persist:
+            self._load()
         self._ensure_current()
 
     def _is_available(self, model: ModelSelection) -> bool:
@@ -172,6 +175,8 @@ class ModelState:
 
     def _save(self) -> None:
         """Save model state to disk."""
+        if not self._persist:
+            return
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._path, "w", encoding="utf-8") as f:
@@ -345,15 +350,20 @@ class LocalContext:
             providers: Available providers
         """
         self.agent = AgentState(agents or [{"name": "build"}])
-        self.model = ModelState(providers or [])
+        self.model = ModelState(providers or [], persist=False)
 
     def update_agents(self, agents: List[Dict[str, Any]]) -> None:
         """Update available agents."""
+        current = self.agent.current().get("name", "build")
         self.agent = AgentState(agents)
+        self.agent.set(current)
 
     def update_providers(self, providers: List[Dict[str, Any]]) -> None:
         """Update available providers."""
-        self.model = ModelState(providers)
+        current = self.model.current()
+        self.model = ModelState(providers, persist=False)
+        if current and self.model.is_available(current):
+            self.model.set(current, add_to_recent=False)
 
 
 # Context variable

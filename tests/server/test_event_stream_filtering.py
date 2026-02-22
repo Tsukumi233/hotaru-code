@@ -26,7 +26,7 @@ def test_v1_event_stream_filters_by_session_id(monkeypatch) -> None:  # type: ig
 
     app = Server._create_app()
     with TestClient(app) as client:
-        with client.stream("GET", "/v1/event", params={"session_id": "session_1"}) as response:
+        with client.stream("GET", "/v1/events", params={"session_id": "session_1"}) as response:
             assert response.status_code == 200
             events = _decode_sse(response)
 
@@ -44,7 +44,7 @@ def test_v1_event_stream_without_session_filter_returns_all(monkeypatch) -> None
 
     app = Server._create_app()
     with TestClient(app) as client:
-        with client.stream("GET", "/v1/event") as response:
+        with client.stream("GET", "/v1/events") as response:
             assert response.status_code == 200
             events = _decode_sse(response)
 

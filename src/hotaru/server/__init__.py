@@ -20,12 +20,12 @@ API Endpoints:
     GET /web/{path} - WebUI static assets
     GET /v1/path - Get path information
     GET /v1/skill - List skills
-    GET /v1/provider - List providers
-    GET /v1/provider/{id}/model - List models for a provider
-    GET /v1/agent - List agents
-    GET /v1/session - List sessions
-    GET /v1/session/{id} - Get session details
-    GET /v1/event - SSE event stream
+    GET /v1/providers - List providers
+    GET /v1/providers/{provider_id}/models - List models for a provider
+    GET /v1/agents - List agents
+    GET /v1/sessions - List sessions
+    GET /v1/sessions/{session_id} - Get session details
+    GET /v1/events - SSE event stream
 """
 
 from .server import Server, ServerInfo

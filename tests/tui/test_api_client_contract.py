@@ -19,51 +19,55 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
             directory_headers.append(request.headers.get("x-hotaru-directory", ""))
         route = (request.method, request.url.path)
 
-        if route == ("POST", "/v1/session"):
+        if route == ("POST", "/v1/sessions"):
             return httpx.Response(200, json={"id": "session_1"})
-        if route == ("GET", "/v1/session"):
+        if route == ("GET", "/v1/sessions"):
             return httpx.Response(200, json=[{"id": "session_1"}])
-        if route == ("GET", "/v1/session/session_1"):
+        if route == ("GET", "/v1/sessions/session_1"):
             return httpx.Response(200, json={"id": "session_1"})
-        if route == ("PATCH", "/v1/session/session_1"):
+        if route == ("PATCH", "/v1/sessions/session_1"):
             return httpx.Response(200, json={"id": "session_1", "title": "Renamed"})
-        if route == ("GET", "/v1/session/session_1/message"):
+        if route == ("GET", "/v1/sessions/session_1/messages"):
             return httpx.Response(200, json=[{"id": "message_1"}])
-        if route == ("POST", "/v1/session/session_1/message:delete"):
+        if route == ("DELETE", "/v1/sessions/session_1/messages"):
             return httpx.Response(200, json={"deleted": 1})
-        if route == ("POST", "/v1/session/session_1/message:restore"):
+        if route == ("POST", "/v1/sessions/session_1/messages/restore"):
             return httpx.Response(200, json={"restored": 1})
-        if route == ("POST", "/v1/session/session_1/message"):
+        if route == ("POST", "/v1/sessions/session_1/messages"):
             return httpx.Response(200, json={"ok": True, "assistant_message_id": "message_1", "status": "stop"})
-        if route == ("POST", "/v1/session/session_1/interrupt"):
+        if route == ("POST", "/v1/sessions/session_1/interrupt"):
             return httpx.Response(200, json={"ok": True, "interrupted": True})
-        if route == ("POST", "/v1/session/session_1/compact"):
+        if route == ("POST", "/v1/sessions/session_1/compact"):
             return httpx.Response(200, json={"ok": True})
         if route == ("GET", "/v1/path"):
             return httpx.Response(200, json={"home": "/tmp", "state": "/tmp", "config": "/tmp", "cwd": "/tmp"})
-        if route == ("GET", "/v1/event"):
+        if route == ("GET", "/v1/events"):
             return httpx.Response(
                 200,
                 text=event_payload,
                 headers={"content-type": "text/event-stream"},
             )
-        if route == ("GET", "/v1/provider"):
+        if route == ("GET", "/v1/providers"):
             return httpx.Response(200, json=[{"id": "openai", "name": "OpenAI", "models": {}}])
-        if route == ("GET", "/v1/provider/openai/model"):
+        if route == ("GET", "/v1/providers/openai/models"):
             return httpx.Response(200, json=[{"id": "gpt-5", "name": "GPT-5"}])
-        if route == ("POST", "/v1/provider/connect"):
+        if route == ("POST", "/v1/providers/connect"):
             return httpx.Response(200, json={"ok": True})
-        if route == ("GET", "/v1/agent"):
+        if route == ("GET", "/v1/agents"):
             return httpx.Response(200, json=[{"name": "build", "mode": "primary"}])
-        if route == ("GET", "/v1/permission"):
+        if route == ("GET", "/v1/preferences/current"):
+            return httpx.Response(200, json={"agent": "build", "provider_id": "openai", "model_id": "gpt-5"})
+        if route == ("PATCH", "/v1/preferences/current"):
+            return httpx.Response(200, json={"agent": "build", "provider_id": "openai", "model_id": "gpt-5"})
+        if route == ("GET", "/v1/permissions"):
             return httpx.Response(200, json=[{"id": "perm_1"}])
-        if route == ("POST", "/v1/permission/perm_1/reply"):
+        if route == ("POST", "/v1/permissions/perm_1/reply"):
             return httpx.Response(200, json=True)
-        if route == ("GET", "/v1/question"):
+        if route == ("GET", "/v1/questions"):
             return httpx.Response(200, json=[{"id": "question_1"}])
-        if route == ("POST", "/v1/question/question_1/reply"):
+        if route == ("POST", "/v1/questions/question_1/reply"):
             return httpx.Response(200, json=True)
-        if route == ("POST", "/v1/question/question_1/reject"):
+        if route == ("POST", "/v1/questions/question_1/reject"):
             return httpx.Response(200, json=True)
         return httpx.Response(404, json={"error": "unexpected route"})
 
@@ -98,6 +102,8 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
         }
     )
     await client.list_agents()
+    await client.get_current_preference()
+    await client.update_current_preference({"agent": "build", "provider_id": "openai", "model_id": "gpt-5"})
     await client.list_permissions()
     await client.reply_permission("perm_1", "once")
     await client.list_questions()
@@ -109,27 +115,29 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     assert [evt["type"] for evt in global_events] == ["server.connected"]
     assert all(value == "/tmp/workspace" for value in directory_headers)
     assert {
-        ("POST", "/v1/session"),
-        ("GET", "/v1/session"),
-        ("GET", "/v1/session/session_1"),
-        ("PATCH", "/v1/session/session_1"),
-        ("GET", "/v1/session/session_1/message"),
-        ("POST", "/v1/session/session_1/message:delete"),
-        ("POST", "/v1/session/session_1/message:restore"),
-        ("POST", "/v1/session/session_1/message"),
-        ("POST", "/v1/session/session_1/interrupt"),
-        ("POST", "/v1/session/session_1/compact"),
+        ("POST", "/v1/sessions"),
+        ("GET", "/v1/sessions"),
+        ("GET", "/v1/sessions/session_1"),
+        ("PATCH", "/v1/sessions/session_1"),
+        ("GET", "/v1/sessions/session_1/messages"),
+        ("DELETE", "/v1/sessions/session_1/messages"),
+        ("POST", "/v1/sessions/session_1/messages/restore"),
+        ("POST", "/v1/sessions/session_1/messages"),
+        ("POST", "/v1/sessions/session_1/interrupt"),
+        ("POST", "/v1/sessions/session_1/compact"),
         ("GET", "/v1/path"),
-        ("GET", "/v1/event"),
-        ("GET", "/v1/provider"),
-        ("GET", "/v1/provider/openai/model"),
-        ("POST", "/v1/provider/connect"),
-        ("GET", "/v1/agent"),
-        ("GET", "/v1/permission"),
-        ("POST", "/v1/permission/perm_1/reply"),
-        ("GET", "/v1/question"),
-        ("POST", "/v1/question/question_1/reply"),
-        ("POST", "/v1/question/question_1/reject"),
+        ("GET", "/v1/events"),
+        ("GET", "/v1/providers"),
+        ("GET", "/v1/providers/openai/models"),
+        ("POST", "/v1/providers/connect"),
+        ("GET", "/v1/agents"),
+        ("GET", "/v1/preferences/current"),
+        ("PATCH", "/v1/preferences/current"),
+        ("GET", "/v1/permissions"),
+        ("POST", "/v1/permissions/perm_1/reply"),
+        ("GET", "/v1/questions"),
+        ("POST", "/v1/questions/question_1/reply"),
+        ("POST", "/v1/questions/question_1/reject"),
     }.issubset(set(calls))
 
 
@@ -139,7 +147,7 @@ async def test_api_client_does_not_fallback_to_legacy_paths() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append((request.method, request.url.path))
-        if request.url.path == "/v1/provider":
+        if request.url.path == "/v1/providers":
             return httpx.Response(404, json={"error": "missing"})
         return httpx.Response(404, json={"error": "unexpected route"})
 
@@ -151,7 +159,7 @@ async def test_api_client_does_not_fallback_to_legacy_paths() -> None:
         await client.list_providers()
     await client.aclose()
 
-    assert calls == [("GET", "/v1/provider")]
+    assert calls == [("GET", "/v1/providers")]
 
 
 @pytest.mark.anyio
@@ -159,7 +167,7 @@ async def test_connect_provider_does_not_normalize_legacy_camel_case_fields() ->
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1/provider/connect":
+        if request.url.path == "/v1/providers/connect":
             captured["body"] = json.loads(request.content.decode("utf-8"))
             return httpx.Response(400, json={"error": {"message": "bad request"}})
         return httpx.Response(404, json={"error": "unexpected route"})
