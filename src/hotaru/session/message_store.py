@@ -8,13 +8,12 @@ Storage is implemented in :mod:`hotaru.session.session`.
 """
 
 from __future__ import annotations
-
-import json
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from ..provider.transform import ProviderTransform
 
 Role = Literal["user", "assistant", "tool", "system"]
 FinishReason = Literal["stop", "tool-calls", "length", "content_filter", "unknown"]
@@ -191,29 +190,6 @@ class WithParts:
     parts: List[Part]
 
 
-_COMPACTION_USER_TEXT = "What did we do so far?"
-_SUBTASK_USER_TEXT = "The following tool was executed by the user"
-_INTERRUPTED_TOOL_ERROR = "[Tool execution was interrupted]"
-_COMPACTED_TOOL_RESULT = "[Old tool result content cleared]"
-_REASONING_TEXT_FIELD = "reasoning_text"
-
-
-def _openai_text_from_parts(parts: Sequence[Part]) -> str:
-    chunks: List[str] = []
-    for part in parts:
-        if isinstance(part, TextPart) and not part.ignored:
-            chunks.append(part.text)
-    return "".join(chunks)
-
-
-def _reasoning_text_from_parts(parts: Sequence[Part]) -> str:
-    chunks: List[str] = []
-    for part in parts:
-        if isinstance(part, ReasoningPart) and part.text:
-            chunks.append(part.text)
-    return "".join(chunks)
-
-
 def to_openai_messages(
     messages: Iterable[WithParts],
     *,
@@ -225,89 +201,10 @@ def to_openai_messages(
     For Anthropic, convert with a dedicated transform.
     """
 
-    out: List[Dict[str, Any]] = []
-    for msg in messages:
-        role = msg.info.role
-        if role == "user":
-            text = _openai_text_from_parts(msg.parts)
-            if any(isinstance(part, CompactionPart) for part in msg.parts):
-                text = f"{text}\n\n{_COMPACTION_USER_TEXT}" if text else _COMPACTION_USER_TEXT
-            if any(isinstance(part, SubtaskPart) for part in msg.parts):
-                text = f"{text}\n\n{_SUBTASK_USER_TEXT}" if text else _SUBTASK_USER_TEXT
-            if text:
-                out.append({"role": "user", "content": text})
-            continue
-
-        if role == "assistant":
-            content = _openai_text_from_parts(msg.parts) or None
-            assistant: Dict[str, Any] = {"role": "assistant", "content": content}
-            reasoning_text = _reasoning_text_from_parts(msg.parts)
-            if reasoning_text:
-                assistant[_REASONING_TEXT_FIELD] = reasoning_text
-                if interleaved_field:
-                    assistant[interleaved_field] = reasoning_text
-
-            # Represent tool calls as OpenAI tool_calls field (if any tool parts exist).
-            tool_calls: List[Dict[str, Any]] = []
-            tool_results: List[Dict[str, Any]] = []
-            for part in msg.parts:
-                if not isinstance(part, ToolPart):
-                    continue
-                if part.state.status in {"pending", "running", "completed", "error"}:
-                    tool_calls.append(
-                        {
-                            "id": part.call_id,
-                            "type": "function",
-                            "function": {
-                                "name": part.tool,
-                                "arguments": part.state.raw or json.dumps(part.state.input or {}),
-                            },
-                        }
-                    )
-                    if part.state.status == "completed":
-                        output_text = (
-                            _COMPACTED_TOOL_RESULT
-                            if part.state.time.compacted
-                            else (part.state.output or "")
-                        )
-                        tool_results.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": part.call_id,
-                                "content": output_text,
-                            }
-                        )
-                    elif part.state.status == "error":
-                        tool_results.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": part.call_id,
-                                "content": part.state.error or "",
-                            }
-                        )
-                    else:
-                        # Prevent dangling tool calls on providers that require
-                        # each tool call to have a corresponding tool result.
-                        tool_results.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": part.call_id,
-                                "content": _INTERRUPTED_TOOL_ERROR,
-                            }
-                        )
-
-            if tool_calls:
-                assistant["tool_calls"] = tool_calls
-                # Ensure interleaved field is present for tool-call messages
-                if interleaved_field and interleaved_field not in assistant:
-                    assistant[interleaved_field] = ""
-            if assistant["content"] is not None or tool_calls:
-                out.append(assistant)
-                out.extend(tool_results)
-            continue
-
-        # system/tool roles are not stored as MessageInfo role today; ignore.
-    return out
+    return ProviderTransform.from_structured_messages(
+        messages,
+        interleaved_field=interleaved_field,
+    )
 
 
 def to_model_messages(

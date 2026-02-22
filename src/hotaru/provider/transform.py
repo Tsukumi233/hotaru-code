@@ -13,6 +13,11 @@ from typing import Any, Dict, Iterable, List, Optional
 
 _EMPTY_ASSISTANT_PLACEHOLDER = "Done."
 _REASONING_TEXT_FIELD = "reasoning_text"
+_TOOL_ERROR = "Tool execution failed"
+_INTERRUPTED_TOOL_ERROR = "[Tool execution was interrupted]"
+_COMPACTED_TOOL_RESULT = "[Old tool result content cleared]"
+_COMPACTION_USER_TEXT = "What did we do so far?"
+_SUBTASK_USER_TEXT = "The following tool was executed by the user"
 
 
 class ProviderTransform:
@@ -62,6 +67,160 @@ class ProviderTransform:
             except Exception:
                 return {}
         return {}
+
+    @staticmethod
+    def assistant_tool_message(
+        *,
+        text: str,
+        tool_calls: Iterable[Dict[str, Any]],
+        reasoning_text: str = "",
+    ) -> Dict[str, Any]:
+        calls: List[Dict[str, Any]] = []
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id") or "")
+            if not call_id:
+                continue
+            fn = call.get("function")
+            if isinstance(fn, dict):
+                name = str(fn.get("name") or "")
+                arguments = str(fn.get("arguments") or "{}")
+            else:
+                name = str(call.get("name") or "")
+                arguments = json.dumps(call.get("input") or {})
+            if not name:
+                continue
+            calls.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": arguments},
+                }
+            )
+
+        msg: Dict[str, Any] = {
+            "role": "assistant",
+            "content": text if text else None,
+            "tool_calls": calls,
+        }
+        if reasoning_text:
+            msg[_REASONING_TEXT_FIELD] = reasoning_text
+        return msg
+
+    @staticmethod
+    def tool_result_message(
+        *,
+        tool_call_id: str,
+        status: str,
+        output: Optional[str],
+        error: Optional[str],
+        compacted: bool = False,
+        error_fallback: str = _TOOL_ERROR,
+        interrupted_text: str = _INTERRUPTED_TOOL_ERROR,
+    ) -> Dict[str, Any]:
+        if status == "completed":
+            content = _COMPACTED_TOOL_RESULT if compacted else (output or "")
+        elif status == "error":
+            content = error or error_fallback
+        else:
+            content = interrupted_text
+
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content,
+        }
+
+    @classmethod
+    def from_structured_messages(
+        cls,
+        messages: Iterable[Any],
+        *,
+        interleaved_field: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for msg in messages:
+            info = getattr(msg, "info", None)
+            role = getattr(info, "role", None)
+            parts = list(getattr(msg, "parts", []) or [])
+
+            if role == "user":
+                text = "".join(
+                    str(getattr(part, "text", ""))
+                    for part in parts
+                    if str(getattr(part, "type", "")) == "text" and not bool(getattr(part, "ignored", False))
+                )
+                if any(str(getattr(part, "type", "")) == "compaction" for part in parts):
+                    text = f"{text}\n\n{_COMPACTION_USER_TEXT}" if text else _COMPACTION_USER_TEXT
+                if any(str(getattr(part, "type", "")) == "subtask" for part in parts):
+                    text = f"{text}\n\n{_SUBTASK_USER_TEXT}" if text else _SUBTASK_USER_TEXT
+                if text:
+                    out.append({"role": "user", "content": text})
+                continue
+
+            if role != "assistant":
+                continue
+
+            content = "".join(
+                str(getattr(part, "text", ""))
+                for part in parts
+                if str(getattr(part, "type", "")) == "text" and not bool(getattr(part, "ignored", False))
+            )
+            reasoning_text = "".join(
+                str(getattr(part, "text", ""))
+                for part in parts
+                if str(getattr(part, "type", "")) == "reasoning" and str(getattr(part, "text", ""))
+            )
+
+            calls: List[Dict[str, Any]] = []
+            results: List[Dict[str, Any]] = []
+            for part in parts:
+                if str(getattr(part, "type", "")) != "tool":
+                    continue
+                call_id = str(getattr(part, "call_id", "") or "")
+                name = str(getattr(part, "tool", "") or "")
+                state = getattr(part, "state", None)
+                status = str(getattr(state, "status", "") or "")
+                if not call_id or not name or not state:
+                    continue
+                raw = getattr(state, "raw", "")
+                data = getattr(state, "input", {}) or {}
+                calls.append(
+                    {
+                        "id": call_id,
+                        "name": name,
+                        "input": data,
+                        "function": {"name": name, "arguments": raw or json.dumps(data)},
+                    }
+                )
+                compacted = bool(getattr(getattr(state, "time", None), "compacted", None))
+                results.append(
+                    cls.tool_result_message(
+                        tool_call_id=call_id,
+                        status=status,
+                        output=getattr(state, "output", None),
+                        error=getattr(state, "error", None),
+                        compacted=compacted,
+                        error_fallback="",
+                    )
+                )
+
+            assistant = cls.assistant_tool_message(
+                text=content,
+                tool_calls=calls,
+                reasoning_text=reasoning_text,
+            )
+            if interleaved_field and reasoning_text:
+                assistant[interleaved_field] = reasoning_text
+            if interleaved_field and calls and interleaved_field not in assistant:
+                assistant[interleaved_field] = ""
+            if assistant.get("content") is None and not calls:
+                continue
+            out.append(assistant)
+            out.extend(results)
+
+        return out
 
     @staticmethod
     def normalize_tool_call_id(
