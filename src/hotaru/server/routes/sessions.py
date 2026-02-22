@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import Body, Depends, Query
 
 from ...app_services import SessionService
 from ...app_services.errors import NotFoundError
@@ -21,98 +21,94 @@ from ..schemas import (
     SessionRestoreMessagesResponse,
     SessionUpdateRequest,
 )
+from .crud import crud_router, many, one
 
-router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 
-
-@router.post("", response_model=SessionResponse)
 async def create_session(
     payload: SessionCreateRequest | None = Body(default=None),
     cwd: str = Depends(resolve_request_directory),
-) -> SessionResponse:
-    result = await SessionService.create((payload.model_dump(exclude_none=True) if payload else {}), cwd)
-    return SessionResponse.model_validate(result)
+) -> dict[str, object]:
+    return await SessionService.create((payload.model_dump(exclude_none=True) if payload else {}), cwd)
 
 
-@router.get("", response_model=list[SessionResponse])
 async def list_sessions(
     project_id: str | None = Query(default=None),
     cwd: str = Depends(resolve_request_directory),
-) -> list[SessionResponse]:
-    result = await SessionService.list(project_id, cwd)
-    return [SessionResponse.model_validate(item) for item in result]
+) -> list[dict[str, object]]:
+    return await SessionService.list(project_id, cwd)
 
 
-@router.get("/{session_id}", response_model=SessionResponse)
-async def get_session(session_id: str) -> SessionResponse:
-    result = await SessionService.get(session_id)
-    if not result:
+async def get_session(session_id: str) -> dict[str, object]:
+    if not (item := await SessionService.get(session_id)):
         raise NotFoundError("Session", session_id)
-    return SessionResponse.model_validate(result)
+    return item
 
 
-@router.patch("/{session_id}", response_model=SessionResponse)
 async def update_session(
     session_id: str,
     payload: SessionUpdateRequest = Body(...),
-) -> SessionResponse:
-    result = await SessionService.update(session_id, payload.model_dump(exclude_none=True))
-    if not result:
+) -> dict[str, object]:
+    if not (item := await SessionService.update(session_id, payload.model_dump(exclude_none=True))):
         raise NotFoundError("Session", session_id)
-    return SessionResponse.model_validate(result)
+    return item
 
 
-@router.delete("/{session_id}", response_model=SessionDeleteResponse)
-async def delete_session(session_id: str) -> SessionDeleteResponse:
-    result = await SessionService.delete(session_id)
-    return SessionDeleteResponse.model_validate(result)
+async def delete_session(session_id: str) -> dict[str, object]:
+    return await SessionService.delete(session_id)
 
 
-@router.get("/{session_id}/messages", response_model=list[SessionListMessageResponse])
-async def list_messages(session_id: str) -> list[SessionListMessageResponse]:
-    result = await SessionService.list_messages(session_id)
-    return [SessionListMessageResponse.model_validate(item) for item in result]
+async def list_messages(session_id: str) -> list[dict[str, object]]:
+    return await SessionService.list_messages(session_id)
 
 
-@router.post("/{session_id}/messages", response_model=SessionMessageResponse)
 async def message_session(
     session_id: str,
     payload: SessionMessageRequest = Body(...),
     cwd: str = Depends(resolve_request_directory),
-) -> SessionMessageResponse:
-    result = await SessionService.message(session_id, payload.model_dump(exclude_none=True), cwd)
-    return SessionMessageResponse.model_validate(result)
+) -> dict[str, object]:
+    return await SessionService.message(session_id, payload.model_dump(exclude_none=True), cwd)
 
 
-@router.post("/{session_id}/interrupt", response_model=SessionMessageResponse)
-async def interrupt_session(session_id: str) -> SessionMessageResponse:
-    result = await SessionService.interrupt(session_id)
-    return SessionMessageResponse.model_validate(result)
+async def interrupt_session(session_id: str) -> dict[str, object]:
+    return await SessionService.interrupt(session_id)
 
 
-@router.post("/{session_id}/compact", response_model=SessionMessageResponse)
 async def compact_session(
     session_id: str,
     payload: SessionCompactRequest | None = Body(default=None),
     cwd: str = Depends(resolve_request_directory),
-) -> SessionMessageResponse:
-    result = await SessionService.compact(session_id, (payload.model_dump(exclude_none=True) if payload else {}), cwd)
-    return SessionMessageResponse.model_validate(result)
+) -> dict[str, object]:
+    return await SessionService.compact(session_id, (payload.model_dump(exclude_none=True) if payload else {}), cwd)
 
 
-@router.delete("/{session_id}/messages", response_model=SessionDeleteMessagesResponse)
 async def delete_messages(
     session_id: str,
     payload: SessionDeleteMessagesRequest = Body(...),
-) -> SessionDeleteMessagesResponse:
-    result = await SessionService.delete_messages(session_id, payload.model_dump(exclude_none=True))
-    return SessionDeleteMessagesResponse.model_validate(result)
+) -> dict[str, object]:
+    return await SessionService.delete_messages(session_id, payload.model_dump(exclude_none=True))
 
 
-@router.post("/{session_id}/messages/restore", response_model=SessionRestoreMessagesResponse)
 async def restore_messages(
     session_id: str,
     payload: SessionRestoreMessagesRequest = Body(...),
-) -> SessionRestoreMessagesResponse:
-    result = await SessionService.restore_messages(session_id, payload.model_dump(exclude_none=True))
-    return SessionRestoreMessagesResponse.model_validate(result)
+) -> dict[str, object]:
+    return await SessionService.restore_messages(session_id, payload.model_dump(exclude_none=True))
+
+
+router = crud_router(
+    prefix="/v1/sessions",
+    tags=["sessions"],
+    routes=[
+        one("POST", "", SessionResponse, create_session),
+        many("GET", "", SessionResponse, list_sessions),
+        one("GET", "/{session_id}", SessionResponse, get_session),
+        one("PATCH", "/{session_id}", SessionResponse, update_session),
+        one("DELETE", "/{session_id}", SessionDeleteResponse, delete_session),
+        many("GET", "/{session_id}/messages", SessionListMessageResponse, list_messages),
+        one("POST", "/{session_id}/messages", SessionMessageResponse, message_session),
+        one("POST", "/{session_id}/interrupt", SessionMessageResponse, interrupt_session),
+        one("POST", "/{session_id}/compact", SessionMessageResponse, compact_session),
+        one("DELETE", "/{session_id}/messages", SessionDeleteMessagesResponse, delete_messages),
+        one("POST", "/{session_id}/messages/restore", SessionRestoreMessagesResponse, restore_messages),
+    ],
+)

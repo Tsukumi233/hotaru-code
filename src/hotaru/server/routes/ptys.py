@@ -2,27 +2,23 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, WebSocket
+from fastapi import Body, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from ...app_services.errors import NotFoundError
 from ...pty import Pty, PtyCreateInput, PtyInfo, PtyUpdateInput
 from ..schemas import SessionDeleteResponse
+from .crud import crud_router, many, one
 
-router = APIRouter(prefix="/v1/ptys", tags=["ptys"])
 
-
-@router.get("", response_model=list[PtyInfo])
 async def list_ptys() -> list[PtyInfo]:
     return Pty.list()
 
 
-@router.post("", response_model=PtyInfo)
 async def create_pty(payload: PtyCreateInput | None = Body(default=None)) -> PtyInfo:
     return await Pty.create(payload or PtyCreateInput())
 
 
-@router.get("/{pty_id}", response_model=PtyInfo)
 async def get_pty(pty_id: str) -> PtyInfo:
     info = Pty.get(pty_id)
     if not info:
@@ -30,7 +26,6 @@ async def get_pty(pty_id: str) -> PtyInfo:
     return info
 
 
-@router.put("/{pty_id}", response_model=PtyInfo)
 async def update_pty(pty_id: str, payload: PtyUpdateInput = Body(...)) -> PtyInfo:
     info = await Pty.update(pty_id, payload)
     if not info:
@@ -38,10 +33,22 @@ async def update_pty(pty_id: str, payload: PtyUpdateInput = Body(...)) -> PtyInf
     return info
 
 
-@router.delete("/{pty_id}", response_model=SessionDeleteResponse)
 async def delete_pty(pty_id: str) -> SessionDeleteResponse:
     await Pty.remove(pty_id)
     return SessionDeleteResponse(ok=True)
+
+
+router = crud_router(
+    prefix="/v1/ptys",
+    tags=["ptys"],
+    routes=[
+        many("GET", "", PtyInfo, list_ptys),
+        one("POST", "", PtyInfo, create_pty),
+        one("GET", "/{pty_id}", PtyInfo, get_pty),
+        one("PUT", "/{pty_id}", PtyInfo, update_pty),
+        one("DELETE", "/{pty_id}", SessionDeleteResponse, delete_pty),
+    ],
+)
 
 
 @router.websocket("/{pty_id}/connect")

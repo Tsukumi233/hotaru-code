@@ -2,25 +2,30 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body
+from fastapi import Body
 
 from ...app_services import QuestionService
 from ..schemas import QuestionReplyRequest
+from .crud import crud_router, raw
 
-router = APIRouter(prefix="/v1/questions", tags=["questions"])
-
-
-@router.get("", response_model=list[dict[str, object]])
 async def list_questions() -> list[dict[str, object]]:
-    result = await QuestionService.list()
-    return [dict(item) for item in result]
+    return await QuestionService.list()
 
 
-@router.post("/{request_id}/reply", response_model=bool)
 async def reply_question(request_id: str, payload: QuestionReplyRequest = Body(...)) -> bool:
     return await QuestionService.reply(request_id, payload.model_dump(exclude_none=True))
 
 
-@router.post("/{request_id}/reject", response_model=bool)
 async def reject_question(request_id: str) -> bool:
     return await QuestionService.reject(request_id)
+
+
+router = crud_router(
+    prefix="/v1/questions",
+    tags=["questions"],
+    routes=[
+        raw("GET", "", list[dict[str, object]], list_questions),
+        raw("POST", "/{request_id}/reply", bool, reply_question),
+        raw("POST", "/{request_id}/reject", bool, reject_question),
+    ],
+)

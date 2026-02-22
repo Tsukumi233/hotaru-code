@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
-
 from ...app_services import AgentService
 from ..schemas import AgentResponse
+from .crud import crud_router, many
 
-router = APIRouter(prefix="/v1/agents", tags=["agents"])
+
+async def list_agents() -> list[dict[str, object]]:
+    return await AgentService.list()
 
 
-@router.get("", response_model=list[AgentResponse])
-async def list_agents() -> list[AgentResponse]:
-    result = await AgentService.list()
-    return [AgentResponse.model_validate(item) for item in result]
+router = crud_router(
+    prefix="/v1/agents",
+    tags=["agents"],
+    routes=[
+        many("GET", "", AgentResponse, list_agents),
+    ],
+)
