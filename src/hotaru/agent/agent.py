@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.config import ConfigManager
 from ..core.global_paths import GlobalPath
+from ..permission.constants import permission_for_tool
 from ..util.log import Log
 
 log = Log.create({"service": "agent"})
@@ -139,13 +140,8 @@ class Agent:
             rules: List[Dict[str, Any]] = []
             for tool_name, enabled in tools_config.items():
                 action = "allow" if enabled else "deny"
-                permission_name = (
-                    "edit"
-                    if tool_name in {"write", "edit", "patch", "apply_patch", "multiedit"}
-                    else ("list" if tool_name == "ls" else tool_name)
-                )
                 rules.append({
-                    "permission": permission_name,
+                    "permission": permission_for_tool(tool_name),
                     "pattern": "*",
                     "action": action,
                 })

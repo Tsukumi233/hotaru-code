@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.bus import Bus, BusEvent
 from ..core.id import Identifier
+from .constants import permission_for_tool
 from ..util.log import Log
 
 log = Log.create({"service": "permission"})
@@ -565,13 +566,10 @@ class Permission:
         Returns:
             Set of disabled tool names
         """
-        edit_tools = {"edit", "write", "patch", "apply_patch", "multiedit"}
-        permission_aliases = {"ls": "list"}
         result = set()
 
         for tool in tools:
-            # Map edit-related tools to "edit" permission
-            permission = "edit" if tool in edit_tools else permission_aliases.get(tool, tool)
+            permission = permission_for_tool(tool)
 
             # Find matching rule
             for rule in reversed(ruleset):

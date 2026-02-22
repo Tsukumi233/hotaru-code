@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .global_paths import GlobalPath
 from .config_markdown import parse_markdown_config
+from ..permission.constants import permission_for_tool
 from ..util.log import Log
 
 log = Log.create({"service": "config"})
@@ -537,10 +538,7 @@ class ConfigManager:
             perms: Dict[str, str] = {}
             for tool_name, enabled in result["tools"].items():
                 action = "allow" if enabled else "deny"
-                if tool_name in {"write", "edit", "patch", "multiedit"}:
-                    perms["edit"] = action
-                else:
-                    perms[tool_name] = action
+                perms[permission_for_tool(tool_name)] = action
             permission = result.get("permission")
             if isinstance(permission, str):
                 permission = {"*": permission}
