@@ -11,6 +11,7 @@ communication instead of stubs.
 """
 
 import asyncio
+import json
 import os
 import re
 import secrets
@@ -67,6 +68,24 @@ class MCPStatusNeedsClientRegistration(BaseModel):
     error: str
 
 
+class MCPAuthError(Exception):
+    """Structured MCP authentication error from transport layer."""
+
+    def __init__(
+        self,
+        status_code: int,
+        error_code: str = "unauthorized",
+        detail: Optional[str] = None,
+    ) -> None:
+        self.status_code = status_code
+        self.error_code = error_code
+        self.detail = detail
+        message = f"MCP auth error ({status_code}): {error_code}"
+        if detail:
+            message = f"{message}: {detail}"
+        super().__init__(message)
+
+
 MCPStatus = Union[
     MCPStatusConnected,
     MCPStatusDisabled,
@@ -74,6 +93,88 @@ MCPStatus = Union[
     MCPStatusNeedsAuth,
     MCPStatusNeedsClientRegistration,
 ]
+
+
+REGISTRATION_ERROR_CODES = frozenset(
+    {
+        "invalid_client",
+        "needs_registration",
+        "needs_client_registration",
+        "registration_required",
+        "unregistered_client",
+    }
+)
+
+
+def _auth_detail(data: Dict[str, Any]) -> Optional[str]:
+    for key in ("error_description", "message", "detail", "title"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _auth_code(data: Dict[str, Any]) -> Optional[str]:
+    value = data.get("error")
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, dict):
+        key = value.get("code")
+        if isinstance(key, str) and key:
+            return key
+        if isinstance(key, int):
+            return str(key)
+        inner = value.get("error")
+        if isinstance(inner, str) and inner:
+            return inner
+
+    key = data.get("error_code")
+    if isinstance(key, str) and key:
+        return key
+    if isinstance(key, int):
+        return str(key)
+
+    key = data.get("code")
+    if isinstance(key, str) and key:
+        return key
+    if isinstance(key, int):
+        return str(key)
+
+    return None
+
+
+def _auth_http_error(error: Exception) -> Optional[MCPAuthError]:
+    try:
+        import httpx
+    except ImportError:
+        return None
+
+    if not isinstance(error, httpx.HTTPStatusError):
+        return None
+
+    response = error.response
+    status_code = response.status_code
+    if status_code not in {401, 403}:
+        return None
+
+    data: Dict[str, Any] = {}
+    if "json" in response.headers.get("content-type", "").lower():
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                data = body
+        except json.JSONDecodeError:
+            data = {}
+        except ValueError:
+            data = {}
+
+    error_code = _auth_code(data) or "unauthorized"
+    detail = _auth_detail(data)
+    return MCPAuthError(status_code=status_code, error_code=error_code, detail=detail)
+
+
+def _needs_registration(error_code: str) -> bool:
+    return error_code.lower() in REGISTRATION_ERROR_CODES
 
 
 class MCPToolDefinition(BaseModel):
@@ -141,6 +242,7 @@ class MCPClient:
             headers: Optional HTTP headers
             oauth_auth: Optional httpx.Auth (OAuthClientProvider) for OAuth
         """
+        import httpx
         from mcp import ClientSession
         from mcp.client.streamable_http import streamable_http_client
 
@@ -160,6 +262,11 @@ class MCPClient:
             self._session = session
             self._cm_stack = stack
             return
+        except httpx.HTTPStatusError as e:
+            await stack.aclose()
+            auth_error = _auth_http_error(e)
+            if auth_error:
+                raise auth_error from e
         except Exception:
             await stack.aclose()
 
@@ -167,13 +274,23 @@ class MCPClient:
         from mcp.client.sse import sse_client
 
         stack = AsyncExitStack()
-        transport_cm = sse_client(url, **http_kwargs)
-        read, write = await stack.enter_async_context(transport_cm)
-        session = await stack.enter_async_context(ClientSession(read, write))
-        await session.initialize()
+        try:
+            transport_cm = sse_client(url, **http_kwargs)
+            read, write = await stack.enter_async_context(transport_cm)
+            session = await stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
 
-        self._session = session
-        self._cm_stack = stack
+            self._session = session
+            self._cm_stack = stack
+        except httpx.HTTPStatusError as e:
+            await stack.aclose()
+            auth_error = _auth_http_error(e)
+            if auth_error:
+                raise auth_error from e
+            raise
+        except Exception:
+            await stack.aclose()
+            raise
 
     @property
     def connected(self) -> bool:
@@ -459,22 +576,20 @@ class MCP:
                 "client": None,
                 "status": MCPStatusFailed(error="Connection timeout")
             }
-        except Exception as e:
-            error_msg = str(e)
-
-            # Check for auth-related errors
-            if "unauthorized" in error_msg.lower() or "401" in error_msg:
-                if "registration" in error_msg.lower() or "client_id" in error_msg.lower():
-                    return {
-                        "client": None,
-                        "status": MCPStatusNeedsClientRegistration(
-                            error="Server does not support dynamic client registration. Please provide clientId in config."
-                        )
-                    }
+        except MCPAuthError as e:
+            if _needs_registration(e.error_code):
                 return {
                     "client": None,
-                    "status": MCPStatusNeedsAuth()
+                    "status": MCPStatusNeedsClientRegistration(
+                        error="Server does not support dynamic client registration. Please provide clientId in config."
+                    )
                 }
+            return {
+                "client": None,
+                "status": MCPStatusNeedsAuth()
+            }
+        except Exception as e:
+            error_msg = str(e)
 
             log.debug("remote MCP connection failed", {
                 "name": name,
