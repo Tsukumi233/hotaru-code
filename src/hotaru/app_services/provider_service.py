@@ -7,6 +7,7 @@ from typing import Any
 from ..core.config import ConfigManager, ProviderConfig
 from ..provider import Provider
 from ..provider.auth import ProviderAuth
+from .errors import NotFoundError
 
 
 def _reject_legacy_fields(payload: dict[str, Any], aliases: dict[str, str]) -> None:
@@ -55,7 +56,7 @@ class ProviderService:
         await cls._reload(cwd)
         provider = await Provider.get(provider_id)
         if not provider:
-            raise KeyError(f"Provider '{provider_id}' not found")
+            raise NotFoundError("Provider", provider_id)
         return [_model_to_dict(model) for model in provider.models.values()]
 
     @classmethod

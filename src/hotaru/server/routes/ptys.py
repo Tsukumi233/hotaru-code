@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from ...app_services.errors import NotFoundError
 from ...pty import Pty, PtyCreateInput, PtyInfo, PtyUpdateInput
 from ..schemas import SessionDeleteResponse
 
@@ -25,7 +26,7 @@ async def create_pty(payload: PtyCreateInput | None = Body(default=None)) -> Pty
 async def get_pty(pty_id: str) -> PtyInfo:
     info = Pty.get(pty_id)
     if not info:
-        raise KeyError("PTY session not found")
+        raise NotFoundError("PTY session", pty_id)
     return info
 
 
@@ -33,7 +34,7 @@ async def get_pty(pty_id: str) -> PtyInfo:
 async def update_pty(pty_id: str, payload: PtyUpdateInput = Body(...)) -> PtyInfo:
     info = await Pty.update(pty_id, payload)
     if not info:
-        raise KeyError("PTY session not found")
+        raise NotFoundError("PTY session", pty_id)
     return info
 
 

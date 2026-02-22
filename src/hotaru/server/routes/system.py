@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from starlette.responses import Response
 from starlette.responses import FileResponse, HTMLResponse
 
+from ...app_services.errors import NotFoundError
 from ...core.global_paths import GlobalPath
 from ...skill import Skill
 from ..deps import resolve_request_directory
@@ -47,7 +48,7 @@ async def web_asset(path: str) -> Response:
 async def web_root_asset(path: str) -> Response:
     target = web_asset_path(f"assets/{str(path).strip()}")
     if target is None:
-        raise KeyError("Web asset not found")
+        raise NotFoundError("Web asset", path)
     return FileResponse(target)
 
 

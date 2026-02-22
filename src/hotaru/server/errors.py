@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from ..app_services.errors import NotFoundError
 from ..util.log import Log
 from .schemas import ErrorInfo, ErrorResponse
 
@@ -28,12 +29,9 @@ def register_error_handlers(app: FastAPI) -> None:
     async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
         return _error_response(status_code=400, code="bad_request", message=str(exc))
 
-    @app.exception_handler(KeyError)
-    async def key_error_handler(request: Request, exc: KeyError) -> JSONResponse:
-        message = str(exc)
-        if message.startswith("'") and message.endswith("'"):
-            message = message[1:-1]
-        return _error_response(status_code=404, code="not_found", message=message)
+    @app.exception_handler(NotFoundError)
+    async def not_found_error_handler(request: Request, exc: NotFoundError) -> JSONResponse:
+        return _error_response(status_code=404, code="not_found", message=str(exc))
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(

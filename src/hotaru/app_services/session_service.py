@@ -20,6 +20,7 @@ from ..session import (
 )
 from ..session.message_store import MessageInfo as StoredMessageInfo
 from ..session.message_store import parse_part
+from .errors import NotFoundError
 from .session_payload import structured_messages_to_payload
 
 
@@ -172,14 +173,14 @@ class SessionService:
     async def delete(cls, session_id: str) -> dict[str, bool]:
         deleted = await Session.delete(session_id)
         if not deleted:
-            raise KeyError(f"Session '{session_id}' not found")
+            raise NotFoundError("Session", session_id)
         return {"ok": True}
 
     @classmethod
     async def list_messages(cls, session_id: str) -> list[dict[str, Any]]:
         session = await Session.get(session_id)
         if not session:
-            raise KeyError(f"Session '{session_id}' not found")
+            raise NotFoundError("Session", session_id)
         structured = await Session.messages(session_id=session_id)
         return structured_messages_to_payload(structured)
 
@@ -206,7 +207,7 @@ class SessionService:
     async def restore_messages(cls, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         session = await Session.get(session_id)
         if not session:
-            raise KeyError(f"Session '{session_id}' not found")
+            raise NotFoundError("Session", session_id)
 
         raw_messages = payload.get("messages")
         if not isinstance(raw_messages, list):
@@ -255,7 +256,7 @@ class SessionService:
     async def compact(cls, session_id: str, payload: dict[str, Any], cwd: str) -> dict[str, Any]:
         session = await Session.get(session_id)
         if not session:
-            raise KeyError(f"Session '{session_id}' not found")
+            raise NotFoundError("Session", session_id)
 
         provider_id, model_id = await cls._resolve_model(
             payload,
@@ -311,7 +312,7 @@ class SessionService:
 
         session = await Session.get(session_id)
         if not session:
-            raise KeyError(f"Session '{session_id}' not found")
+            raise NotFoundError("Session", session_id)
 
         provider_id, model_id = await cls._resolve_model(
             payload,
@@ -382,7 +383,7 @@ class SessionService:
     async def interrupt(cls, session_id: str) -> dict[str, Any]:
         session = await Session.get(session_id)
         if not session:
-            raise KeyError(f"Session '{session_id}' not found")
+            raise NotFoundError("Session", session_id)
 
         task = cls._tasks.get(session_id)
         if not task or task.done():

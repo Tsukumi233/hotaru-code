@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, Query
 
 from ...app_services import SessionService
+from ...app_services.errors import NotFoundError
 from ..deps import resolve_request_directory
 from ..schemas import (
     SessionCompactRequest,
@@ -46,7 +47,7 @@ async def list_sessions(
 async def get_session(session_id: str) -> SessionResponse:
     result = await SessionService.get(session_id)
     if not result:
-        raise KeyError(f"Session '{session_id}' not found")
+        raise NotFoundError("Session", session_id)
     return SessionResponse.model_validate(result)
 
 
@@ -57,7 +58,7 @@ async def update_session(
 ) -> SessionResponse:
     result = await SessionService.update(session_id, payload.model_dump(exclude_none=True))
     if not result:
-        raise KeyError(f"Session '{session_id}' not found")
+        raise NotFoundError("Session", session_id)
     return SessionResponse.model_validate(result)
 
 
