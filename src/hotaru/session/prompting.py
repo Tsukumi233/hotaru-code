@@ -42,7 +42,9 @@ from .message_store import (
     ToolState,
     ToolStateTime,
 )
-from .processor import ProcessorResult, SessionProcessor, ToolCallState
+from .processor import SessionProcessor
+from .processor_factory import SessionProcessorFactory
+from .processor_types import ProcessorResult, ToolCallState
 from .session import Session
 from .summary import SessionSummary
 from .system import SystemPrompt
@@ -414,7 +416,7 @@ class SessionPrompt:
         auto_compaction: bool = True,
     ) -> PromptResult:
         """Run outer loop by repeatedly calling processor.process_step."""
-        processor = SessionProcessor(
+        processor = SessionProcessorFactory.build(
             session_id=session_id,
             model_id=model_id,
             provider_id=provider_id,
@@ -1167,7 +1169,7 @@ class SessionPrompt:
                 f"{compact_agent.prompt}\n\n{system_prompt}" if system_prompt else compact_agent.prompt
             )
 
-        compact_processor = SessionProcessor(
+        compact_processor = SessionProcessorFactory.build(
             session_id=session_id,
             model_id=compact_model_id,
             provider_id=compact_provider_id,
