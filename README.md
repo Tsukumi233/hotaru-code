@@ -30,6 +30,7 @@ flowchart TB
         SessionPrompt["SessionPrompt（主循环入口）<br/>src/hotaru/session/prompting.py"]
         Processor["SessionProcessor（单步执行）<br/>src/hotaru/session/processor.py"]
         LLM["LLM Streaming Adapter<br/>src/hotaru/session/llm.py"]
+        Retry["SessionRetry（指数退避 + Retry-After）<br/>src/hotaru/session/retry.py"]
         SessionStore["Session + MessageStore<br/>src/hotaru/session/session.py + message_store.py"]
         Command["Slash Command(/init)<br/>src/hotaru/command/*"]
         Snapshot["SnapshotTracker<br/>src/hotaru/snapshot/tracker.py"]
@@ -100,6 +101,7 @@ flowchart TB
     SystemPrompt --> Instruction
     SessionPrompt --> Processor
     Processor --> LLM
+    LLM --> Retry
     SessionPrompt --> SessionStore
     SessionPrompt --> Snapshot
 
@@ -468,6 +470,7 @@ You are a reviewer agent. Focus on correctness, regression risk, and test gaps.
 
 - 外层编排：`SessionPrompt.prompt()/loop()` 负责多轮循环、compaction、structured output、工具解析与策略注入
 - 单轮执行：`SessionProcessor.process_step()` 只处理一次流式响应与工具执行
+- 重试韧性：`session/retry.py` 负责可重试错误判定、指数退避与 `Retry-After/Retry-After-Ms` 延迟解析
 - 主消息模型：`session/message_store.py`（message + part 分离存储）
 - Provider 语义对齐：`provider/transform.py` 统一消息归一化、tool-call id、provider 选项映射与缓存提示注入
 

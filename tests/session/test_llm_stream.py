@@ -3,6 +3,13 @@ import pytest
 from hotaru.provider.provider import ProcessedModelInfo, ProviderInfo
 from hotaru.session.llm import LLM, StreamChunk, StreamInput
 from hotaru.provider.sdk.anthropic import ToolCall
+from hotaru.session.retry import SessionRetry
+
+
+class _StatusError(Exception):
+    def __init__(self, status: int, headers: dict[str, str] | None = None):
+        super().__init__(f"status={status}")
+        self.response = type("Response", (), {"status_code": status, "headers": headers or {}})()
 
 
 @pytest.mark.anyio
@@ -143,3 +150,214 @@ async def test_llm_passes_through_reasoning_events(monkeypatch: pytest.MonkeyPat
     assert types.count("reasoning_start") == 1
     assert types.count("reasoning_delta") == 1
     assert types.count("reasoning_end") == 1
+
+
+@pytest.mark.anyio
+async def test_llm_retries_retryable_error_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = ProviderInfo(
+        id="openai",
+        name="OpenAI",
+        env=[],
+        key="test-key",
+        models={
+            "gpt-5": ProcessedModelInfo(
+                id="gpt-5",
+                provider_id="openai",
+                name="gpt-5",
+                api_id="gpt-5",
+                api_type="openai",
+            )
+        },
+    )
+    calls = {"count": 0}
+    slept: list[int] = []
+
+    async def fake_get_provider(cls, provider_id: str):
+        if provider_id == "openai":
+            return provider
+        return None
+
+    async def fake_openai_stream(
+        cls,
+        *,
+        api_key,
+        model,
+        messages,
+        base_url=None,
+        system=None,
+        tools=None,
+        tool_choice=None,
+        max_tokens=4096,
+        temperature=None,
+        top_p=None,
+        options=None,
+    ):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise _StatusError(429, {"retry-after-ms": "7"})
+        yield StreamChunk(type="message_delta", stop_reason="stop")
+
+    async def fake_sleep(ms: int) -> None:
+        slept.append(ms)
+
+    monkeypatch.setattr("hotaru.provider.provider.Provider.get", classmethod(fake_get_provider))
+    monkeypatch.setattr(LLM, "_stream_openai", classmethod(fake_openai_stream))
+    monkeypatch.setattr(SessionRetry, "sleep", staticmethod(fake_sleep))
+
+    seen = [
+        chunk
+        async for chunk in LLM.stream(
+            StreamInput(
+                session_id="s1",
+                provider_id="openai",
+                model_id="gpt-5",
+                messages=[{"role": "user", "content": "hi"}],
+                retries=2,
+            )
+        )
+    ]
+
+    assert calls["count"] == 2
+    assert slept == [7]
+    assert seen[-1].type == "message_delta"
+    assert seen[-1].stop_reason == "stop"
+
+
+@pytest.mark.anyio
+async def test_llm_does_not_retry_non_retryable_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = ProviderInfo(
+        id="openai",
+        name="OpenAI",
+        env=[],
+        key="test-key",
+        models={
+            "gpt-5": ProcessedModelInfo(
+                id="gpt-5",
+                provider_id="openai",
+                name="gpt-5",
+                api_id="gpt-5",
+                api_type="openai",
+            )
+        },
+    )
+    calls = {"count": 0}
+    slept: list[int] = []
+
+    async def fake_get_provider(cls, provider_id: str):
+        if provider_id == "openai":
+            return provider
+        return None
+
+    async def fake_openai_stream(
+        cls,
+        *,
+        api_key,
+        model,
+        messages,
+        base_url=None,
+        system=None,
+        tools=None,
+        tool_choice=None,
+        max_tokens=4096,
+        temperature=None,
+        top_p=None,
+        options=None,
+    ):
+        calls["count"] += 1
+        raise _StatusError(400)
+        yield StreamChunk(type="message_delta", stop_reason="stop")
+
+    async def fake_sleep(ms: int) -> None:
+        slept.append(ms)
+
+    monkeypatch.setattr("hotaru.provider.provider.Provider.get", classmethod(fake_get_provider))
+    monkeypatch.setattr(LLM, "_stream_openai", classmethod(fake_openai_stream))
+    monkeypatch.setattr(SessionRetry, "sleep", staticmethod(fake_sleep))
+
+    seen = [
+        chunk
+        async for chunk in LLM.stream(
+            StreamInput(
+                session_id="s1",
+                provider_id="openai",
+                model_id="gpt-5",
+                messages=[{"role": "user", "content": "hi"}],
+                retries=2,
+            )
+        )
+    ]
+
+    assert calls["count"] == 1
+    assert slept == []
+    assert seen[-1].type == "error"
+    assert "status=400" in str(seen[-1].error)
+
+
+@pytest.mark.anyio
+async def test_llm_stops_after_retry_budget_exhausted(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = ProviderInfo(
+        id="openai",
+        name="OpenAI",
+        env=[],
+        key="test-key",
+        models={
+            "gpt-5": ProcessedModelInfo(
+                id="gpt-5",
+                provider_id="openai",
+                name="gpt-5",
+                api_id="gpt-5",
+                api_type="openai",
+            )
+        },
+    )
+    calls = {"count": 0}
+    slept: list[int] = []
+
+    async def fake_get_provider(cls, provider_id: str):
+        if provider_id == "openai":
+            return provider
+        return None
+
+    async def fake_openai_stream(
+        cls,
+        *,
+        api_key,
+        model,
+        messages,
+        base_url=None,
+        system=None,
+        tools=None,
+        tool_choice=None,
+        max_tokens=4096,
+        temperature=None,
+        top_p=None,
+        options=None,
+    ):
+        calls["count"] += 1
+        raise _StatusError(503)
+        yield StreamChunk(type="message_delta", stop_reason="stop")
+
+    async def fake_sleep(ms: int) -> None:
+        slept.append(ms)
+
+    monkeypatch.setattr("hotaru.provider.provider.Provider.get", classmethod(fake_get_provider))
+    monkeypatch.setattr(LLM, "_stream_openai", classmethod(fake_openai_stream))
+    monkeypatch.setattr(SessionRetry, "sleep", staticmethod(fake_sleep))
+
+    seen = [
+        chunk
+        async for chunk in LLM.stream(
+            StreamInput(
+                session_id="s1",
+                provider_id="openai",
+                model_id="gpt-5",
+                messages=[{"role": "user", "content": "hi"}],
+                retries=2,
+            )
+        )
+    ]
+
+    assert calls["count"] == 3
+    assert slept == [2000, 4000]
+    assert seen[-1].type == "error"
+    assert "status=503" in str(seen[-1].error)

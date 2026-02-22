@@ -11,6 +11,7 @@ from ..provider import Provider
 from ..provider.transform import ProviderTransform
 from ..provider.sdk.anthropic import AnthropicSDK, ToolCall
 from ..provider.sdk.openai import OpenAISDK
+from .retry import SessionRetry
 from ..util.log import Log
 
 log = Log.create({"service": "llm"})
@@ -334,11 +335,23 @@ class LLM:
                         yield chunk
                 return
             except Exception as e:
-                if attempt >= retries:
+                has_budget = attempt < retries
+                if (not has_budget) or (not SessionRetry.retryable(e)):
                     log.error("stream error", {"error": str(e), "attempt": attempt})
                     yield StreamChunk(type="error", error=str(e))
                     return
-                log.warn("stream retry", {"error": str(e), "attempt": attempt})
+                retry_attempt = attempt + 1
+                wait_ms = SessionRetry.delay_ms(retry_attempt, e)
+                log.warn(
+                    "stream retry",
+                    {
+                        "error": str(e),
+                        "attempt": attempt,
+                        "retry_attempt": retry_attempt,
+                        "wait_ms": wait_ms,
+                    },
+                )
+                await SessionRetry.sleep(wait_ms)
 
     @classmethod
     async def _stream_anthropic(
