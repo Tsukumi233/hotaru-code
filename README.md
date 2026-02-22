@@ -11,23 +11,28 @@ flowchart TB
         RunCmd["Run 命令<br/>src/hotaru/cli/cmd/run.py"]
         TuiApp["Textual TUI<br/>src/hotaru/tui/app.py"]
         WebCmd["Web 命令<br/>src/hotaru/cli/cmd/web.py"]
-        Server["HTTP Server（Starlette + SSE）<br/>src/hotaru/server/server.py"]
-        WebUI["React Frontend<br/>src/hotaru/webui/dist"]
+        WebUI["React WebUI<br/>frontend/ -> src/hotaru/webui/dist"]
     end
 
-    subgraph AppSvc["应用服务层（WebUI 专用）"]
-        AppServices["AppServices<br/>src/hotaru/app_services"]
-        ApiClient["ApiClient（HTTP 客户端）<br/>src/hotaru/api_client"]
+    subgraph ApiLayer["传输与 API 层"]
+        SDKCtx["SDKContext<br/>src/hotaru/tui/context/sdk.py"]
+        ApiClient["HotaruAPIClient<br/>src/hotaru/api_client/client.py"]
+        Server["Starlette Server + SSE/WebSocket<br/>src/hotaru/server/server.py"]
+        AppServices["App Services<br/>src/hotaru/app_services/*"]
+        Pty["PTY 服务<br/>src/hotaru/pty/pty.py"]
     end
 
     subgraph Orchestration["会话编排层"]
-        Project["Project / Instance 上下文<br/>src/hotaru/project"]
-        SystemPrompt["SystemPrompt + InstructionPrompt<br/>src/hotaru/session/system.py"]
+        Project["Project / Instance<br/>src/hotaru/project/*"]
+        PromptCtx["Prompt Orchestration<br/>src/hotaru/session/orchestration.py"]
+        SystemPrompt["SystemPrompt<br/>src/hotaru/session/system.py"]
+        Instruction["InstructionPrompt（AGENTS/CLAUDE）<br/>src/hotaru/session/instruction.py"]
         SessionPrompt["SessionPrompt（主循环入口）<br/>src/hotaru/session/prompting.py"]
-        Processor["SessionProcessor（Agentic Loop）<br/>src/hotaru/session/processor.py"]
+        Processor["SessionProcessor（单步执行）<br/>src/hotaru/session/processor.py"]
         LLM["LLM Streaming Adapter<br/>src/hotaru/session/llm.py"]
-        SessionStore["Session + MessageStore<br/>src/hotaru/session/session.py"]
-        Command["Command（斜杠命令）<br/>src/hotaru/command"]
+        SessionStore["Session + MessageStore<br/>src/hotaru/session/session.py + message_store.py"]
+        Command["Slash Command(/init)<br/>src/hotaru/command/*"]
+        Snapshot["SnapshotTracker<br/>src/hotaru/snapshot/tracker.py"]
     end
 
     subgraph ModelLayer["模型与 Agent 层"]
@@ -38,52 +43,65 @@ flowchart TB
         AnthropicSDK["Anthropic SDK<br/>src/hotaru/provider/sdk/anthropic.py"]
     end
 
-    subgraph Tooling["工具执行与扩展层"]
+    subgraph Tooling["工具与扩展层"]
         ToolRegistry["ToolRegistry<br/>src/hotaru/tool/registry.py"]
-        BuiltinTools["内置工具集<br/>read/edit/write/bash/apply_patch/task/skill/..."]
+        BuiltinTools["内置工具集<br/>bash/read/edit/write/list/task/skill/..."]
         Permission["Permission 引擎<br/>src/hotaru/permission/permission.py"]
         MCP["MCP 管理器<br/>src/hotaru/mcp/mcp.py"]
         MCPServers["本地/远程 MCP Servers"]
-        Skill["Skill 发现与加载<br/>src/hotaru/skill"]
+        Skill["Skill 发现与加载<br/>src/hotaru/skill/*"]
         TaskTool["Task Tool（子 Agent 委派）<br/>src/hotaru/tool/task.py"]
-        LSP["LSP 客户端（实验）<br/>src/hotaru/lsp"]
+        LSP["LSP 客户端（实验）<br/>src/hotaru/lsp/*"]
     end
 
     subgraph Infra["基础设施层"]
-        Config["ConfigManager<br/>hotaru.json / AGENTS.md / env"]
+        Config["ConfigManager<br/>global/project/.hotaru/env/managed"]
         Bus["Event Bus<br/>src/hotaru/core/bus.py"]
-        Storage["Storage(JSON + Lock)<br/>src/hotaru/storage/storage.py"]
-        GlobalPath["GlobalPath（config/data/cache）"]
-        Snapshot["SnapshotTracker（Git 快照）<br/>src/hotaru/snapshot"]
+        Storage["Storage API<br/>src/hotaru/storage/storage.py"]
+        StorageLock["RW Lock（进程内+进程间）<br/>src/hotaru/storage/lock.py"]
+        AtomicWrite["Atomic Write（tmp + fsync + replace）"]
+        TxLog["JSON Tx Log（_tx / _tx_stage）"]
+        Recovery["Crash Recovery（启动回放 committed tx）"]
+        GlobalPath["GlobalPath（config/data/cache/state）<br/>src/hotaru/core/global_paths.py"]
         Shell["Shell 执行<br/>src/hotaru/shell"]
         Patch["Patch 应用<br/>src/hotaru/patch"]
     end
 
     User --> CLI
+    User --> TuiApp
+    User --> WebUI
     CLI -->|默认| TuiApp
     CLI -->|run| RunCmd
     CLI -->|web| WebCmd
     WebCmd --> Server
-    Server --> WebUI
-    User --> WebUI
 
-    TuiApp --> Project
-    RunCmd --> Project
-    TuiApp --> SessionPrompt
-    RunCmd --> SessionPrompt
+    TuiApp --> SDKCtx
+    SDKCtx --> ApiClient
+    ApiClient -.->|HTTP/SSE| Server
+    WebUI -.->|HTTP/SSE/WebSocket| Server
 
     Server --> AppServices
+    Server --> Pty
     AppServices --> SessionPrompt
-    AppServices --> Project
-    WebUI -.->|HTTP/SSE| ApiClient
-    ApiClient -.-> Server
+    AppServices --> SessionStore
+    AppServices --> Agent
+    AppServices --> Provider
+    AppServices --> Permission
+    AppServices --> Bus
 
+    RunCmd --> Project
+    TuiApp --> Project
+    RunCmd --> PromptCtx
+    RunCmd --> SessionPrompt
+    Command --> SessionPrompt
     Project --> SessionPrompt
-    SystemPrompt --> SessionPrompt
+    Project --> PromptCtx
+    PromptCtx --> SystemPrompt
+    SystemPrompt --> Instruction
     SessionPrompt --> Processor
     Processor --> LLM
     SessionPrompt --> SessionStore
-    SessionPrompt --> Command
+    SessionPrompt --> Snapshot
 
     Processor --> Agent
     Processor --> Provider
@@ -105,16 +123,23 @@ flowchart TB
 
     Agent --> Config
     Provider --> Config
+    ToolRegistry --> Config
     Skill --> Config
     MCP --> Config
     Permission --> Config
+    Snapshot --> Config
 
     SessionStore --> Storage
     Project --> Storage
     Permission --> Storage
+    Storage --> StorageLock
+    Storage --> AtomicWrite
+    Storage --> TxLog
+    TxLog --> Recovery
+    Recovery --> Storage
     Storage --> GlobalPath
 
-    Snapshot --> Project
+    Snapshot --> GlobalPath
     BuiltinTools --> Shell
     BuiltinTools --> Patch
 
@@ -122,9 +147,8 @@ flowchart TB
     MCP --> Bus
     Project --> Bus
     SessionStore --> Bus
-    TuiApp --> Bus
-    RunCmd --> Bus
     Server --> Bus
+    Pty --> Bus
     LSP --> Bus
 ```
 

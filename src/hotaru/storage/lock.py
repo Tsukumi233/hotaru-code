@@ -5,8 +5,10 @@ OpenCode's Lock utility. Writers are prioritized to prevent starvation.
 """
 
 import asyncio
-from contextlib import asynccontextmanager
-from typing import AsyncIterator, Dict
+import os
+from contextlib import AsyncExitStack, asynccontextmanager
+from pathlib import Path
+from typing import AsyncIterator, BinaryIO, Dict
 
 
 class _LockState:
@@ -23,6 +25,67 @@ class Lock:
     """Async reader-writer lock keyed by string."""
 
     _locks: Dict[str, _LockState] = {}
+
+    @staticmethod
+    def _lock_file(key: str) -> str:
+        return f"{key}.lock"
+
+    @staticmethod
+    def _lock_handle(path: str) -> BinaryIO:
+        lock = Path(path)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.touch(exist_ok=True)
+        file = open(lock, "r+b")
+        if os.name == "nt":
+            file.seek(0, os.SEEK_END)
+            if file.tell() == 0:
+                file.write(b"\0")
+                file.flush()
+        return file
+
+    @staticmethod
+    def _os_lock(handle: BinaryIO, shared: bool) -> None:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            return
+
+        import fcntl
+
+        flag = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+        fcntl.flock(handle.fileno(), flag)
+
+    @staticmethod
+    def _os_unlock(handle: BinaryIO) -> None:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            return
+
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    @classmethod
+    async def _acquire_process(cls, key: str, *, shared: bool) -> BinaryIO:
+        handle = cls._lock_handle(cls._lock_file(key))
+        try:
+            await asyncio.to_thread(cls._os_lock, handle, shared)
+        except Exception:
+            handle.close()
+            raise
+        return handle
+
+    @classmethod
+    async def _release_process(cls, handle: BinaryIO) -> None:
+        try:
+            await asyncio.to_thread(cls._os_unlock, handle)
+        finally:
+            handle.close()
 
     @classmethod
     def _get(cls, key: str) -> _LockState:
@@ -64,6 +127,7 @@ class Lock:
         """Acquire a read lock. Multiple concurrent readers allowed."""
         state = cls._get(key)
         loop = asyncio.get_running_loop()
+        process_lock: BinaryIO | None = None
 
         if not state.writer and not state.waiting_writers:
             state.readers += 1
@@ -74,8 +138,11 @@ class Lock:
             state.readers += 1
 
         try:
+            process_lock = await cls._acquire_process(key, shared=True)
             yield
         finally:
+            if process_lock:
+                await cls._release_process(process_lock)
             state.readers -= 1
             cls._process(key)
 
@@ -85,6 +152,7 @@ class Lock:
         """Acquire an exclusive write lock."""
         state = cls._get(key)
         loop = asyncio.get_running_loop()
+        process_lock: BinaryIO | None = None
 
         if not state.writer and state.readers == 0:
             state.writer = True
@@ -95,7 +163,20 @@ class Lock:
             state.writer = True
 
         try:
+            process_lock = await cls._acquire_process(key, shared=False)
             yield
         finally:
+            if process_lock:
+                await cls._release_process(process_lock)
             state.writer = False
             cls._process(key)
+
+    @classmethod
+    @asynccontextmanager
+    async def write_many(cls, keys: list[str]) -> AsyncIterator[None]:
+        """Acquire exclusive locks for multiple keys in a deadlock-safe order."""
+        unique = sorted(set(keys))
+        async with AsyncExitStack() as stack:
+            for key in unique:
+                await stack.enter_async_context(cls.write(key))
+            yield

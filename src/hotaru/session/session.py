@@ -379,14 +379,11 @@ class Session:
 
         # Delete all messages for this session
         stored_msg_keys = await Storage.list(["message_store", session_id])
-        for key in stored_msg_keys:
-            await Storage.remove(key)
         part_keys = await Storage.list(["part", session_id])
-        for key in part_keys:
-            await Storage.remove(key)
-
-        # Delete the session itself
-        await Storage.remove(cls._session_key(session.project_id, session_id))
+        ops = [Storage.delete(key) for key in stored_msg_keys]
+        ops.extend(Storage.delete(key) for key in part_keys)
+        ops.append(Storage.delete(cls._session_key(session.project_id, session_id)))
+        await Storage.transaction(ops)
 
         log.info("deleted session", {"session_id": session_id})
         await Bus.publish(SessionDeleted, SessionDeletedProperties(session_id=session_id))
@@ -537,8 +534,13 @@ class Session:
         if not session:
             return 0
 
-        for message_id in message_ids:
-            await Storage.remove(cls._message_store_key(session_id, message_id))
+        session_key = cls._session_key(session.project_id, session_id)
+        try:
+            session_data = await Storage.read(session_key)
+        except NotFoundError:
+            return 0
+
+        ops = [Storage.delete(cls._message_store_key(session_id, message_id)) for message_id in message_ids]
         part_keys = await Storage.list(["part", session_id])
         for key in part_keys:
             try:
@@ -546,16 +548,13 @@ class Session:
             except NotFoundError:
                 continue
             if part_data.get("message_id") in message_ids:
-                await Storage.remove(key)
+                ops.append(Storage.delete(key))
 
-        try:
-            updated_data = await Storage.update(
-                cls._session_key(session.project_id, session_id),
-                lambda d: d["time"].__setitem__("updated", int(time.time() * 1000)),
-            )
-        except NotFoundError:
-            return 0
-        updated_session = SessionInfo.model_validate(updated_data)
+        session_data["time"]["updated"] = int(time.time() * 1000)
+        ops.append(Storage.put(session_key, session_data))
+
+        await Storage.transaction(ops)
+        updated_session = SessionInfo.model_validate(session_data)
         await Bus.publish(SessionUpdated, SessionUpdatedProperties(session=updated_session))
 
         return len(message_ids)

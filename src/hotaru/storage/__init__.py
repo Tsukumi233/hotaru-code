@@ -1,5 +1,5 @@
 """Hierarchical JSON file storage."""
 
-from .storage import Storage, NotFoundError
+from .storage import Storage, NotFoundError, TxOp
 
-__all__ = ["Storage", "NotFoundError"]
+__all__ = ["Storage", "NotFoundError", "TxOp"]
