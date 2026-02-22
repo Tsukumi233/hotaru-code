@@ -19,7 +19,7 @@ log = Log.create({"service": "skill"})
 
 # External skill directories to search (compatible with Claude Code and other agents).
 # .hotaru is kept for backwards compatibility in hotaru.
-EXTERNAL_DIRS = [".claude", ".agents", ".hotaru"]
+EXTERNAL_DIRS = [".claude", ".agents", ".hotaru", ".codex"]
 
 SKILL_FILENAME = "SKILL.md"
 

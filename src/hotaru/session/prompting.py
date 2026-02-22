@@ -17,12 +17,13 @@ from typing import Any, Callable, Dict, List, Optional
 from ..agent import Agent
 from ..core.context import ContextNotFoundError
 from ..core.id import Identifier
-from ..project import Instance
+from ..project import Instance, Project
 from ..provider import Provider
-from ..provider.provider import ProcessedModelInfo
+from ..provider.provider import ModelNotFoundError, ProcessedModelInfo
 from ..provider.transform import ProviderTransform
 from ..snapshot import SnapshotTracker
 from ..tool.registry import ToolRegistry
+from ..tool.schema import strictify_schema
 from ..util.log import Log
 from .compaction import SessionCompaction
 from .message_store import (
@@ -45,6 +46,7 @@ from .message_store import (
 from .processor import ProcessorResult, SessionProcessor, ToolCallState
 from .session import Session
 from .summary import SessionSummary
+from .system import SystemPrompt
 
 log = Log.create({"service": "session.prompt"})
 
@@ -454,6 +456,24 @@ class SessionPrompt:
                 assistant_message_id=final_assistant_id,
                 user_message_id=str(user_message_id or ""),
                 text=direct_result,
+            )
+
+        if system_prompt is None:
+            try:
+                model_info = await Provider.get_model(provider_id, model_id)
+            except ModelNotFoundError:
+                model_info = ProcessedModelInfo(
+                    id=model_id,
+                    provider_id=provider_id,
+                    name=model_id,
+                    api_id=model_id,
+                )
+            project, _ = await Project.from_directory(cwd)
+            system_prompt = await SystemPrompt.build_full_prompt(
+                model=model_info,
+                directory=cwd,
+                worktree=worktree,
+                is_git=project.vcs == "git",
             )
 
         aggregate = ProcessorResult(status="continue", text="", usage={})
@@ -1078,7 +1098,7 @@ class SessionPrompt:
             for tool_id, tool_info in mcp_tools.items():
                 schema = dict(tool_info.get("input_schema") or {})
                 schema.setdefault("type", "object")
-                schema["additionalProperties"] = False
+                schema = strictify_schema(schema)
                 tools.append(
                     {
                         "type": "function",
@@ -1122,13 +1142,14 @@ class SessionPrompt:
         if output_format and output_format.get("type") == "json_schema":
             schema = dict(output_format.get("schema") or {})
             schema.pop("$schema", None)
+            schema = strictify_schema(schema)
             tools.append(
                 {
                     "type": "function",
                     "function": {
                         "name": _STRUCTURED_OUTPUT_TOOL,
                         "description": _STRUCTURED_OUTPUT_DESCRIPTION,
-                        "parameters": schema or {"type": "object", "properties": {}},
+                        "parameters": schema or {"type": "object", "properties": {}, "additionalProperties": False},
                     },
                 }
             )

@@ -90,6 +90,8 @@ def test_provider_list_prefers_configured_providers_over_env(monkeypatch) -> Non
     assert "moonshot" in providers
     assert "cf" in providers
     assert "openai" not in providers
+    assert providers["moonshot"].models["kimi-k2.5"].limit.output == 32000
+    assert providers["cf"].models["custom/model"].limit.output == 32000
 
 
 def test_provider_list_keeps_env_providers_when_config_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]

@@ -45,7 +45,7 @@ class StreamInput:
     tools: Optional[Union[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]] = None
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
     retries: int = 0
-    max_tokens: int = 4096
+    max_tokens: Optional[int] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     options: Optional[Dict[str, Any]] = None

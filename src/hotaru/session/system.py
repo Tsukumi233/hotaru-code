@@ -4,10 +4,11 @@ Provides system prompts for different AI providers and models.
 """
 
 import platform
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from ..core.config import ConfigManager
 from ..provider.provider import ProcessedModelInfo
 from ..util.log import Log
 from .instruction import InstructionPrompt
@@ -25,7 +26,7 @@ def _load_prompt(filename: str, fallback: str) -> str:
 
 
 _DEFAULT_PROMPT = _load_prompt("default.txt", "You are Hotaru Code, an AI-powered coding assistant.")
-_PROMPT_CODEX = _load_prompt("codex_header.txt", _DEFAULT_PROMPT)
+_PROMPT_CODEX = _load_prompt("codex_header.txt", "")
 _PROMPT_ANTHROPIC = _load_prompt("anthropic.txt", _DEFAULT_PROMPT)
 _PROMPT_QWEN = _load_prompt("qwen.txt", _DEFAULT_PROMPT)
 _PROMPT_GEMINI = _load_prompt("gemini.txt", _DEFAULT_PROMPT)
@@ -60,7 +61,7 @@ class SystemPrompt:
         api_type = str(model.api_type or "").lower()
 
         if "gpt-5" in model_id or "gpt-5" in name:
-            return [_PROMPT_CODEX]
+            return [_DEFAULT_PROMPT, _PROMPT_CODEX] if _PROMPT_CODEX else [_DEFAULT_PROMPT]
 
         if "qwen" in model_id or "qwen" in family or "qwen" in name:
             return [_PROMPT_QWEN]
@@ -86,7 +87,7 @@ class SystemPrompt:
             or model_id.startswith("o1")
             or model_id.startswith("o3")
         ):
-            return [_PROMPT_CODEX]
+            return [_DEFAULT_PROMPT, _PROMPT_CODEX] if _PROMPT_CODEX else [_DEFAULT_PROMPT]
 
         return [_DEFAULT_PROMPT]
 
@@ -108,8 +109,9 @@ class SystemPrompt:
             Environment information string
         """
         cwd = directory or "."
-        today = date.today().isoformat()
+        today = datetime.now().strftime("%a %b %d %Y")
         os_platform = platform.system().lower()
+        directories = ConfigManager.directories()
 
         lines = [
             f"You are powered by the model named {model.name}. The exact model ID is {model.provider_id}/{model.api_id}.",
@@ -117,10 +119,13 @@ class SystemPrompt:
             "Here is useful information about the environment you are running in:",
             "<env>",
             f"Working directory: {cwd}",
-            f"Is directory a git repo: {'Yes' if is_git else 'No'}",
+            f"Is directory a git repo: {'yes' if is_git else 'no'}",
             f"Platform: {os_platform}",
             f"Today's date: {today}",
             "</env>",
+            "<directories>",
+            *[f"  {item}" for item in directories],
+            "</directories>",
         ]
 
         return "\n".join(lines)
@@ -155,10 +160,7 @@ class SystemPrompt:
         parts.append(cls.environment(model, directory, is_git))
 
         # Load project/global custom instructions (AGENTS.md, config.instructions, etc.)
-        try:
-            parts.extend(await InstructionPrompt.system(directory=directory, worktree=worktree))
-        except Exception as e:
-            log.warn("failed to load instruction prompts", {"error": str(e)})
+        parts.extend(await InstructionPrompt.system(directory=directory, worktree=worktree))
 
         # Add additional instructions
         if additional_instructions:

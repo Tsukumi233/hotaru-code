@@ -377,8 +377,6 @@ class ProviderTransform:
 
         # Keep Moonshot/Kimi compatible defaults centralized.
         if "kimi-k2" in model_id:
-            if "temperature" not in base:
-                base["temperature"] = 1.0
             if any(flag in model_id for flag in ("k2.5", "k2p5", "k2-5")):
                 base["top_p"] = 0.95
 
@@ -411,9 +409,7 @@ class ProviderTransform:
         if "minimax-m2" in model_id:
             return 1.0
         if "kimi-k2" in model_id:
-            if any(flag in model_id for flag in ("thinking", "k2.", "k2p", "k2-5")):
-                return 1.0
-            return 0.6
+            return None
         return None
 
     @staticmethod

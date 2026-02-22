@@ -24,6 +24,9 @@ from .models import (
 
 log = Log.create({"service": "provider"})
 
+DEFAULT_CONTEXT_LIMIT = 128000
+DEFAULT_OUTPUT_LIMIT = ProviderTransform.OUTPUT_TOKEN_MAX
+
 
 class ProviderSource(str, Enum):
     """Source of provider configuration."""
@@ -56,7 +59,12 @@ class ProcessedModelInfo(BaseModel):
 
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     cost: ModelCostInfo = Field(default_factory=ModelCostInfo)
-    limit: ModelLimit = Field(default_factory=lambda: ModelLimit(context=128000, output=4096))
+    limit: ModelLimit = Field(
+        default_factory=lambda: ModelLimit(
+            context=DEFAULT_CONTEXT_LIMIT,
+            output=DEFAULT_OUTPUT_LIMIT,
+        )
+    )
 
     options: Dict[str, Any] = Field(default_factory=dict)
     headers: Dict[str, str] = Field(default_factory=dict)
@@ -262,8 +270,8 @@ def _create_custom_provider(provider_id: str, config: ProviderConfig) -> Optiona
             ),
             cost=ModelCostInfo(),
             limit=ModelLimit(
-                context=model_limit.get("context", 128000) if model_limit else 128000,
-                output=model_limit.get("output", 4096) if model_limit else 4096,
+                context=model_limit.get("context", DEFAULT_CONTEXT_LIMIT) if model_limit else DEFAULT_CONTEXT_LIMIT,
+                output=model_limit.get("output", DEFAULT_OUTPUT_LIMIT) if model_limit else DEFAULT_OUTPUT_LIMIT,
             ),
             options=model_options or {},
             headers={**headers, **(model_headers or {})},

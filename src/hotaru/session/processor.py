@@ -13,6 +13,7 @@ from ..question.question import RejectedError as QuestionRejectedError
 from ..provider.transform import ProviderTransform
 from ..tool import ToolContext
 from ..tool.registry import ToolRegistry
+from ..tool.schema import strictify_schema
 from ..util.log import Log
 from .llm import LLM, StreamInput, StreamChunk
 
@@ -319,7 +320,7 @@ class SessionProcessor:
                     for tool_id, tool_info in mcp_tools.items():
                         schema = dict(tool_info.get("input_schema") or {})
                         schema.setdefault("type", "object")
-                        schema["additionalProperties"] = False
+                        schema = strictify_schema(schema)
                         effective_tools.append(
                             {
                                 "type": "function",
@@ -384,7 +385,7 @@ class SessionProcessor:
             tools=effective_tools if effective_tools else None,
             tool_choice=tool_choice if effective_tools else None,
             retries=int(retries or 0),
-            max_tokens=4096,
+            max_tokens=None,
             temperature=agent_info.temperature if agent_info else None,
             top_p=agent_info.top_p if agent_info else None,
             options=(agent_info.options or None) if agent_info else None,

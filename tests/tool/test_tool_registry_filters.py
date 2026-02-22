@@ -52,3 +52,16 @@ async def test_registry_keeps_plan_tools_visible_when_plan_flag_disabled(
     names = {item["function"]["name"] for item in definitions}
     assert "plan_enter" in names
     assert "plan_exit" in names
+
+
+@pytest.mark.anyio
+async def test_registry_strictifies_builtin_tool_schema() -> None:
+    ToolRegistry.reset()
+    definitions = await ToolRegistry.get_tool_definitions(
+        provider_id="openai",
+        model_id="gpt-5",
+    )
+    read_tool = next(item for item in definitions if item["function"]["name"] == "read")
+    params = read_tool["function"]["parameters"]
+    assert params["type"] == "object"
+    assert params["additionalProperties"] is False

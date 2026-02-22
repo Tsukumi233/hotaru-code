@@ -15,13 +15,13 @@ from .codesearch import CodeSearchTool
 from .edit import EditTool
 from .glob import GlobTool
 from .grep import GrepTool
-from .invalid import InvalidTool
 from .list import LsTool
 from .lsp import LspTool
 from .multiedit import MultiEditTool
 from .plan import PlanEnterTool, PlanExitTool
 from .question import QuestionTool
 from .read import ReadTool
+from .schema import strictify_schema
 from .skill import SkillTool, build_skill_description
 from .task import TaskTool, build_task_description
 from .todo import TodoReadTool, TodoWriteTool
@@ -115,7 +115,6 @@ class ToolRegistry:
 
         tools: Dict[str, ToolInfo] = {}
         builtin_tools: List[ToolInfo] = [
-            InvalidTool,
             BashTool,
             ReadTool,
             GlobTool,
@@ -239,6 +238,7 @@ class ToolRegistry:
 
             schema = tool.parameters_type.model_json_schema()
             schema.pop("title", None)
+            schema = strictify_schema(schema)
 
             description = tool.description
             if tool.id == "skill":

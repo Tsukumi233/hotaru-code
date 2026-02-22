@@ -107,6 +107,29 @@ async def test_discovers_external_and_hotaru_compatible_paths(
 
 
 @pytest.mark.anyio
+async def test_discovers_codex_skill_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    Skill.reset()
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    nested = project / "src" / "nested"
+    nested.mkdir(parents=True, exist_ok=True)
+
+    _write_skill(home / ".codex" / "skills" / "global-codex", "global-codex", "Global codex skill")
+    _write_skill(project / ".codex" / "skills" / "local-codex", "local-codex", "Local codex skill")
+
+    _patch_instance(monkeypatch, nested, project)
+    _patch_config(monkeypatch, directories=[])
+    monkeypatch.setattr(GlobalPath, "home", classmethod(lambda cls: str(home)))
+
+    names = {skill.name for skill in await Skill.list()}
+    assert "global-codex" in names
+    assert "local-codex" in names
+
+
+@pytest.mark.anyio
 async def test_project_external_scan_stops_at_worktree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     Skill.reset()
     home = tmp_path / "home"

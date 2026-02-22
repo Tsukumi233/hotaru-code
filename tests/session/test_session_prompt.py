@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -630,3 +631,109 @@ async def test_session_prompt_structured_output_missing_tool_errors(
 
     assert result.result.status == "error"
     assert result.result.error == "Model did not produce structured output"
+
+
+@pytest.mark.anyio
+async def test_session_prompt_builds_default_system_prompt_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _setup_storage(monkeypatch, tmp_path)
+    captured: dict[str, str] = {}
+
+    async def fake_stream(cls, stream_input):
+        captured["system"] = str(stream_input.system or "")
+        yield StreamChunk(type="text", text="ok")
+        yield StreamChunk(type="message_delta", usage={"input_tokens": 1, "output_tokens": 1})
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    async def fake_get_model(cls, provider_id: str, model_id: str):
+        return ProcessedModelInfo(
+            id=model_id,
+            provider_id=provider_id,
+            name=model_id,
+            api_id=model_id,
+        )
+
+    async def fake_project_from_directory(cls, _directory: str):
+        return SimpleNamespace(id="p1", vcs="git"), str(tmp_path)
+
+    async def fake_build_full_prompt(cls, **_kwargs):
+        return "auto-system"
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.session.prompting.Provider.get_model", classmethod(fake_get_model))
+    monkeypatch.setattr("hotaru.session.prompting.Project.from_directory", classmethod(fake_project_from_directory))
+    monkeypatch.setattr("hotaru.session.prompting.SystemPrompt.build_full_prompt", classmethod(fake_build_full_prompt))
+
+    session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
+    result = await SessionPrompt.prompt(
+        session_id=session.id,
+        content="hello",
+        provider_id="openai",
+        model_id="gpt-5",
+        agent="build",
+        cwd=str(tmp_path),
+        worktree=str(tmp_path),
+        auto_compaction=False,
+    )
+
+    assert result.text == "ok"
+    assert captured["system"] == "auto-system"
+
+
+@pytest.mark.anyio
+async def test_resolve_tools_strictifies_mcp_and_structured_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_defs(cls, **_kwargs):
+        return []
+
+    async def fake_mcp_tools(cls):
+        return {
+            "mcp_demo": {
+                "description": "demo",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "outer": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string"}},
+                        }
+                    },
+                },
+            }
+        }
+
+    monkeypatch.setattr("hotaru.session.prompting.ToolRegistry.get_tool_definitions", classmethod(fake_defs))
+    monkeypatch.setattr("hotaru.mcp.MCP.tools", classmethod(fake_mcp_tools))
+
+    tools = await SessionPrompt.resolve_tools(
+        session_id="ses_missing",
+        agent_name="build",
+        provider_id="openai",
+        model_id="gpt-5",
+        output_format={
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "answer": {
+                        "type": "object",
+                        "properties": {"ok": {"type": "boolean"}},
+                    }
+                },
+            },
+        },
+    )
+
+    mcp = next(item for item in tools if item["function"]["name"] == "mcp_demo")
+    assert mcp["function"]["parameters"]["additionalProperties"] is False
+    assert mcp["function"]["parameters"]["properties"]["outer"]["additionalProperties"] is False
+
+    structured = next(item for item in tools if item["function"]["name"] == "StructuredOutput")
+    assert structured["function"]["parameters"]["additionalProperties"] is False
+    assert structured["function"]["parameters"]["properties"]["answer"]["additionalProperties"] is False

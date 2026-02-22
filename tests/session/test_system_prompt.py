@@ -15,8 +15,8 @@ def _model(model_id: str, provider_id: str = "openai", family: str | None = None
 
 def test_for_model_gpt5_path() -> None:
     prompts = SystemPrompt.for_model(_model("gpt-5"))
-    assert len(prompts) == 1
-    assert "When doing file search, prefer using the Task tool" in prompts[0]
+    assert len(prompts) == 2
+    assert "When doing file search, prefer" in prompts[0]
 
 
 def test_for_model_gemini_path() -> None:
@@ -40,4 +40,4 @@ def test_for_model_qwen_path() -> None:
 def test_for_model_fallback_path() -> None:
     prompts = SystemPrompt.for_model(_model("custom-model-1", provider_id="custom"))
     assert len(prompts) == 1
-    assert "You are Hotaru Code, an AI-powered coding assistant." in prompts[0]
+    assert "You are hotaru, an interactive CLI tool" in prompts[0]

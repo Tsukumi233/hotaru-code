@@ -361,3 +361,66 @@ async def test_llm_stops_after_retry_budget_exhausted(monkeypatch: pytest.Monkey
     assert slept == [2000, 4000]
     assert seen[-1].type == "error"
     assert "status=503" in str(seen[-1].error)
+
+
+@pytest.mark.anyio
+async def test_llm_kimi_default_omits_temperature_but_keeps_top_p(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = ProviderInfo(
+        id="moonshot",
+        name="Moonshot",
+        env=[],
+        key="test-key",
+        models={
+            "kimi-k2.5": ProcessedModelInfo(
+                id="kimi-k2.5",
+                provider_id="moonshot",
+                name="kimi-k2.5",
+                api_id="kimi-k2.5",
+                api_type="openai",
+            )
+        },
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_get_provider(cls, provider_id: str):
+        if provider_id == "moonshot":
+            return provider
+        return None
+
+    async def fake_openai_stream(
+        cls,
+        *,
+        api_key,
+        model,
+        messages,
+        base_url=None,
+        system=None,
+        tools=None,
+        tool_choice=None,
+        max_tokens=4096,
+        temperature=None,
+        top_p=None,
+        options=None,
+    ):
+        captured["temperature"] = temperature
+        captured["top_p"] = top_p
+        yield StreamChunk(type="message_delta", stop_reason="stop")
+
+    monkeypatch.setattr("hotaru.provider.provider.Provider.get", classmethod(fake_get_provider))
+    monkeypatch.setattr(LLM, "_stream_openai", classmethod(fake_openai_stream))
+
+    seen = [
+        chunk
+        async for chunk in LLM.stream(
+            StreamInput(
+                session_id="s1",
+                provider_id="moonshot",
+                model_id="kimi-k2.5",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+        )
+    ]
+
+    assert seen[-1].type == "message_delta"
+    assert captured["temperature"] is None
+    assert captured["top_p"] == 0.95
