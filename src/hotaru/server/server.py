@@ -36,7 +36,8 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from ..app_services import (
     AgentService,
@@ -47,6 +48,7 @@ from ..app_services import (
     SessionService,
 )
 from ..core.global_paths import GlobalPath
+from ..pty import Pty, PtyCreateInput, PtyUpdateInput
 from ..skill import Skill
 from ..util.log import Log
 
@@ -124,6 +126,14 @@ class Server:
             Route("/v1/question/{id}/reply", cls._v1_reply_question, methods=["POST"]),
             Route("/v1/question/{id}/reject", cls._v1_reject_question, methods=["POST"]),
             Route("/v1/event", cls._v1_event_stream, methods=["GET"]),
+
+            # PTY terminal sessions
+            Route("/v1/pty", cls._v1_list_pty, methods=["GET"]),
+            Route("/v1/pty", cls._v1_create_pty, methods=["POST"]),
+            Route("/v1/pty/{id}", cls._v1_get_pty, methods=["GET"]),
+            Route("/v1/pty/{id}", cls._v1_update_pty, methods=["PUT"]),
+            Route("/v1/pty/{id}", cls._v1_delete_pty, methods=["DELETE"]),
+            WebSocketRoute("/v1/pty/{id}/connect", cls._v1_pty_ws),
         ]
 
         middleware = [
@@ -567,6 +577,65 @@ class Server:
                 yield cls._sse_data({"type": "error", "data": {"error": str(exc)}})
 
         return cls._sse_response(event_generator())
+
+    # PTY handlers
+
+    @classmethod
+    async def _v1_list_pty(cls, request: Request) -> JSONResponse:
+        return JSONResponse([i.model_dump() for i in Pty.list()])
+
+    @classmethod
+    async def _v1_create_pty(cls, request: Request) -> JSONResponse:
+        try:
+            payload = await cls._json_payload(request)
+            info = await Pty.create(PtyCreateInput(**payload))
+            return JSONResponse(info.model_dump())
+        except Exception as exc:
+            return cls._error_from_exception(exc)
+
+    @classmethod
+    async def _v1_get_pty(cls, request: Request) -> JSONResponse:
+        info = Pty.get(request.path_params["id"])
+        if not info:
+            return cls._error_response(status_code=404, code="not_found", message="PTY session not found")
+        return JSONResponse(info.model_dump())
+
+    @classmethod
+    async def _v1_update_pty(cls, request: Request) -> JSONResponse:
+        try:
+            payload = await cls._json_payload(request, required=True)
+            info = await Pty.update(request.path_params["id"], PtyUpdateInput(**payload))
+            if not info:
+                return cls._error_response(status_code=404, code="not_found", message="PTY session not found")
+            return JSONResponse(info.model_dump())
+        except Exception as exc:
+            return cls._error_from_exception(exc)
+
+    @classmethod
+    async def _v1_delete_pty(cls, request: Request) -> JSONResponse:
+        try:
+            await Pty.remove(request.path_params["id"])
+            return JSONResponse({"ok": True})
+        except Exception as exc:
+            return cls._error_from_exception(exc)
+
+    @classmethod
+    async def _v1_pty_ws(cls, websocket: WebSocket) -> None:
+        await websocket.accept()
+        sid = websocket.path_params["id"]
+        cursor = int(websocket.query_params.get("cursor", "0"))
+        cleanup = await Pty.connect(sid, websocket, cursor)
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg["type"] == "websocket.disconnect":
+                    break
+                if "text" in msg:
+                    Pty.write(sid, msg["text"])
+        except WebSocketDisconnect:
+            pass
+        finally:
+            cleanup()
 
     @classmethod
     async def _v1_get_paths(cls, request: Request) -> JSONResponse:

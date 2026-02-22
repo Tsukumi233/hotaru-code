@@ -6,10 +6,18 @@
 flowchart TB
     User["用户"]
 
-    subgraph Entry["入口层（CLI / TUI）"]
+    subgraph Entry["入口层（CLI / TUI / WebUI）"]
         CLI["Typer CLI<br/>src/hotaru/cli/main.py"]
         RunCmd["Run 命令<br/>src/hotaru/cli/cmd/run.py"]
         TuiApp["Textual TUI<br/>src/hotaru/tui/app.py"]
+        WebCmd["Web 命令<br/>src/hotaru/cli/cmd/web.py"]
+        Server["HTTP Server（Starlette + SSE）<br/>src/hotaru/server/server.py"]
+        WebUI["React Frontend<br/>src/hotaru/webui/dist"]
+    end
+
+    subgraph AppSvc["应用服务层（WebUI 专用）"]
+        AppServices["AppServices<br/>src/hotaru/app_services"]
+        ApiClient["ApiClient（HTTP 客户端）<br/>src/hotaru/api_client"]
     end
 
     subgraph Orchestration["会话编排层"]
@@ -19,6 +27,7 @@ flowchart TB
         Processor["SessionProcessor（Agentic Loop）<br/>src/hotaru/session/processor.py"]
         LLM["LLM Streaming Adapter<br/>src/hotaru/session/llm.py"]
         SessionStore["Session + MessageStore<br/>src/hotaru/session/session.py"]
+        Command["Command（斜杠命令）<br/>src/hotaru/command"]
     end
 
     subgraph ModelLayer["模型与 Agent 层"]
@@ -37,6 +46,7 @@ flowchart TB
         MCPServers["本地/远程 MCP Servers"]
         Skill["Skill 发现与加载<br/>src/hotaru/skill"]
         TaskTool["Task Tool（子 Agent 委派）<br/>src/hotaru/tool/task.py"]
+        LSP["LSP 客户端（实验）<br/>src/hotaru/lsp"]
     end
 
     subgraph Infra["基础设施层"]
@@ -44,21 +54,36 @@ flowchart TB
         Bus["Event Bus<br/>src/hotaru/core/bus.py"]
         Storage["Storage(JSON + Lock)<br/>src/hotaru/storage/storage.py"]
         GlobalPath["GlobalPath（config/data/cache）"]
+        Snapshot["SnapshotTracker（Git 快照）<br/>src/hotaru/snapshot"]
+        Shell["Shell 执行<br/>src/hotaru/shell"]
+        Patch["Patch 应用<br/>src/hotaru/patch"]
     end
 
     User --> CLI
     CLI -->|默认| TuiApp
     CLI -->|run| RunCmd
+    CLI -->|web| WebCmd
+    WebCmd --> Server
+    Server --> WebUI
+    User --> WebUI
 
     TuiApp --> Project
     RunCmd --> Project
     TuiApp --> SessionPrompt
     RunCmd --> SessionPrompt
+
+    Server --> AppServices
+    AppServices --> SessionPrompt
+    AppServices --> Project
+    WebUI -.->|HTTP/SSE| ApiClient
+    ApiClient -.-> Server
+
     Project --> SessionPrompt
     SystemPrompt --> SessionPrompt
     SessionPrompt --> Processor
     Processor --> LLM
     SessionPrompt --> SessionStore
+    SessionPrompt --> Command
 
     Processor --> Agent
     Processor --> Provider
@@ -71,6 +96,7 @@ flowchart TB
     BuiltinTools --> Permission
     BuiltinTools --> TaskTool
     BuiltinTools --> Skill
+    BuiltinTools --> LSP
 
     Processor --> MCP
     MCP --> MCPServers
@@ -88,12 +114,18 @@ flowchart TB
     Permission --> Storage
     Storage --> GlobalPath
 
+    Snapshot --> Project
+    BuiltinTools --> Shell
+    BuiltinTools --> Patch
+
     Permission --> Bus
     MCP --> Bus
     Project --> Bus
     SessionStore --> Bus
     TuiApp --> Bus
     RunCmd --> Bus
+    Server --> Bus
+    LSP --> Bus
 ```
 
 Hotaru Code 是一个 AI 编码助手。
