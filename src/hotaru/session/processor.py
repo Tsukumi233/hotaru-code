@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
@@ -16,6 +17,33 @@ from ..tool.registry import ToolRegistry
 from ..tool.resolver import ToolResolver
 from ..util.log import Log
 from .llm import LLM, StreamInput, StreamChunk
+from .retry import SessionRetry
+
+try:
+    from openai import APIConnectionError as OpenAIAPIConnectionError
+    from openai import APIError as OpenAIAPIError
+    from openai import APIStatusError as OpenAIAPIStatusError
+    from openai import APITimeoutError as OpenAIAPITimeoutError
+    from openai import RateLimitError as OpenAIRateLimitError
+except ImportError:
+    OpenAIAPIConnectionError = None
+    OpenAIAPIError = None
+    OpenAIAPIStatusError = None
+    OpenAIAPITimeoutError = None
+    OpenAIRateLimitError = None
+
+try:
+    from anthropic import APIConnectionError as AnthropicAPIConnectionError
+    from anthropic import APIError as AnthropicAPIError
+    from anthropic import APIStatusError as AnthropicAPIStatusError
+    from anthropic import APITimeoutError as AnthropicAPITimeoutError
+    from anthropic import RateLimitError as AnthropicRateLimitError
+except ImportError:
+    AnthropicAPIConnectionError = None
+    AnthropicAPIError = None
+    AnthropicAPIStatusError = None
+    AnthropicAPITimeoutError = None
+    AnthropicRateLimitError = None
 
 log = Log.create({"service": "session.processor"})
 
@@ -29,6 +57,24 @@ _BUILD_SWITCH_PROMPT = _BUILD_SWITCH_PROMPT_PATH.read_text(encoding="utf-8").str
 _PLAN_REMINDER_PROMPT_PATH = Path(__file__).parent / "prompt" / "plan-reminder.txt"
 _PLAN_REMINDER_PROMPT = _PLAN_REMINDER_PROMPT_PATH.read_text(encoding="utf-8").strip()
 _STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
+_RECOVERABLE_TURN_ERRORS = tuple(
+    value
+    for value in (
+        TimeoutError,
+        asyncio.TimeoutError,
+        OpenAIAPIError,
+        OpenAIAPIConnectionError,
+        OpenAIAPIStatusError,
+        OpenAIAPITimeoutError,
+        OpenAIRateLimitError,
+        AnthropicAPIError,
+        AnthropicAPIConnectionError,
+        AnthropicAPIStatusError,
+        AnthropicAPITimeoutError,
+        AnthropicRateLimitError,
+    )
+    if isinstance(value, type)
+)
 
 
 @dataclass
@@ -744,12 +790,29 @@ class SessionProcessor:
                     break
 
         except Exception as e:
-            log.error("turn processing error", {"error": str(e)})
-            result.status = "error"
-            result.error = str(e)
+            if self._recoverable_turn_error(e):
+                log.warn("recoverable turn processing error", {
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                })
+                result.status = "error"
+                result.error = str(e)
+            else:
+                log.error("unexpected error in turn processing", {
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "traceback": traceback.format_exc(),
+                })
+                raise
 
         result.reasoning_text = "".join(reasoning_fragments)
         return result
+
+    @staticmethod
+    def _recoverable_turn_error(error: Exception) -> bool:
+        if isinstance(error, _RECOVERABLE_TURN_ERRORS):
+            return True
+        return SessionRetry.retryable(error)
 
     async def _execute_tool(
         self,

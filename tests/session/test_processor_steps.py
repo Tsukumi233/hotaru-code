@@ -529,3 +529,58 @@ async def test_processor_routes_unknown_tool_to_resolver_mcp_lookup(
     assert captured["tool_id"] == "mcp_demo"
     assert captured["mcp_info"] == {"client": "demo", "name": "echo", "timeout": 30.0}
     assert captured["tool_input"] == {"query": "hello"}
+
+
+@pytest.mark.anyio
+async def test_processor_reraises_unexpected_turn_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="text", text="hello")
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    processor = SessionProcessor(
+        session_id="ses_turn_type_error",
+        model_id="model",
+        provider_id="provider",
+        agent="build",
+        cwd="/tmp",
+        worktree="/tmp",
+    )
+
+    with pytest.raises(TypeError, match="broken callback"):
+        await processor.process_step(on_text=lambda _text: (_ for _ in ()).throw(TypeError("broken callback")))
+
+
+@pytest.mark.anyio
+async def test_processor_marks_turn_timeout_as_recoverable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_stream(cls, _stream_input):
+        raise TimeoutError("upstream timeout")
+        yield StreamChunk(type="text", text="never")
+
+    async def fake_get_agent(cls, name: str):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+
+    processor = SessionProcessor(
+        session_id="ses_turn_timeout",
+        model_id="model",
+        provider_id="provider",
+        agent="build",
+        cwd="/tmp",
+        worktree="/tmp",
+    )
+
+    result = await processor.process_step()
+
+    assert result.status == "error"
+    assert result.error == "upstream timeout"
