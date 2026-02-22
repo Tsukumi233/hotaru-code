@@ -65,3 +65,17 @@ async def test_registry_strictifies_builtin_tool_schema() -> None:
     params = read_tool["function"]["parameters"]
     assert params["type"] == "object"
     assert params["additionalProperties"] is False
+    assert "title" not in params
+    assert "title" not in params["properties"]["filePath"]
+
+    offset = params["properties"]["offset"]
+    assert offset["type"] == "integer"
+    assert "anyOf" not in offset
+    assert "default" not in offset
+    assert "title" not in offset
+
+    limit = params["properties"]["limit"]
+    assert limit["type"] == "integer"
+    assert "anyOf" not in limit
+    assert "default" not in limit
+    assert "title" not in limit

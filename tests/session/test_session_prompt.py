@@ -697,11 +697,20 @@ async def test_resolve_tools_strictifies_mcp_and_structured_schema(
             "mcp_demo": {
                 "description": "demo",
                 "input_schema": {
+                    "title": "Demo Input",
                     "type": "object",
                     "properties": {
                         "outer": {
-                            "type": "object",
-                            "properties": {"value": {"type": "string"}},
+                            "title": "Outer",
+                            "anyOf": [
+                                {
+                                    "title": "OuterValue",
+                                    "type": "object",
+                                    "properties": {"value": {"type": "string", "title": "Value"}},
+                                },
+                                {"type": "null"},
+                            ],
+                            "default": None,
                         }
                     },
                 },
@@ -719,11 +728,20 @@ async def test_resolve_tools_strictifies_mcp_and_structured_schema(
         output_format={
             "type": "json_schema",
             "schema": {
+                "title": "Structured",
                 "type": "object",
                 "properties": {
                     "answer": {
-                        "type": "object",
-                        "properties": {"ok": {"type": "boolean"}},
+                        "title": "Answer",
+                        "anyOf": [
+                            {
+                                "title": "AnswerValue",
+                                "type": "object",
+                                "properties": {"ok": {"type": "boolean", "title": "Ok"}},
+                            },
+                            {"type": "null"},
+                        ],
+                        "default": None,
                     }
                 },
             },
@@ -732,8 +750,22 @@ async def test_resolve_tools_strictifies_mcp_and_structured_schema(
 
     mcp = next(item for item in tools if item["function"]["name"] == "mcp_demo")
     assert mcp["function"]["parameters"]["additionalProperties"] is False
-    assert mcp["function"]["parameters"]["properties"]["outer"]["additionalProperties"] is False
+    assert "title" not in mcp["function"]["parameters"]
+    outer = mcp["function"]["parameters"]["properties"]["outer"]
+    assert outer["type"] == "object"
+    assert outer["additionalProperties"] is False
+    assert "anyOf" not in outer
+    assert "default" not in outer
+    assert "title" not in outer
+    assert "title" not in outer["properties"]["value"]
 
     structured = next(item for item in tools if item["function"]["name"] == "StructuredOutput")
     assert structured["function"]["parameters"]["additionalProperties"] is False
-    assert structured["function"]["parameters"]["properties"]["answer"]["additionalProperties"] is False
+    assert "title" not in structured["function"]["parameters"]
+    answer = structured["function"]["parameters"]["properties"]["answer"]
+    assert answer["type"] == "object"
+    assert answer["additionalProperties"] is False
+    assert "anyOf" not in answer
+    assert "default" not in answer
+    assert "title" not in answer
+    assert "title" not in answer["properties"]["ok"]
