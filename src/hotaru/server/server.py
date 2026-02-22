@@ -72,14 +72,20 @@ class Server:
 
     @classmethod
     async def stop(cls) -> None:
-        if cls._server:
-            log.info("stopping server")
-            cls._server.should_exit = True
-            await asyncio.sleep(0.5)
+        server = cls._server
+        if not server:
+            return
+
+        log.info("stopping server")
+        server.should_exit = True
+        while bool(getattr(server, "started", False)):
+            await asyncio.sleep(0.05)
+
+        if cls._server is server:
             cls._server = None
             cls._app = None
             cls._info = None
-            log.info("server stopped")
+        log.info("server stopped")
 
     @classmethod
     def info(cls) -> ServerInfo | None:
