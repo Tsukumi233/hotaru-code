@@ -20,7 +20,7 @@ from ..patch import (
 from .edit import trim_diff
 from .external_directory import assert_external_directory
 from .lsp_feedback import append_lsp_error_feedback
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 
 class ApplyPatchParams(BaseModel):
@@ -60,7 +60,6 @@ async def _build_changes(params: ApplyPatchParams, ctx: ToolContext) -> List[_Fi
     changes: List[_FileChange] = []
     for hunk in hunks:
         file_path = (cwd / hunk.path).resolve()
-        await assert_external_directory(ctx, file_path)
 
         if isinstance(hunk, AddHunk):
             old = ""
@@ -106,8 +105,6 @@ async def _build_changes(params: ApplyPatchParams, ctx: ToolContext) -> List[_Fi
             new = derive_new_contents_from_chunks(str(file_path), hunk.chunks, old)
             diff = trim_diff(create_unified_diff(str(file_path), old, new))
             move_path = (cwd / hunk.move_path).resolve() if hunk.move_path else None
-            if move_path is not None:
-                await assert_external_directory(ctx, move_path)
             adds, dels = _line_stats(old, new)
             changes.append(
                 _FileChange(
@@ -124,6 +121,51 @@ async def _build_changes(params: ApplyPatchParams, ctx: ToolContext) -> List[_Fi
             continue
 
     return changes
+
+
+async def apply_patch_permissions(params: ApplyPatchParams, ctx: ToolContext) -> list[PermissionSpec]:
+    if not params.patch_text.strip():
+        raise ValueError("patchText is required")
+
+    try:
+        changes = await _build_changes(params, ctx)
+    except PatchParseError as exc:
+        raise RuntimeError(f"apply_patch verification failed: {exc}") from exc
+
+    specs: list[PermissionSpec] = []
+    for change in changes:
+        specs.extend(await assert_external_directory(ctx, change.file_path))
+        if change.move_path is not None:
+            specs.extend(await assert_external_directory(ctx, change.move_path))
+
+    total_diff = "\n".join(change.diff for change in changes if change.diff)
+    files_metadata = [
+        {
+            "filePath": str(change.file_path),
+            "relativePath": str(change.move_path or change.file_path),
+            "type": change.change_type,
+            "diff": change.diff,
+            "before": change.old_content,
+            "after": change.new_content,
+            "additions": change.additions,
+            "deletions": change.deletions,
+            "movePath": str(change.move_path) if change.move_path else None,
+        }
+        for change in changes
+    ]
+    specs.append(
+        PermissionSpec(
+            permission="edit",
+            patterns=[str(change.file_path) for change in changes],
+            always=["*"],
+            metadata={
+                "filepath": ", ".join(str(change.file_path) for change in changes),
+                "diff": total_diff,
+                "files": files_metadata,
+            },
+        )
+    )
+    return specs
 
 
 async def apply_patch_execute(params: ApplyPatchParams, ctx: ToolContext) -> ToolResult:
@@ -150,17 +192,6 @@ async def apply_patch_execute(params: ApplyPatchParams, ctx: ToolContext) -> Too
         }
         for change in changes
     ]
-
-    await ctx.ask(
-        permission="edit",
-        patterns=[str(change.file_path) for change in changes],
-        always=["*"],
-        metadata={
-            "filepath": ", ".join(str(change.file_path) for change in changes),
-            "diff": total_diff,
-            "files": files_metadata,
-        },
-    )
 
     for change in changes:
         if change.change_type == "add":
@@ -211,6 +242,7 @@ ApplyPatchTool = Tool.define(
     tool_id="apply_patch",
     description=_DESCRIPTION,
     parameters_type=ApplyPatchParams,
+    permission_fn=apply_patch_permissions,
     execute_fn=apply_patch_execute,
     auto_truncate=False,
 )

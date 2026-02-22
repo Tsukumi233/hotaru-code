@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..util.log import Log
 from .external_directory import assert_external_directory
 from .lsp_feedback import append_lsp_error_feedback
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "edit"})
 
@@ -298,8 +298,6 @@ async def edit_execute(params: EditParams, ctx: ToolContext) -> ToolResult:
     if not filepath.is_absolute():
         filepath = cwd / filepath
 
-    await assert_external_directory(ctx, filepath)
-
     diff = ""
 
     # Handle creating new file with empty old_string
@@ -308,13 +306,6 @@ async def edit_execute(params: EditParams, ctx: ToolContext) -> ToolResult:
         content_new = params.new_string
 
         diff = _create_diff("", content_new, str(filepath))
-
-        await ctx.ask(
-            permission="edit",
-            patterns=[str(filepath)],
-            always=["*"],
-            metadata={"filepath": str(filepath), "diff": diff}
-        )
 
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(params.new_string, encoding="utf-8")
@@ -335,13 +326,6 @@ async def edit_execute(params: EditParams, ctx: ToolContext) -> ToolResult:
         )
 
         diff = _create_diff(content_old, content_new, str(filepath))
-
-        await ctx.ask(
-            permission="edit",
-            patterns=[str(filepath)],
-            always=["*"],
-            metadata={"filepath": str(filepath), "diff": diff}
-        )
 
         filepath.write_text(content_new, encoding="utf-8")
 
@@ -375,11 +359,52 @@ def _create_diff(old: str, new: str, filepath: str) -> str:
     return trim_diff("".join(diff))
 
 
+async def edit_permissions(params: EditParams, ctx: ToolContext) -> list[PermissionSpec]:
+    if not params.file_path:
+        raise ValueError("file_path is required")
+    if params.old_string == params.new_string:
+        raise ValueError("old_string and new_string must be different")
+
+    filepath = Path(params.file_path)
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    if not filepath.is_absolute():
+        filepath = cwd / filepath
+
+    specs = await assert_external_directory(ctx, filepath)
+
+    if params.old_string == "":
+        diff = _create_diff("", params.new_string, str(filepath))
+    else:
+        if not filepath.exists():
+            raise FileNotFoundError(f"File {filepath} not found")
+        if filepath.is_dir():
+            raise ValueError(f"Path is a directory, not a file: {filepath}")
+        content_old = filepath.read_text(encoding="utf-8", errors="replace")
+        content_new = replace(
+            content_old,
+            params.old_string,
+            params.new_string,
+            params.replace_all or False
+        )
+        diff = _create_diff(content_old, content_new, str(filepath))
+
+    specs.append(
+        PermissionSpec(
+            permission="edit",
+            patterns=[str(filepath)],
+            always=["*"],
+            metadata={"filepath": str(filepath), "diff": diff},
+        )
+    )
+    return specs
+
+
 # Register the tool
 EditTool = Tool.define(
     tool_id="edit",
     description=DESCRIPTION,
     parameters_type=EditParams,
+    permission_fn=edit_permissions,
     execute_fn=edit_execute,
     auto_truncate=False
 )

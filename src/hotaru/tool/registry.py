@@ -18,6 +18,7 @@ from .grep import GrepTool
 from .list import LsTool
 from .lsp import LspTool
 from .multiedit import MultiEditTool
+from .permission_guard import PermissionGuard
 from .plan import PlanEnterTool, PlanExitTool
 from .question import QuestionTool
 from .read import ReadTool
@@ -25,7 +26,7 @@ from .schema import strictify_schema
 from .skill import SkillTool, build_skill_description
 from .task import TaskTool, build_task_description
 from .todo import TodoReadTool, TodoWriteTool
-from .tool import ToolInfo
+from .tool import ToolContext, ToolInfo, ToolResult
 from .truncation import start_cleanup_task
 from .webfetch import WebFetchTool
 from .websearch import WebSearchTool
@@ -220,6 +221,21 @@ class ToolRegistry:
     def register(cls, tool: ToolInfo) -> None:
         tools = cls._all()
         tools[tool.id] = tool
+
+    @classmethod
+    async def execute(cls, tool_id: str, args: Any, ctx: ToolContext) -> ToolResult:
+        tool = cls.get(tool_id)
+        if tool is None:
+            raise ValueError(f"Unknown tool: {tool_id}")
+
+        try:
+            parsed = tool.parameters_type.model_validate(args)
+        except Exception as e:
+            raise ValueError(f"Invalid tool input: {e}") from e
+
+        permissions = await tool.permissions(parsed, ctx)
+        await PermissionGuard.check(permissions, ctx)
+        return await tool.execute(parsed, ctx)
 
     @classmethod
     async def get_tool_definitions(

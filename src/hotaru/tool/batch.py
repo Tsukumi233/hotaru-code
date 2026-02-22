@@ -67,8 +67,11 @@ async def batch_execute(params: BatchParams, ctx: ToolContext) -> ToolResult:
             }
 
         try:
-            args = tool.parameters_type.model_validate(call.parameters)
-            result = await tool.execute(args, _clone_context(ctx, Identifier.ascending("call")))
+            result = await ToolRegistry.execute(
+                call.tool,
+                call.parameters,
+                _clone_context(ctx, Identifier.ascending("call")),
+            )
             return {"success": True, "tool": call.tool, "result": result}
         except Exception as exc:
             return {"success": False, "tool": call.tool, "error": str(exc)}

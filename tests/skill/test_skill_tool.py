@@ -3,11 +3,10 @@ from pathlib import Path
 import pytest
 
 from hotaru.agent.agent import AgentInfo, AgentMode
-from hotaru.permission import Permission
 from hotaru.session.llm import LLM, StreamChunk
 from hotaru.session.processor import SessionProcessor
 from hotaru.skill.skill import Skill, SkillInfo
-from hotaru.tool.skill import SkillParams, build_skill_description, skill_execute
+from hotaru.tool.skill import SkillParams, SkillTool, build_skill_description, skill_execute
 from hotaru.tool.tool import ToolContext
 
 
@@ -50,7 +49,7 @@ async def test_skill_description_hides_denied_skills(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.anyio
-async def test_skill_execute_returns_content_and_requests_permission(
+async def test_skill_execute_returns_content_and_builds_permission_spec(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -73,39 +72,21 @@ async def test_skill_execute_returns_content_and_requests_permission(
     async def fake_names(cls):
         return ["tool-skill"]
 
-    captured = {}
-
-    async def fake_permission_ask(
-        cls,
-        session_id: str,
-        permission: str,
-        patterns: list[str],
-        ruleset,
-        always=None,
-        metadata=None,
-        request_id=None,
-        tool=None,
-    ):
-        captured["session_id"] = session_id
-        captured["permission"] = permission
-        captured["patterns"] = patterns
-        captured["always"] = always
-        captured["metadata"] = metadata
-
     monkeypatch.setattr(Skill, "get", classmethod(fake_get))
     monkeypatch.setattr(Skill, "names", classmethod(fake_names))
-    monkeypatch.setattr(Permission, "ask", classmethod(fake_permission_ask))
 
     ctx = ToolContext(
         session_id="session-1",
         message_id="message-1",
         agent="build",
     )
+    specs = await SkillTool.permissions(SkillParams(name="tool-skill"), ctx)
     result = await skill_execute(SkillParams(name="tool-skill"), ctx)
 
-    assert captured["permission"] == "skill"
-    assert captured["patterns"] == ["tool-skill"]
-    assert captured["always"] == ["tool-skill"]
+    assert len(specs) == 1
+    assert specs[0].permission == "skill"
+    assert specs[0].patterns == ["tool-skill"]
+    assert specs[0].always == ["tool-skill"]
     assert result.metadata["dir"] == str(skill_dir.resolve())
     assert result.output.startswith('<skill_content name="tool-skill">')
     assert "<skill_files>" in result.output

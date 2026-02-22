@@ -540,8 +540,7 @@ class SessionProcessor:
         if not subagent or subagent.mode != AgentMode.SUBAGENT:
             return None
 
-        task_tool = ToolRegistry.get("task")
-        if not task_tool:
+        if not ToolRegistry.get("task"):
             return None
 
         params = TaskParams(
@@ -565,7 +564,7 @@ class SessionProcessor:
         )
 
         try:
-            result = await task_tool.execute(params, ctx)
+            result = await ToolRegistry.execute("task", params, ctx)
         except Exception as e:
             return f"Failed to run @{subagent_name}: {e}"
         content = result.output
@@ -844,14 +843,7 @@ class SessionProcessor:
                 _ruleset=merged_ruleset,
             )
 
-            # Validate and parse input
-            try:
-                args = tool.parameters_type.model_validate(tool_input)
-            except Exception as e:
-                return {"error": f"Invalid tool input: {e}"}
-
-            # Execute the tool
-            result = await tool.execute(args, ctx)
+            result = await ToolRegistry.execute(tool_name, tool_input, ctx)
             if pending_tasks:
                 await asyncio.gather(*pending_tasks, return_exceptions=True)
 

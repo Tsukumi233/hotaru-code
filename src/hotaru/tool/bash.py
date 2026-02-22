@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from ..permission.arity import BashArity
 from ..util.log import Log
 from .external_directory import assert_external_directory
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 from .truncation import Truncate
 
 log = Log.create({"service": "bash"})
@@ -188,26 +188,22 @@ def _parse_tokens(segment: str) -> list[str]:
         return []
 
 
-async def bash_execute(params: BashParams, ctx: ToolContext) -> ToolResult:
-    """Execute the bash tool."""
-    base_cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-    cwd_path = Path(params.workdir) if params.workdir else base_cwd
-    if not cwd_path.is_absolute():
-        cwd_path = base_cwd / cwd_path
-    cwd = str(cwd_path.resolve())
+def _resolve_cwd(params: BashParams, ctx: ToolContext) -> Path:
+    base = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    path = Path(params.workdir) if params.workdir else base
+    if not path.is_absolute():
+        path = base / path
+    return path.resolve()
 
-    if params.timeout is not None and params.timeout < 0:
-        raise ValueError(f"Invalid timeout value: {params.timeout}. Timeout must be a positive number.")
 
-    timeout_ms = params.timeout or DEFAULT_TIMEOUT
-    timeout_sec = timeout_ms / 1000
-
-    await assert_external_directory(ctx, cwd_path, kind="directory")
+async def bash_permissions(params: BashParams, ctx: ToolContext) -> list[PermissionSpec]:
+    base = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    cwd = _resolve_cwd(params, ctx)
+    specs = await assert_external_directory(ctx, cwd, kind="directory")
 
     command_patterns: list[str] = []
     always_patterns: list[str] = []
     external_globs: Set[str] = set()
-
     worktree_value = str(ctx.extra.get("worktree") or "")
     worktree_path = Path(worktree_value).resolve() if worktree_value else None
 
@@ -232,10 +228,10 @@ async def bash_execute(params: BashParams, ctx: ToolContext) -> ToolResult:
                 for arg in tokens[1:]:
                     if command_name == "chmod" and arg.startswith("+"):
                         continue
-                    resolved = _resolve_path_argument(arg, cwd_path)
+                    resolved = _resolve_path_argument(arg, cwd)
                     if not resolved:
                         continue
-                    if _in_project_boundary(resolved, base_cwd.resolve(), worktree_path):
+                    if _in_project_boundary(resolved, base.resolve(), worktree_path):
                         continue
                     parent_dir = resolved if resolved.is_dir() else resolved.parent
                     external_globs.add(str(parent_dir / "*"))
@@ -250,25 +246,38 @@ async def bash_execute(params: BashParams, ctx: ToolContext) -> ToolResult:
 
     if external_globs:
         globs = sorted(external_globs)
-        await ctx.ask(
-            permission="external_directory",
-            patterns=globs,
-            always=globs,
-            metadata={"command": params.command},
+        specs.append(
+            PermissionSpec(
+                permission="external_directory",
+                patterns=globs,
+                always=globs,
+                metadata={"command": params.command},
+            )
         )
-
     if command_patterns:
-        unique_patterns = sorted(set(command_patterns))
-        unique_always = sorted(set(always_patterns))
-        await ctx.ask(
-            permission="bash",
-            patterns=unique_patterns,
-            always=unique_always,
-            metadata={
-                "command": params.command,
-                "description": params.description,
-            },
+        specs.append(
+            PermissionSpec(
+                permission="bash",
+                patterns=sorted(set(command_patterns)),
+                always=sorted(set(always_patterns)),
+                metadata={
+                    "command": params.command,
+                    "description": params.description,
+                },
+            )
         )
+    return specs
+
+
+async def bash_execute(params: BashParams, ctx: ToolContext) -> ToolResult:
+    """Execute the bash tool."""
+    cwd = str(_resolve_cwd(params, ctx))
+
+    if params.timeout is not None and params.timeout < 0:
+        raise ValueError(f"Invalid timeout value: {params.timeout}. Timeout must be a positive number.")
+
+    timeout_ms = params.timeout or DEFAULT_TIMEOUT
+    timeout_sec = timeout_ms / 1000
 
     shell = _get_shell()
     log.info("executing command", {"shell": shell, "command": params.command})
@@ -362,6 +371,7 @@ BashTool = Tool.define(
     tool_id="bash",
     description=DESCRIPTION,
     parameters_type=BashParams,
+    permission_fn=bash_permissions,
     execute_fn=bash_execute,
     auto_truncate=True
 )

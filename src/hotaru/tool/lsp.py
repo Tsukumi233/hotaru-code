@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..lsp import LSP
 from .external_directory import assert_external_directory
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 _OPERATIONS = (
     "goToDefinition",
@@ -56,16 +56,32 @@ def _json_default(value: object) -> object:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-async def lsp_execute(args: LspParams, ctx: ToolContext) -> ToolResult:
+def _resolve_file_path(args: LspParams, ctx: ToolContext) -> Path:
     cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-    worktree = Path(str(ctx.extra.get("worktree") or cwd))
     file_path = Path(args.filePath)
     if not file_path.is_absolute():
         file_path = cwd / file_path
-    file_path = file_path.resolve()
+    return file_path.resolve()
 
-    await assert_external_directory(ctx, file_path)
-    await ctx.ask(permission="lsp", patterns=["*"], always=["*"], metadata={})
+
+async def lsp_permissions(args: LspParams, ctx: ToolContext) -> list[PermissionSpec]:
+    file_path = _resolve_file_path(args, ctx)
+    specs = await assert_external_directory(ctx, file_path)
+    specs.append(
+        PermissionSpec(
+            permission="lsp",
+            patterns=["*"],
+            always=["*"],
+            metadata={},
+        )
+    )
+    return specs
+
+
+async def lsp_execute(args: LspParams, ctx: ToolContext) -> ToolResult:
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    worktree = Path(str(ctx.extra.get("worktree") or cwd))
+    file_path = _resolve_file_path(args, ctx)
 
     if not file_path.exists() or file_path.is_dir():
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -121,6 +137,7 @@ LspTool = Tool.define(
     tool_id="lsp",
     description=_DESCRIPTION,
     parameters_type=LspParams,
+    permission_fn=lsp_permissions,
     execute_fn=lsp_execute,
     auto_truncate=True,
 )

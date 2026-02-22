@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..util.log import Log
 from .external_directory import assert_external_directory
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "grep"})
 
@@ -81,31 +81,10 @@ async def grep_execute(params: GrepParams, ctx: ToolContext) -> ToolResult:
 
     cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
 
-    # Determine search path
-    search_path = Path(params.path) if params.path else cwd
-    if not search_path.is_absolute():
-        search_path = cwd / search_path
+    search_path = _resolve_search_path(params, ctx)
 
     if not search_path.exists():
         raise FileNotFoundError(f"Path not found: {search_path}")
-
-    await assert_external_directory(
-        ctx,
-        search_path,
-        kind="directory" if search_path.is_dir() else "file",
-    )
-
-    # Request permission
-    await ctx.ask(
-        permission="grep",
-        patterns=[params.pattern],
-        always=["*"],
-        metadata={
-            "pattern": params.pattern,
-            "path": params.path,
-            "include": params.include,
-        }
-    )
 
     # Compile regex
     try:
@@ -195,11 +174,44 @@ async def grep_execute(params: GrepParams, ctx: ToolContext) -> ToolResult:
     )
 
 
+def _resolve_search_path(params: GrepParams, ctx: ToolContext) -> Path:
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    search_path = Path(params.path) if params.path else cwd
+    if not search_path.is_absolute():
+        search_path = cwd / search_path
+    return search_path
+
+
+async def grep_permissions(params: GrepParams, ctx: ToolContext) -> list[PermissionSpec]:
+    search_path = _resolve_search_path(params, ctx)
+    if not search_path.exists():
+        raise FileNotFoundError(f"Path not found: {search_path}")
+    specs = await assert_external_directory(
+        ctx,
+        search_path,
+        kind="directory" if search_path.is_dir() else "file",
+    )
+    specs.append(
+        PermissionSpec(
+            permission="grep",
+            patterns=[params.pattern],
+            always=["*"],
+            metadata={
+                "pattern": params.pattern,
+                "path": params.path,
+                "include": params.include,
+            },
+        )
+    )
+    return specs
+
+
 # Register the tool
 GrepTool = Tool.define(
     tool_id="grep",
     description=DESCRIPTION,
     parameters_type=GrepParams,
+    permission_fn=grep_permissions,
     execute_fn=grep_execute,
     auto_truncate=False
 )

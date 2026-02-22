@@ -6,7 +6,8 @@ invoked by AI agents.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Generic, List, Optional, Type, TypeVar
+import inspect
+from typing import Any, Awaitable, Callable, Dict, Generic, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -104,6 +105,15 @@ class ToolResult:
     attachments: List[Dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass
+class PermissionSpec:
+    """Permission request generated before tool execution."""
+    permission: str
+    patterns: List[str]
+    always: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
 class ToolInfo(ABC, Generic[T]):
     """Base class for tool definitions.
 
@@ -127,6 +137,11 @@ class ToolInfo(ABC, Generic[T]):
     id: str
     description: str
     parameters_type: Type[T]
+
+    async def permissions(self, args: T, ctx: ToolContext) -> List[PermissionSpec]:
+        """Return permission checks to run before execute."""
+        del args, ctx
+        return []
 
     @abstractmethod
     async def execute(self, args: T, ctx: ToolContext) -> ToolResult:
@@ -172,6 +187,7 @@ class Tool:
         description: str,
         parameters_type: Type[T],
         execute_fn: Callable[[T, ToolContext], ToolResult],
+        permission_fn: Optional[Callable[[T, ToolContext], Awaitable[List[PermissionSpec]] | List[PermissionSpec]]] = None,
         auto_truncate: bool = True
     ) -> ToolInfo[T]:
         """Define a new tool using a function.
@@ -191,12 +207,23 @@ class Tool:
         _description = description
         _parameters_type = parameters_type
         _execute_fn = execute_fn
+        _permission_fn = permission_fn
         _auto_truncate = auto_truncate
 
         class FunctionalTool(ToolInfo[T]):
             id = _tool_id
             description = _description
             parameters_type = _parameters_type
+
+            async def permissions(self, args: T, ctx: ToolContext) -> List[PermissionSpec]:
+                if _permission_fn is None:
+                    return []
+                permissions = _permission_fn(args, ctx)
+                if inspect.isawaitable(permissions):
+                    permissions = await permissions
+                if not permissions:
+                    return []
+                return list(permissions)
 
             async def execute(self, args: T, ctx: ToolContext) -> ToolResult:
                 # Validate parameters

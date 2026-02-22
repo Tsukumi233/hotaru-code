@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
-from .tool import ToolContext
+from .tool import PermissionSpec, ToolContext
 
 
 def _contains_path(base: Path, target: Path) -> bool:
@@ -19,10 +19,10 @@ async def assert_external_directory(
     target: Optional[Path],
     kind: str = "file",
     bypass: bool = False,
-) -> None:
-    """Ask for external_directory permission when target is outside project bounds."""
+) -> list[PermissionSpec]:
+    """Build external_directory permission spec when target is outside project bounds."""
     if target is None or bypass:
-        return
+        return []
 
     cwd_value = str(ctx.extra.get("cwd") or Path.cwd())
     worktree_value = str(ctx.extra.get("worktree") or "")
@@ -32,22 +32,24 @@ async def assert_external_directory(
     target_path = target_path.resolve()
 
     if _contains_path(cwd, target_path):
-        return
+        return []
 
     if worktree_value and worktree_value != "/":
         worktree = Path(worktree_value).resolve()
         if _contains_path(worktree, target_path):
-            return
+            return []
 
     parent_dir = target_path if kind == "directory" else target_path.parent
     glob = str(parent_dir / "*")
 
-    await ctx.ask(
-        permission="external_directory",
-        patterns=[glob],
-        always=[glob],
-        metadata={
-            "directory": str(parent_dir),
-            "filepath": str(target_path),
-        },
-    )
+    return [
+        PermissionSpec(
+            permission="external_directory",
+            patterns=[glob],
+            always=[glob],
+            metadata={
+                "directory": str(parent_dir),
+                "filepath": str(target_path),
+            },
+        )
+    ]

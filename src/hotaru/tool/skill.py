@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from ..skill import Skill, SkillInfo
 from ..util.log import Log
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "tool.skill"})
 
@@ -181,14 +181,6 @@ async def skill_execute(params: SkillParams, ctx: ToolContext) -> ToolResult:
             f'Skill "{params.name}" not found. Available skills: {available_str}'
         )
 
-    # Request permission to use the skill
-    await ctx.ask(
-        permission="skill",
-        patterns=[params.name],
-        always=[params.name],
-        metadata={"skill": params.name},
-    )
-
     # Get the skill directory and base URL
     skill_dir = skill.directory
     base_url = _path_to_file_url(skill_dir)
@@ -227,6 +219,17 @@ async def skill_execute(params: SkillParams, ctx: ToolContext) -> ToolResult:
     )
 
 
+def skill_permissions(params: SkillParams, _ctx: ToolContext) -> list[PermissionSpec]:
+    return [
+        PermissionSpec(
+            permission="skill",
+            patterns=[params.name],
+            always=[params.name],
+            metadata={"skill": params.name},
+        )
+    ]
+
+
 # Note: The skill tool description is dynamic and depends on available skills.
 # We use a static description here and update it when skills are loaded.
 DESCRIPTION = """Load a specialized skill that provides domain-specific instructions and workflows.
@@ -244,6 +247,7 @@ SkillTool = Tool.define(
     tool_id="skill",
     description=DESCRIPTION,
     parameters_type=SkillParams,
+    permission_fn=skill_permissions,
     execute_fn=skill_execute,
     auto_truncate=False,  # Skill content should not be truncated
 )

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from ..agent import Agent, AgentMode
 from ..permission import Permission, PermissionAction
 from ..util.log import Log
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "tool.task"})
 
@@ -102,19 +102,6 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
     from ..session.session import Session
     from ..session.system import SystemPrompt
 
-    bypass_agent_check = bool(ctx.extra.get("bypass_agent_check"))
-
-    if not bypass_agent_check:
-        await ctx.ask(
-            permission="task",
-            patterns=[params.subagent_type],
-            always=["*"],
-            metadata={
-                "description": params.description,
-                "subagent_type": params.subagent_type,
-            },
-        )
-
     agent = await Agent.get(params.subagent_type)
     if not agent:
         raise ValueError(f"Unknown subagent type: {params.subagent_type}")
@@ -192,10 +179,27 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
     )
 
 
+def task_permissions(params: TaskParams, ctx: ToolContext) -> list[PermissionSpec]:
+    if bool(ctx.extra.get("bypass_agent_check")):
+        return []
+    return [
+        PermissionSpec(
+            permission="task",
+            patterns=[params.subagent_type],
+            always=["*"],
+            metadata={
+                "description": params.description,
+                "subagent_type": params.subagent_type,
+            },
+        )
+    ]
+
+
 TaskTool = Tool.define(
     tool_id="task",
     description="Delegate a task to a specialized subagent.",
     parameters_type=TaskParams,
+    permission_fn=task_permissions,
     execute_fn=_run_subagent_task,
     auto_truncate=False,
 )

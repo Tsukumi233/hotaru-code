@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..util.log import Log
 from .external_directory import assert_external_directory
 from .lsp_feedback import append_lsp_error_feedback
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "write"})
 
@@ -46,39 +46,8 @@ def _create_diff(old_content: str, new_content: str, filepath: str) -> str:
 
 async def write_execute(params: WriteParams, ctx: ToolContext) -> ToolResult:
     """Execute the write tool."""
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-    filepath = Path(params.file_path)
-
-    # Make path absolute if relative
-    if not filepath.is_absolute():
-        filepath = cwd / filepath
-
+    filepath, exists, _old_content, _diff = await _prepare_write(params, ctx)
     title = filepath.name
-
-    await assert_external_directory(ctx, filepath)
-
-    # Check if file exists and get old content
-    exists = filepath.exists()
-    content_old = ""
-    if exists:
-        try:
-            content_old = filepath.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-
-    # Create diff for permission request
-    diff = _create_diff(content_old, params.content, str(filepath))
-
-    # Request permission
-    await ctx.ask(
-        permission="edit",
-        patterns=[str(filepath)],
-        always=["*"],
-        metadata={
-            "filepath": str(filepath),
-            "diff": diff,
-        }
-    )
 
     # Ensure parent directory exists
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -105,11 +74,51 @@ async def write_execute(params: WriteParams, ctx: ToolContext) -> ToolResult:
     )
 
 
+async def _prepare_write(params: WriteParams, ctx: ToolContext) -> tuple[Path, bool, str, str]:
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    filepath = Path(params.file_path)
+
+    # Make path absolute if relative
+    if not filepath.is_absolute():
+        filepath = cwd / filepath
+
+    # Check if file exists and get old content
+    exists = filepath.exists()
+    content_old = ""
+    if exists:
+        try:
+            content_old = filepath.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    # Create diff for permission request
+    diff = _create_diff(content_old, params.content, str(filepath))
+    return filepath, exists, content_old, diff
+
+
+async def write_permissions(params: WriteParams, ctx: ToolContext) -> list[PermissionSpec]:
+    filepath, _exists, _old_content, diff = await _prepare_write(params, ctx)
+    specs = await assert_external_directory(ctx, filepath)
+    specs.append(
+        PermissionSpec(
+            permission="edit",
+            patterns=[str(filepath)],
+            always=["*"],
+            metadata={
+                "filepath": str(filepath),
+                "diff": diff,
+            },
+        )
+    )
+    return specs
+
+
 # Register the tool
 WriteTool = Tool.define(
     tool_id="write",
     description=DESCRIPTION,
     parameters_type=WriteParams,
+    permission_fn=write_permissions,
     execute_fn=write_execute,
     auto_truncate=False
 )

@@ -8,7 +8,7 @@ from typing import List, Optional, Set
 from pydantic import BaseModel, Field
 
 from .external_directory import assert_external_directory
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 LIMIT = 100
 
@@ -116,23 +116,33 @@ def _render_tree(root: Path, files: List[str]) -> str:
     return f"{root}/\n" + render_dir(".", 0)
 
 
-async def list_execute(params: ListParams, ctx: ToolContext) -> ToolResult:
-    """Execute the list tool."""
-
+def _resolve_search_path(params: ListParams, ctx: ToolContext) -> Path:
     cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
     search_path = Path(params.path) if params.path else cwd
     if not search_path.is_absolute():
         search_path = cwd / search_path
-    search_path = search_path.resolve()
+    return search_path.resolve()
 
-    await assert_external_directory(ctx, search_path, kind="directory")
 
-    await ctx.ask(
-        permission="list",
-        patterns=[str(search_path)],
-        always=["*"],
-        metadata={"path": str(search_path)},
+async def list_permissions(params: ListParams, ctx: ToolContext) -> list[PermissionSpec]:
+    search_path = _resolve_search_path(params, ctx)
+    specs = await assert_external_directory(ctx, search_path, kind="directory")
+    specs.append(
+        PermissionSpec(
+            permission="list",
+            patterns=[str(search_path)],
+            always=["*"],
+            metadata={"path": str(search_path)},
+        )
     )
+    return specs
+
+
+async def list_execute(params: ListParams, ctx: ToolContext) -> ToolResult:
+    """Execute the list tool."""
+
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    search_path = _resolve_search_path(params, ctx)
 
     if not search_path.exists():
         raise FileNotFoundError(f"Directory not found: {search_path}")
@@ -189,6 +199,7 @@ LsTool = Tool.define(
     tool_id="ls",
     description=DESCRIPTION,
     parameters_type=ListParams,
+    permission_fn=list_permissions,
     execute_fn=list_execute,
     auto_truncate=False,
 )

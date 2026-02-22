@@ -9,7 +9,7 @@ from typing import Optional
 import httpx
 from pydantic import BaseModel, Field
 
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 API_URL = "https://mcp.exa.ai/mcp"
 
@@ -36,12 +36,7 @@ def _extract_sse_text(payload: str) -> Optional[str]:
 
 
 async def codesearch_execute(params: CodeSearchParams, ctx: ToolContext) -> ToolResult:
-    await ctx.ask(
-        permission="codesearch",
-        patterns=[params.query],
-        always=["*"],
-        metadata=params.model_dump(exclude_none=True),
-    )
+    del ctx
 
     body = {
         "jsonrpc": "2.0",
@@ -81,13 +76,24 @@ async def codesearch_execute(params: CodeSearchParams, ctx: ToolContext) -> Tool
     )
 
 
+def codesearch_permissions(params: CodeSearchParams, _ctx: ToolContext) -> list[PermissionSpec]:
+    return [
+        PermissionSpec(
+            permission="codesearch",
+            patterns=[params.query],
+            always=["*"],
+            metadata=params.model_dump(exclude_none=True),
+        )
+    ]
+
+
 _DESCRIPTION = (Path(__file__).parent / "codesearch.txt").read_text(encoding="utf-8")
 
 CodeSearchTool = Tool.define(
     tool_id="codesearch",
     description=_DESCRIPTION,
     parameters_type=CodeSearchParams,
+    permission_fn=codesearch_permissions,
     execute_fn=codesearch_execute,
     auto_truncate=True,
 )
-

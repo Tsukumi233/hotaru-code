@@ -9,7 +9,7 @@ from typing import List
 from pydantic import BaseModel, Field
 
 from ..session.todo import Todo, TodoInfo
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 
 class TodoWriteParams(BaseModel):
@@ -26,12 +26,6 @@ class TodoReadParams(BaseModel):
 
 
 async def todo_write_execute(params: TodoWriteParams, ctx: ToolContext) -> ToolResult:
-    await ctx.ask(
-        permission="todowrite",
-        patterns=["*"],
-        always=["*"],
-        metadata={},
-    )
     await Todo.update(session_id=ctx.session_id, todos=params.todos)
     remaining = len([todo for todo in params.todos if todo.status != "completed"])
     return ToolResult(
@@ -42,12 +36,6 @@ async def todo_write_execute(params: TodoWriteParams, ctx: ToolContext) -> ToolR
 
 
 async def todo_read_execute(_params: TodoReadParams, ctx: ToolContext) -> ToolResult:
-    await ctx.ask(
-        permission="todoread",
-        patterns=["*"],
-        always=["*"],
-        metadata={},
-    )
     todos = await Todo.get(ctx.session_id)
     remaining = len([todo for todo in todos if todo.status != "completed"])
     payload = [todo.model_dump() for todo in todos]
@@ -61,10 +49,19 @@ async def todo_read_execute(_params: TodoReadParams, ctx: ToolContext) -> ToolRe
 _TODOWRITE_DESC = (Path(__file__).parent / "todowrite.txt").read_text(encoding="utf-8")
 _TODOREAD_DESC = (Path(__file__).parent / "todoread.txt").read_text(encoding="utf-8")
 
+
+def _todo_write_permissions(_params: TodoWriteParams, _ctx: ToolContext) -> list[PermissionSpec]:
+    return [PermissionSpec(permission="todowrite", patterns=["*"], always=["*"], metadata={})]
+
+
+def _todo_read_permissions(_params: TodoReadParams, _ctx: ToolContext) -> list[PermissionSpec]:
+    return [PermissionSpec(permission="todoread", patterns=["*"], always=["*"], metadata={})]
+
 TodoWriteTool = Tool.define(
     tool_id="todowrite",
     description=_TODOWRITE_DESC,
     parameters_type=TodoWriteParams,
+    permission_fn=_todo_write_permissions,
     execute_fn=todo_write_execute,
     auto_truncate=False,
 )
@@ -73,7 +70,7 @@ TodoReadTool = Tool.define(
     tool_id="todoread",
     description=_TODOREAD_DESC,
     parameters_type=TodoReadParams,
+    permission_fn=_todo_read_permissions,
     execute_fn=todo_read_execute,
     auto_truncate=False,
 )
-

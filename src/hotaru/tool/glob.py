@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from ..util.log import Log
 from .external_directory import assert_external_directory
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 log = Log.create({"service": "glob"})
 
@@ -103,24 +103,7 @@ def _match_glob(root: Path, pattern: str, limit: int = 100) -> List[Tuple[Path, 
 async def glob_execute(params: GlobParams, ctx: ToolContext) -> ToolResult:
     """Execute the glob tool."""
     cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-
-    # Determine search path
-    search_path = Path(params.path) if params.path else cwd
-    if not search_path.is_absolute():
-        search_path = cwd / search_path
-
-    await assert_external_directory(ctx, search_path, kind="directory")
-
-    # Request permission
-    await ctx.ask(
-        permission="glob",
-        patterns=[params.pattern],
-        always=["*"],
-        metadata={
-            "pattern": params.pattern,
-            "path": params.path,
-        }
-    )
+    search_path = _resolve_search_path(params, ctx)
 
     if not search_path.exists():
         raise FileNotFoundError(f"Directory not found: {search_path}")
@@ -164,11 +147,37 @@ async def glob_execute(params: GlobParams, ctx: ToolContext) -> ToolResult:
     )
 
 
+def _resolve_search_path(params: GlobParams, ctx: ToolContext) -> Path:
+    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    search_path = Path(params.path) if params.path else cwd
+    if not search_path.is_absolute():
+        search_path = cwd / search_path
+    return search_path
+
+
+async def glob_permissions(params: GlobParams, ctx: ToolContext) -> list[PermissionSpec]:
+    search_path = _resolve_search_path(params, ctx)
+    specs = await assert_external_directory(ctx, search_path, kind="directory")
+    specs.append(
+        PermissionSpec(
+            permission="glob",
+            patterns=[params.pattern],
+            always=["*"],
+            metadata={
+                "pattern": params.pattern,
+                "path": params.path,
+            },
+        )
+    )
+    return specs
+
+
 # Register the tool
 GlobTool = Tool.define(
     tool_id="glob",
     description=DESCRIPTION,
     parameters_type=GlobParams,
+    permission_fn=glob_permissions,
     execute_fn=glob_execute,
     auto_truncate=False
 )

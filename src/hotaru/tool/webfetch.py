@@ -12,7 +12,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from ..core.id import Identifier
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 MAX_RESPONSE_SIZE = 5 * 1024 * 1024  # 5MB
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -85,17 +85,6 @@ async def webfetch_execute(params: WebFetchParams, ctx: ToolContext) -> ToolResu
     if not (params.url.startswith("http://") or params.url.startswith("https://")):
         raise ValueError("URL must start with http:// or https://")
 
-    await ctx.ask(
-        permission="webfetch",
-        patterns=[params.url],
-        always=["*"],
-        metadata={
-            "url": params.url,
-            "format": params.format,
-            "timeout": params.timeout,
-        },
-    )
-
     timeout_seconds = min(params.timeout or DEFAULT_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS)
     headers = {
         "User-Agent": (
@@ -164,13 +153,28 @@ async def webfetch_execute(params: WebFetchParams, ctx: ToolContext) -> ToolResu
     return ToolResult(title=title, output=output, metadata={})
 
 
+def webfetch_permissions(params: WebFetchParams, _ctx: ToolContext) -> list[PermissionSpec]:
+    return [
+        PermissionSpec(
+            permission="webfetch",
+            patterns=[params.url],
+            always=["*"],
+            metadata={
+                "url": params.url,
+                "format": params.format,
+                "timeout": params.timeout,
+            },
+        )
+    ]
+
+
 _DESCRIPTION = (Path(__file__).parent / "webfetch.txt").read_text(encoding="utf-8")
 
 WebFetchTool = Tool.define(
     tool_id="webfetch",
     description=_DESCRIPTION,
     parameters_type=WebFetchParams,
+    permission_fn=webfetch_permissions,
     execute_fn=webfetch_execute,
     auto_truncate=True,
 )
-

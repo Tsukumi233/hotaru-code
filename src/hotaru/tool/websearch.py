@@ -9,7 +9,7 @@ from typing import Literal, Optional
 import httpx
 from pydantic import BaseModel, Field
 
-from .tool import Tool, ToolContext, ToolResult
+from .tool import PermissionSpec, Tool, ToolContext, ToolResult
 
 API_URL = "https://mcp.exa.ai/mcp"
 DEFAULT_RESULTS = 8
@@ -41,12 +41,7 @@ def _extract_sse_text(payload: str) -> Optional[str]:
 
 
 async def websearch_execute(params: WebSearchParams, ctx: ToolContext) -> ToolResult:
-    await ctx.ask(
-        permission="websearch",
-        patterns=[params.query],
-        always=["*"],
-        metadata=params.model_dump(exclude_none=True),
-    )
+    del ctx
 
     body = {
         "jsonrpc": "2.0",
@@ -87,13 +82,24 @@ async def websearch_execute(params: WebSearchParams, ctx: ToolContext) -> ToolRe
     )
 
 
+def websearch_permissions(params: WebSearchParams, _ctx: ToolContext) -> list[PermissionSpec]:
+    return [
+        PermissionSpec(
+            permission="websearch",
+            patterns=[params.query],
+            always=["*"],
+            metadata=params.model_dump(exclude_none=True),
+        )
+    ]
+
+
 _DESCRIPTION = (Path(__file__).parent / "websearch.txt").read_text(encoding="utf-8")
 
 WebSearchTool = Tool.define(
     tool_id="websearch",
     description=_DESCRIPTION,
     parameters_type=WebSearchParams,
+    permission_fn=websearch_permissions,
     execute_fn=websearch_execute,
     auto_truncate=True,
 )
-
