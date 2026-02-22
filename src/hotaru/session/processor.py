@@ -229,7 +229,7 @@ class SessionProcessor:
             from ..core.config import ConfigManager
 
             config = await ConfigManager.get()
-            self._continue_loop_on_deny = bool(getattr(config, "continue_loop_on_deny", False))
+            self._continue_loop_on_deny = config.continue_loop_on_deny
         except Exception as e:
             self._continue_loop_on_deny = False
             log.debug("failed to read continue_loop_on_deny", {"error": str(e)})
@@ -308,7 +308,7 @@ class SessionProcessor:
             from ..core.config import ConfigManager
 
             config = await ConfigManager.get()
-            self._continue_loop_on_deny = bool(getattr(config, "continue_loop_on_deny", False))
+            self._continue_loop_on_deny = config.continue_loop_on_deny
         except Exception as e:
             self._continue_loop_on_deny = False
             log.debug("failed to read continue_loop_on_deny", {"error": str(e)})

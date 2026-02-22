@@ -157,8 +157,8 @@ class ServerConfig(BaseModel):
 
 class SkillsConfig(BaseModel):
     """Skills configuration."""
-    paths: Optional[List[str]] = None
-    urls: Optional[List[str]] = None
+    paths: List[str] = Field(default_factory=list)
+    urls: List[str] = Field(default_factory=list)
 
 
 class CompactionConfig(BaseModel):
@@ -177,13 +177,13 @@ class TuiConfig(BaseModel):
 class ExperimentalConfig(BaseModel):
     """Experimental feature toggles."""
 
-    batch_tool: Optional[bool] = None
-    plan_mode: Optional[bool] = None
-    enable_exa: Optional[bool] = None
-    lsp_tool: Optional[bool] = None
-    primary_tools: Optional[List[str]] = None
+    batch_tool: bool = False
+    plan_mode: bool = False
+    enable_exa: bool = False
+    lsp_tool: bool = False
+    primary_tools: List[str] = Field(default_factory=list)
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
 
 class Config(BaseModel):
@@ -210,18 +210,18 @@ class Config(BaseModel):
     command: Optional[Dict[str, CommandConfig]] = None
 
     # Skills settings
-    skills: Optional[SkillsConfig] = None
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
 
     # MCP settings
     mcp: Optional[Dict[str, McpConfig]] = None
 
     # Permission settings
     permission: Optional[Union[str, Dict[str, Any]]] = None
-    permission_memory_scope: Optional[PermissionMemoryScope] = None
+    permission_memory_scope: PermissionMemoryScope = PermissionMemoryScope.SESSION
     tools: Optional[Dict[str, bool]] = None
     strict_permissions: Optional[bool] = None
-    continue_loop_on_deny: Optional[bool] = None
-    experimental: Optional[ExperimentalConfig] = None
+    continue_loop_on_deny: bool = False
+    experimental: ExperimentalConfig = Field(default_factory=ExperimentalConfig)
 
     # Server settings
     server: Optional[ServerConfig] = None
@@ -239,7 +239,7 @@ class Config(BaseModel):
     lsp: Optional[Union[Literal[False], Dict[str, Any]]] = None
     formatter: Optional[Union[Literal[False], Dict[str, Any]]] = None
 
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 def _get_managed_config_dir() -> str:

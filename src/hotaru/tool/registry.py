@@ -169,24 +169,18 @@ class ToolRegistry:
         model_id: Optional[str],
     ) -> bool:
         config = await ConfigManager.get()
-        experimental_raw = getattr(config, "experimental", {}) or {}
-        if hasattr(experimental_raw, "model_dump"):
-            experimental = experimental_raw.model_dump(exclude_none=True)
-        elif isinstance(experimental_raw, dict):
-            experimental = experimental_raw
-        else:
-            experimental = {}
+        experimental = config.experimental
 
         if tool_id in {"codesearch", "websearch"}:
             if provider_id == "opencode":
                 return True
-            return bool(experimental.get("enable_exa", False))
+            return experimental.enable_exa
 
         if tool_id == "batch":
-            return bool(experimental.get("batch_tool", False))
+            return experimental.batch_tool
 
         if tool_id == "lsp":
-            return bool(experimental.get("lsp_tool", False))
+            return experimental.lsp_tool
 
         if tool_id == "apply_patch":
             return cls._apply_patch_enabled_for_model(model_id or "")

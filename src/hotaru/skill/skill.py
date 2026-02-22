@@ -239,7 +239,7 @@ class Skill:
 
         # 4) Scan custom paths from config.skills.paths.
         try:
-            for skill_path in (config.skills.paths if config.skills and config.skills.paths else []):
+            for skill_path in config.skills.paths:
                 expanded = skill_path
                 if expanded.startswith("~/"):
                     expanded = str(Path(GlobalPath.home()) / expanded[2:])
@@ -258,7 +258,7 @@ class Skill:
 
         # 5) Download and load remote skills from config.skills.urls.
         try:
-            for url in (config.skills.urls if config.skills and config.skills.urls else []):
+            for url in config.skills.urls:
                 downloaded_dirs = await Discovery.pull(url)
                 for directory in downloaded_dirs:
                     directories.add(str(Path(directory).resolve()))

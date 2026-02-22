@@ -150,7 +150,7 @@ class Permission:
             from ..core.config import ConfigManager
 
             config = await ConfigManager.get()
-            configured = getattr(config, "permission_memory_scope", None)
+            configured = config.permission_memory_scope
             if configured:
                 candidate = str(configured)
                 if candidate in {"turn", "session", "project", "persisted"}:
