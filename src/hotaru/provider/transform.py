@@ -12,6 +12,7 @@ import re
 from typing import Any, Dict, Iterable, List, Optional
 
 _EMPTY_ASSISTANT_PLACEHOLDER = "Done."
+_REASONING_TEXT_FIELD = "reasoning_text"
 
 
 class ProviderTransform:
@@ -191,6 +192,29 @@ class ProviderTransform:
         return out
 
     @classmethod
+    def _apply_reasoning_text(
+        cls,
+        msg: Dict[str, Any],
+        *,
+        interleaved_field: Optional[str],
+    ) -> Dict[str, Any]:
+        out = dict(msg)
+        reasoning_text = out.pop(_REASONING_TEXT_FIELD, None)
+
+        if out.get("role") != "assistant":
+            return out
+        if not isinstance(reasoning_text, str) or not reasoning_text:
+            return out
+        if not interleaved_field:
+            return out
+
+        existing = out.get(interleaved_field)
+        existing_text = str(existing) if isinstance(existing, str) else ""
+        if not existing_text:
+            out[interleaved_field] = reasoning_text
+        return out
+
+    @classmethod
     def message(
         cls,
         messages: Iterable[Dict[str, Any]],
@@ -243,6 +267,7 @@ class ProviderTransform:
                 if role in {"assistant", "user"} and isinstance(content, str) and not content:
                     continue
 
+            msg = cls._apply_reasoning_text(msg, interleaved_field=interleaved_field)
             msg = cls._apply_interleaved_reasoning(msg, interleaved_field=interleaved_field)
             if (
                 interleaved_field

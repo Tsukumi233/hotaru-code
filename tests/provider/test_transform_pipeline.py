@@ -48,8 +48,29 @@ def test_message_maps_reasoning_parts_to_interleaved_field() -> None:
     assert transformed[0]["content"] == [{"type": "text", "text": "final answer"}]
 
 
+def test_message_maps_reasoning_text_to_interleaved_field() -> None:
+    messages = [{"role": "assistant", "content": "final answer", "reasoning_text": "let me think"}]
+
+    transformed = ProviderTransform.message(
+        messages,
+        model=_model(),
+        provider_id="moonshot",
+        model_id="kimi-k2.5",
+        api_type="openai",
+    )
+
+    assert transformed[0]["reasoning_content"] == "let me think"
+    assert "reasoning_text" not in transformed[0]
+
+
 def test_message_keeps_non_interleaved_model_unchanged() -> None:
-    messages = [{"role": "assistant", "content": [{"type": "reasoning", "text": "x"}]}]
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "reasoning", "text": "x"}],
+            "reasoning_text": "ignored",
+        }
+    ]
 
     transformed = ProviderTransform.message(
         messages,
@@ -60,6 +81,7 @@ def test_message_keeps_non_interleaved_model_unchanged() -> None:
     )
 
     assert "reasoning_content" not in transformed[0]
+    assert "reasoning_text" not in transformed[0]
     assert transformed[0]["content"] == [{"type": "reasoning", "text": "x"}]
 
 

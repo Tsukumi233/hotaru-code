@@ -244,4 +244,5 @@ def test_to_model_messages_includes_interleaved_reasoning_field() -> None:
     model_messages = to_model_messages(messages, interleaved_field="reasoning_content")
     assert model_messages[0]["role"] == "assistant"
     assert model_messages[0]["content"] == "final text"
+    assert model_messages[0]["reasoning_text"] == "reasoning path"
     assert model_messages[0]["reasoning_content"] == "reasoning path"

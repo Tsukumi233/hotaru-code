@@ -195,6 +195,7 @@ _COMPACTION_USER_TEXT = "What did we do so far?"
 _SUBTASK_USER_TEXT = "The following tool was executed by the user"
 _INTERRUPTED_TOOL_ERROR = "[Tool execution was interrupted]"
 _COMPACTED_TOOL_RESULT = "[Old tool result content cleared]"
+_REASONING_TEXT_FIELD = "reasoning_text"
 
 
 def _openai_text_from_parts(parts: Sequence[Part]) -> str:
@@ -240,9 +241,10 @@ def to_openai_messages(
         if role == "assistant":
             content = _openai_text_from_parts(msg.parts) or None
             assistant: Dict[str, Any] = {"role": "assistant", "content": content}
-            if interleaved_field:
-                reasoning_text = _reasoning_text_from_parts(msg.parts)
-                if reasoning_text:
+            reasoning_text = _reasoning_text_from_parts(msg.parts)
+            if reasoning_text:
+                assistant[_REASONING_TEXT_FIELD] = reasoning_text
+                if interleaved_field:
                     assistant[interleaved_field] = reasoning_text
 
             # Represent tool calls as OpenAI tool_calls field (if any tool parts exist).
