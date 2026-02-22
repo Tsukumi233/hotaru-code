@@ -25,6 +25,7 @@ from ...session import SessionPrompt
 from ...session.orchestration import prepare_prompt_context
 from ...session.part_callbacks import create_part_callbacks
 from ...session.stream_parts import PartStreamBuilder
+from ...storage import Storage
 from ...util.log import Log
 
 # Use legacy_windows=True on Windows to avoid Unicode encoding issues with GBK
@@ -86,6 +87,7 @@ async def run_command(
         yes: Auto-approve all permission requests
     """
     cwd = str(Path.cwd())
+    await Storage.initialize()
 
     # Initialize project context
     project, sandbox = await Project.from_directory(cwd)

@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from ..storage import Storage
 from ..util.log import Log
 from .app import create_app
 from .webui import web_dist_candidates
@@ -49,6 +50,7 @@ class Server:
     ) -> ServerInfo:
         import uvicorn
 
+        await Storage.initialize()
         cls._app = cls._create_app()
 
         config = uvicorn.Config(

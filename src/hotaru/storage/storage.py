@@ -5,10 +5,10 @@ Keys like ["session", projectID, sessionID] map to
 ``storage/session/{projectID}/{sessionID}.json``.
 """
 
+import asyncio
 import json
 import os
 import shutil
-import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,19 +49,29 @@ class Storage:
 
     _dir: Optional[str] = None
     _ready = False
-    _guard = threading.Lock()
+    _guard = asyncio.Lock()
     _durable = {"session", "message_store", "part"}
 
     @classmethod
-    def _get_dir(cls) -> str:
-        with cls._guard:
+    async def initialize(cls) -> str:
+        if cls._ready and cls._dir is not None:
+            return cls._dir
+        async with cls._guard:
             if cls._dir is None:
                 cls._dir = str(Path(GlobalPath.data()) / "storage")
-                Path(cls._dir).mkdir(parents=True, exist_ok=True)
-            if not cls._ready:
-                cls._recover(Path(cls._dir))
-                cls._ready = True
+            root = Path(cls._dir)
+            await asyncio.to_thread(root.mkdir, parents=True, exist_ok=True)
+            if cls._ready:
+                return cls._dir
+            await asyncio.to_thread(cls._recover, root)
+            cls._ready = True
             return cls._dir
+
+    @classmethod
+    def _get_dir(cls) -> str:
+        if cls._dir is None:
+            cls._dir = str(Path(GlobalPath.data()) / "storage")
+        return cls._dir
 
     @classmethod
     def _key_to_path(cls, key: list[str]) -> str:
@@ -217,6 +227,7 @@ class Storage:
         Raises:
             NotFoundError: If the resource does not exist.
         """
+        await cls.initialize()
         target = cls._key_to_path(key)
         async with Lock.read(target):
             try:
@@ -233,6 +244,7 @@ class Storage:
             key: Hierarchical key.
             content: Data to serialise as JSON.
         """
+        await cls.initialize()
         target = cls._key_to_path(key)
         async with Lock.write(target):
             cls._write_json(cls._key_to_file(key), content, durable=cls._durable_key(key))
@@ -255,6 +267,7 @@ class Storage:
         Raises:
             NotFoundError: If the resource does not exist.
         """
+        await cls.initialize()
         target = cls._key_to_path(key)
         async with Lock.write(target):
             try:
@@ -274,6 +287,7 @@ class Storage:
         Args:
             key: Hierarchical key.
         """
+        await cls.initialize()
         target = cls._key_to_path(key)
         async with Lock.write(target):
             try:
@@ -289,6 +303,7 @@ class Storage:
         if not ops:
             return
 
+        await cls.initialize()
         root = Path(cls._get_dir())
         targets = [cls._key_to_path(op.key) for op in ops]
         txid = f"tx-{uuid.uuid4().hex}"
@@ -323,6 +338,7 @@ class Storage:
         Returns:
             Sorted list of full keys (each key is a list of strings).
         """
+        await cls.initialize()
         base = os.path.join(cls._get_dir(), *prefix)
         result: list[list[str]] = []
 
@@ -346,3 +362,4 @@ class Storage:
         """Reset cached directory (for testing)."""
         cls._dir = None
         cls._ready = False
+        cls._guard = asyncio.Lock()

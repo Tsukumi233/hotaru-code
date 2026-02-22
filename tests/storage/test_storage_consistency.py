@@ -85,6 +85,27 @@ async def test_recover_committed_transaction(monkeypatch: pytest.MonkeyPatch, tm
     assert await Storage.read(["doc", "a"]) == {"v": 42}
 
 
+@pytest.mark.anyio
+async def test_initialize_recovers_once_when_called_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage_dir = _setup_storage(monkeypatch, tmp_path)
+    calls: list[Path] = []
+    recover = Storage._recover.__func__
+
+    def wrapped(cls, root: Path) -> None:
+        calls.append(root)
+        time.sleep(0.02)
+        recover(cls, root)
+
+    monkeypatch.setattr(Storage, "_recover", classmethod(wrapped))
+
+    paths = await asyncio.gather(*(Storage.initialize() for _ in range(8)))
+    assert len(set(paths)) == 1
+    assert calls == [storage_dir]
+
+
 def test_cross_process_update_is_serialized(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data_home = tmp_path / "xdg"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
