@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 
 from hotaru.core.config import Config
+from hotaru.provider.auth import ProviderAuth
 from hotaru.provider.models import ModelsDev, ProviderDef
-from hotaru.provider.provider import Provider
+from hotaru.provider.provider import Provider, ProviderSource
 
 
 def _models() -> dict[str, ProviderDef]:
@@ -71,12 +72,31 @@ def _cfg_without_provider() -> Config:
     return Config.model_validate({})
 
 
+def _cfg_builtin_override() -> Config:
+    return Config.model_validate(
+        {
+            "provider": {
+                "openai": {
+                    "options": {
+                        "baseURL": "https://gateway.example.com/v1",
+                        "apiKey": "config-openai-key",
+                    }
+                }
+            }
+        }
+    )
+
+
 async def _fake_get_with_provider(cls):  # type: ignore[no-untyped-def]
     return _cfg_with_provider()
 
 
 async def _fake_get_without_provider(cls):  # type: ignore[no-untyped-def]
     return _cfg_without_provider()
+
+
+async def _fake_get_builtin_override(cls):  # type: ignore[no-untyped-def]
+    return _cfg_builtin_override()
 
 
 def test_provider_list_prefers_configured_providers_over_env(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -103,3 +123,19 @@ def test_provider_list_keeps_env_providers_when_config_missing(monkeypatch) -> N
     providers = asyncio.run(Provider.list())
 
     assert "openai" in providers
+
+
+def test_provider_list_applies_builtin_provider_config_to_models_and_key(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(ProviderAuth, "get", classmethod(lambda cls, provider_id: None))
+    monkeypatch.setattr(ModelsDev, "get", classmethod(_fake_models_dev_get))
+    monkeypatch.setattr("hotaru.core.config.ConfigManager.get", classmethod(_fake_get_builtin_override))
+
+    Provider.reset()
+    providers = asyncio.run(Provider.list())
+
+    openai = providers["openai"]
+    assert openai.source == ProviderSource.CONFIG
+    assert openai.key == "config-openai-key"
+    assert openai.options["baseURL"] == "https://gateway.example.com/v1"
+    assert openai.models["gpt-5"].api_url == "https://gateway.example.com/v1"

@@ -321,6 +321,24 @@ def _resolve_provider_key(
     return None
 
 
+def _apply_provider_config(
+    provider: ProviderInfo,
+    *,
+    provider_id: str,
+    config: ProviderConfig,
+) -> ProviderInfo:
+    options = config.options or {}
+    if options:
+        provider.options.update(options)
+        base_url = options.get("baseURL")
+        if base_url:
+            for model in provider.models.values():
+                model.api_url = base_url
+    provider.key = _resolve_provider_key(provider_id, provider.env, provider.options)
+    provider.source = ProviderSource.CONFIG
+    return provider
+
+
 class Provider:
     """Provider registry.
 
@@ -371,19 +389,17 @@ class Provider:
             provider_config = config.provider.get(provider_id) if config.provider else None
             if config_only and not provider_config:
                 continue
-            if provider_config and provider_config.options:
-                provider.options.update(provider_config.options)
-                base_url = provider_config.options.get("baseURL")
-                if base_url:
-                    for model in provider.models.values():
-                        model.api_url = base_url
+            if provider_config:
+                provider = _apply_provider_config(
+                    provider,
+                    provider_id=provider_id,
+                    config=provider_config,
+                )
 
-            provider.key = _resolve_provider_key(provider_id, provider.env, provider.options)
-
-            if provider.key:
-                provider.source = ProviderSource.CONFIG if provider_config else ProviderSource.ENV
-            elif provider_config:
-                provider.source = ProviderSource.CONFIG
+            if not provider_config:
+                provider.key = _resolve_provider_key(provider_id, provider.env, provider.options)
+                if provider.key:
+                    provider.source = ProviderSource.ENV
 
             if provider.key or provider_config:
                 providers[provider_id] = provider
@@ -405,29 +421,18 @@ class Provider:
                         log.info("added custom provider", {"provider_id": provider_id})
                 elif provider_id in providers:
                     # Merge config into existing provider
-                    existing = providers[provider_id]
-                    if provider_config.options:
-                        existing.options.update(provider_config.options)
-                        # Apply baseURL to all models
-                        base_url = provider_config.options.get("baseURL")
-                        if base_url:
-                            for model in existing.models.values():
-                                model.api_url = base_url
-                    existing.key = _resolve_provider_key(provider_id, existing.env, existing.options)
-                    existing.source = ProviderSource.CONFIG
+                    providers[provider_id] = _apply_provider_config(
+                        providers[provider_id],
+                        provider_id=provider_id,
+                        config=provider_config,
+                    )
                 elif provider_id in database:
                     # Add provider from database with config
-                    provider = database[provider_id].model_copy()
-                    if provider_config.options:
-                        provider.options.update(provider_config.options)
-                        # Apply baseURL to all models
-                        base_url = provider_config.options.get("baseURL")
-                        if base_url:
-                            for model in provider.models.values():
-                                model.api_url = base_url
-                    provider.key = _resolve_provider_key(provider_id, provider.env, provider.options)
-                    provider.source = ProviderSource.CONFIG
-                    providers[provider_id] = provider
+                    providers[provider_id] = _apply_provider_config(
+                        database[provider_id].model_copy(),
+                        provider_id=provider_id,
+                        config=provider_config,
+                    )
 
         # Filter deprecated models
         for provider in providers.values():
