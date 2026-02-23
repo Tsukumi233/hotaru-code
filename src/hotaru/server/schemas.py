@@ -70,8 +70,6 @@ class SessionCreateRequest(BaseModel):
     model: str | None = None
     provider_id: str | None = None
     model_id: str | None = None
-    directory: str | None = None
-    cwd: str | None = None
 
     model_config = ConfigDict(extra="allow")
 

@@ -12,6 +12,13 @@ async def test_session_service_create_rejects_legacy_project_id_field() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("field", ["directory", "cwd"])
+async def test_session_service_create_rejects_body_directory_override_fields(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        await SessionService.create({field: "/tmp/override"}, cwd=".", app=fake_app())
+
+
+@pytest.mark.anyio
 async def test_session_service_delete_messages_rejects_legacy_message_ids_field() -> None:
     with pytest.raises(ValueError, match="messageIDs"):
         await SessionService.delete_messages("session_1", {"messageIDs": ["m1", "m2"]})

@@ -10,7 +10,6 @@ class SessionCreatePayload(TypedDict, total=False):
     agent: str
     model: str
     title: str
-    cwd: str
 
 
 class SessionCompactPayload(TypedDict, total=False):

@@ -38,7 +38,7 @@ async def test_compact_session_maps_provider_model_override_into_payload(tmp_pat
 
 
 @pytest.mark.anyio
-async def test_create_session_includes_cwd_in_api_payload(tmp_path) -> None:
+async def test_create_session_uses_api_payload_without_directory_override(tmp_path) -> None:
     api = _ApiRecorder()
     sdk = SDKContext(cwd=str(tmp_path), api_client=api)
 
@@ -48,7 +48,6 @@ async def test_create_session_includes_cwd_in_api_payload(tmp_path) -> None:
         "agent": "build",
         "model": "openai/gpt-5",
         "title": "Demo",
-        "cwd": str(tmp_path),
     }
 
 

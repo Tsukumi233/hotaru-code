@@ -305,7 +305,7 @@ class SDKContext:
         model: str | None = None,
         title: str | None = None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"cwd": self._cwd}
+        payload: dict[str, Any] = {}
         if agent:
             payload["agent"] = agent
         if model:

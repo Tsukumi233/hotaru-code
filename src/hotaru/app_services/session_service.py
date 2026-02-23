@@ -131,9 +131,11 @@ class SessionService:
             {
                 "projectID": "project_id",
                 "parentID": "parent_id",
+                "directory": "x-hotaru-directory header or ?directory query parameter",
+                "cwd": "x-hotaru-directory header or ?directory query parameter",
             },
         )
-        directory = str(payload.get("directory") or payload.get("cwd") or cwd)
+        directory = str(cwd)
         project_id = await cls._resolve_project_id(payload, directory)
         provider_id, model_id = await cls._resolve_model(payload)
         agent_name = payload.get("agent") or await app.agents.default_agent()
