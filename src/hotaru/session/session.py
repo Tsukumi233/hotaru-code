@@ -155,6 +155,10 @@ class Session:
         return ["session", project_id, session_id]
 
     @staticmethod
+    def _session_index_key(session_id: str) -> List[str]:
+        return ["session_index", session_id]
+
+    @staticmethod
     def _message_store_key(session_id: str, message_id: str) -> List[str]:
         return ["message_store", session_id, message_id]
 
@@ -217,9 +221,11 @@ class Session:
             time=SessionTime(created=now, updated=now)
         )
 
-        await Storage.write(
-            cls._session_key(project_id, session_id),
-            session.model_dump(),
+        await Storage.transaction(
+            [
+                Storage.put(cls._session_key(project_id, session_id), session.model_dump()),
+                Storage.put(cls._session_index_key(session_id), {"project_id": project_id}),
+            ]
         )
 
         log.info("created session", {"session_id": session_id, "project_id": project_id})
@@ -227,6 +233,21 @@ class Session:
         await Bus.publish(SessionCreated, SessionCreatedProperties(session=session))
 
         return session
+
+    @classmethod
+    async def _read_index(cls, session_id: str) -> Optional[str]:
+        try:
+            data = await Storage.read(cls._session_index_key(session_id))
+        except NotFoundError:
+            return None
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        project_id = data.get("project_id")
+        if isinstance(project_id, str) and project_id:
+            return project_id
+        return None
 
     @classmethod
     def plan_path_for(
@@ -267,8 +288,8 @@ class Session:
     async def get(cls, session_id: str, project_id: Optional[str] = None) -> Optional[SessionInfo]:
         """Get a session by ID.
 
-        If *project_id* is not given the method scans all projects
-        under the ``session/`` prefix (slightly slower).
+        If *project_id* is not given the method resolves the
+        project from ``session_index/``.
 
         Args:
             session_id: Session ID
@@ -284,16 +305,13 @@ class Session:
             except NotFoundError:
                 return None
 
-        # Scan all projects
-        keys = await Storage.list(["session"])
-        for key in keys:
-            # key looks like ["session", project_id, session_id]
-            if len(key) >= 3 and key[-1] == session_id:
-                try:
-                    data = await Storage.read(key)
-                    return SessionInfo.model_validate(data)
-                except NotFoundError:
-                    continue
+        indexed_project_id = await cls._read_index(session_id)
+        if indexed_project_id:
+            try:
+                data = await Storage.read(cls._session_key(indexed_project_id, session_id))
+                return SessionInfo.model_validate(data)
+            except NotFoundError:
+                await Storage.remove(cls._session_index_key(session_id))
         return None
 
     @classmethod
@@ -395,6 +413,7 @@ class Session:
         ops = [Storage.delete(key) for key in stored_msg_keys]
         ops.extend(Storage.delete(key) for key in part_keys)
         ops.append(Storage.delete(cls._session_key(session.project_id, session_id)))
+        ops.append(Storage.delete(cls._session_index_key(session_id)))
         await Storage.transaction(ops)
 
         log.info("deleted session", {"session_id": session_id})
