@@ -7,6 +7,7 @@ from urllib.parse import unquote
 
 from fastapi import Request
 
+from ..runtime import AppContext
 from ..util.log import Log
 
 log = Log.create({"service": "server.deps"})
@@ -39,3 +40,10 @@ def resolve_request_directory(request: Request) -> str:
     fallback = str(Path.cwd())
     log.debug("resolved request directory", {"source": "cwd", "directory": fallback})
     return fallback
+
+
+def resolve_app_context(request: Request) -> AppContext:
+    ctx = getattr(request.app.state, "ctx", None)
+    if isinstance(ctx, AppContext):
+        return ctx
+    raise RuntimeError("Application context is not initialized")

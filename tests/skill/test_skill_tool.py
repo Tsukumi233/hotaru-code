@@ -8,6 +8,7 @@ from hotaru.session.processor import SessionProcessor
 from hotaru.skill.skill import Skill, SkillInfo
 from hotaru.tool.skill import SkillParams, SkillTool, build_skill_description, skill_execute
 from hotaru.tool.tool import ToolContext
+from tests.helpers import fake_agents, fake_app
 
 
 @pytest.mark.anyio
@@ -32,7 +33,7 @@ async def test_skill_description_hides_denied_skills(monkeypatch: pytest.MonkeyP
     async def fake_list(cls):
         return skills
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(
             name=name,
             mode=AgentMode.PRIMARY,
@@ -41,9 +42,8 @@ async def test_skill_description_hides_denied_skills(monkeypatch: pytest.MonkeyP
         )
 
     monkeypatch.setattr(Skill, "list", classmethod(fake_list))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
 
-    description = await build_skill_description("build")
+    description = await build_skill_description("build", skills=Skill(), agents=fake_agents(get=fake_get_agent))
     assert "<name>public-skill</name>" in description
     assert "<name>internal-docs</name>" not in description
 
@@ -76,6 +76,7 @@ async def test_skill_execute_returns_content_and_builds_permission_spec(
     monkeypatch.setattr(Skill, "names", classmethod(fake_names))
 
     ctx = ToolContext(
+        app=fake_app(skills=Skill()),
         session_id="session-1",
         message_id="message-1",
         agent="build",
@@ -104,7 +105,7 @@ async def test_session_filters_out_skill_tool_when_permission_denied(
         captured["tools"] = stream_input.tools
         yield StreamChunk(type="text", text="done")
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(
             name=name,
             mode=AgentMode.PRIMARY,
@@ -113,9 +114,12 @@ async def test_session_filters_out_skill_tool_when_permission_denied(
         )
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
+
+    from hotaru.runtime import AppContext
 
     processor = SessionProcessor(
+        app=AppContext(),
         session_id="ses_skill_disable",
         model_id="model",
         provider_id="provider",

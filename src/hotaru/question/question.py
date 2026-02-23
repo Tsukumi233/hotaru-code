@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -77,11 +78,17 @@ class RejectedError(Exception):
 class Question:
     """Runtime question coordinator."""
 
-    _pending: Dict[str, Dict[str, Any]] = {}
+    @dataclass
+    class _Pending:
+        request: QuestionRequest
+        future: asyncio.Future[List[List[str]]]
 
-    @classmethod
+    def __init__(self) -> None:
+        self._pending: Dict[str, Question._Pending] = {}
+        self._guard = asyncio.Lock()
+
     async def ask(
-        cls,
+        self,
         *,
         session_id: str,
         questions: List[QuestionInfo],
@@ -94,23 +101,20 @@ class Question:
             questions=questions,
             tool=tool,
         )
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future: asyncio.Future[List[List[str]]] = loop.create_future()
-        cls._pending[request_id] = {
-            "request": request,
-            "resolve": lambda value, f=future: f.set_result(value) if not f.done() else None,
-            "reject": lambda e, f=future: f.set_exception(e) if not f.done() else None,
-        }
+        async with self._guard:
+            self._pending[request_id] = Question._Pending(request=request, future=future)
         await Bus.publish(QuestionAsked, request)
         return await future
 
-    @classmethod
-    async def reply(cls, request_id: str, answers: List[List[str]]) -> None:
-        pending = cls._pending.pop(request_id, None)
+    async def reply(self, request_id: str, answers: List[List[str]]) -> None:
+        async with self._guard:
+            pending = self._pending.pop(request_id, None)
         if not pending:
             return
 
-        request: QuestionRequest = pending["request"]
+        request = pending.request
         await Bus.publish(
             QuestionReplied,
             QuestionRepliedProperties(
@@ -119,15 +123,16 @@ class Question:
                 answers=answers,
             ),
         )
-        pending["resolve"](answers)
+        if not pending.future.done():
+            pending.future.set_result(answers)
 
-    @classmethod
-    async def reject(cls, request_id: str) -> None:
-        pending = cls._pending.pop(request_id, None)
+    async def reject(self, request_id: str) -> None:
+        async with self._guard:
+            pending = self._pending.pop(request_id, None)
         if not pending:
             return
 
-        request: QuestionRequest = pending["request"]
+        request = pending.request
         await Bus.publish(
             QuestionRejected,
             QuestionRejectedProperties(
@@ -135,13 +140,29 @@ class Question:
                 request_id=request_id,
             ),
         )
-        pending["reject"](RejectedError())
+        if not pending.future.done():
+            pending.future.set_exception(RejectedError())
 
-    @classmethod
-    async def list_pending(cls) -> List[QuestionRequest]:
-        return [pending["request"] for pending in cls._pending.values()]
+    async def list_pending(self) -> List[QuestionRequest]:
+        async with self._guard:
+            return [pending.request for pending in self._pending.values()]
 
-    @classmethod
-    def reset(cls) -> None:
-        cls._pending.clear()
+    async def clear_session(self, session_id: str) -> None:
+        async with self._guard:
+            request_ids = [
+                rid
+                for rid, pending in self._pending.items()
+                if pending.request.session_id == session_id
+            ]
+            pending = [self._pending.pop(rid) for rid in request_ids]
+        for item in pending:
+            if not item.future.done():
+                item.future.set_exception(RejectedError())
 
+    async def shutdown(self) -> None:
+        async with self._guard:
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for item in pending:
+            if not item.future.done():
+                item.future.set_exception(RejectedError())

@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Set
 
 from ..core.id import Identifier
 from ..permission import CorrectedError, DeniedError, RejectedError
 from ..question.question import RejectedError as QuestionRejectedError
 from ..tool import ToolContext
-from ..tool.registry import ToolRegistry
 from ..tool.resolver import ToolResolver
 from ..util.log import Log
 from .doom_loop import DoomLoopDetector
 from .processor_types import ToolCallState
+
+if TYPE_CHECKING:
+    from ..runtime import AppContext
 
 log = Log.create({"service": "session.tool_executor"})
 
@@ -26,6 +28,7 @@ class ToolExecutor:
     def __init__(
         self,
         *,
+        app: AppContext,
         session_id: str,
         model_id: str,
         provider_id: str,
@@ -35,6 +38,7 @@ class ToolExecutor:
         emit_tool_update: Callable[[Optional[callable], ToolCallState], Awaitable[None]],
         execute_mcp: Optional[Callable[..., Awaitable[Dict[str, Any]]]] = None,
     ) -> None:
+        self.app = app
         self.session_id = session_id
         self.model_id = model_id
         self.provider_id = provider_id
@@ -43,10 +47,13 @@ class ToolExecutor:
         self.doom = doom
         self.emit_tool_update = emit_tool_update
         self.execute_mcp = execute_mcp
+        self.resolver = ToolResolver(app=self.app)
         self._structured_output: Optional[Any] = None
+        self._ruleset: List[Dict[str, Any]] = []
 
-    def reset_turn(self) -> None:
+    def reset_turn(self, *, ruleset: Optional[List[Dict[str, Any]]] = None) -> None:
         self._structured_output = None
+        self._ruleset = ruleset or []
 
     @property
     def structured_output(self) -> Optional[Any]:
@@ -77,9 +84,9 @@ class ToolExecutor:
                 "metadata": {"valid": True},
             }
 
-        tool = ToolRegistry.get(tool_name)
+        tool = self.app.tools.get(tool_name)
         if not tool:
-            mcp_info = await ToolResolver.mcp_info(tool_name)
+            mcp_info = await self.resolver.mcp_info(tool_name)
             if mcp_info:
                 if self.execute_mcp:
                     return await self.execute_mcp(
@@ -94,21 +101,7 @@ class ToolExecutor:
                 )
             return {"error": f"Unknown tool: {tool_name}"}
 
-        merged_ruleset: List[Dict[str, Any]] = []
-        try:
-            from ..agent import Agent
-            from .session import Session
-
-            agent_info = await Agent.get(agent)
-            if agent_info and agent_info.permission:
-                merged_ruleset.extend(agent_info.permission)
-
-            session = await Session.get(self.session_id)
-            session_permission = getattr(session, "permission", None) if session else None
-            if isinstance(session_permission, list):
-                merged_ruleset.extend(session_permission)
-        except Exception as e:
-            log.warn("failed to load agent permissions", {"error": str(e)})
+        merged_ruleset = self._ruleset
 
         pending_tasks: List[asyncio.Task[Any]] = []
 
@@ -125,6 +118,7 @@ class ToolExecutor:
             await self.doom.check(tool_name=tool_name, tool_input=tool_input, ruleset=merged_ruleset)
 
             ctx = ToolContext(
+                app=self.app,
                 session_id=self.session_id,
                 message_id=assistant_message_id or Identifier.ascending("message"),
                 agent=agent,
@@ -140,7 +134,7 @@ class ToolExecutor:
                 _ruleset=merged_ruleset,
             )
 
-            result = await ToolRegistry.execute(tool_name, tool_input, ctx)
+            result = await self.app.tools.execute(tool_name, tool_input, ctx)
             if pending_tasks:
                 await asyncio.gather(*pending_tasks, return_exceptions=True)
 
@@ -175,7 +169,12 @@ class ToolExecutor:
         except Exception as e:
             if pending_tasks:
                 await asyncio.gather(*pending_tasks, return_exceptions=True)
-            log.error("tool execution error", {"tool": tool_name, "error": str(e)})
+            import traceback
+            log.error("tool execution error", {
+                "tool": tool_name,
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+            })
             return {"error": str(e)}
 
     async def execute_mcp_tool(
@@ -185,13 +184,11 @@ class ToolExecutor:
         mcp_info: Dict[str, Any],
         tool_input: Dict[str, Any],
     ) -> Dict[str, Any]:
-        from ..mcp import MCP
-
         client_name = mcp_info["client"]
         original_name = mcp_info["name"]
 
-        state = await MCP._get_state()
-        client = state.clients.get(client_name)
+        clients = await self.app.mcp.clients()
+        client = clients.get(client_name)
         if not client:
             return {"error": f"MCP client not connected: {client_name}"}
 

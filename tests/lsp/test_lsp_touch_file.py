@@ -24,15 +24,16 @@ class _FakeClient:
 
 @pytest.mark.anyio
 async def test_touch_file_starts_wait_task_before_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    lsp = LSP()
     client = _FakeClient()
 
-    async def fake_get_clients(cls, file: str):
-        del cls, file
+    async def fake_get_clients(self, file: str):
+        del self, file
         return [client]
 
-    monkeypatch.setattr(LSP, "_get_clients", classmethod(fake_get_clients))
+    monkeypatch.setattr(LSP, "_get_clients", fake_get_clients)
 
-    count = await LSP.touch_file("example.py", wait_for_diagnostics=True)
+    count = await lsp.touch_file("example.py", wait_for_diagnostics=True)
 
     assert count == 1
     assert client.open_observed_wait_started is True

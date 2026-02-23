@@ -11,15 +11,20 @@ When loaded, a skill injects its content into the conversation,
 providing the AI with specialized knowledge for particular tasks.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 from urllib.request import pathname2url
 
 from pydantic import BaseModel, Field
 
-from ..skill import Skill, SkillInfo
+from ..skill import SkillInfo
 from ..util.log import Log
 from .tool import PermissionSpec, Tool, ToolContext, ToolResult
+
+if TYPE_CHECKING:
+    from ..skill import Skill
 
 log = Log.create({"service": "tool.skill"})
 
@@ -81,16 +86,15 @@ def _list_skill_files(directory: str, limit: int = MAX_SKILL_FILES) -> List[str]
     return results
 
 
-async def _filter_accessible_skills(skills: List[SkillInfo], caller_agent: Optional[str]) -> List[SkillInfo]:
+async def _filter_accessible_skills(skills: List[SkillInfo], caller_agent: Optional[str], *, agents: object) -> List[SkillInfo]:
     """Filter skills based on caller agent's skill permission rules."""
     if not caller_agent:
         return skills
 
     try:
-        from ..agent import Agent
         from ..permission import Permission, PermissionAction
 
-        agent = await Agent.get(caller_agent)
+        agent = await agents.get(caller_agent)
         if not agent:
             return skills
 
@@ -106,16 +110,17 @@ async def _filter_accessible_skills(skills: List[SkillInfo], caller_agent: Optio
         return skills
 
 
-async def build_skill_description(caller_agent: Optional[str] = None) -> str:
-    """Build the tool description with available skills.
+async def build_skill_description(
+    caller_agent: Optional[str] = None,
+    *,
+    skills: Skill,
+    agents: object,
+) -> str:
+    """Build the tool description with available skills."""
+    all_skills = await skills.list()
+    all_skills = await _filter_accessible_skills(all_skills, caller_agent, agents=agents)
 
-    Returns:
-        Tool description string
-    """
-    skills = await Skill.list()
-    skills = await _filter_accessible_skills(skills, caller_agent)
-
-    if not skills:
+    if not all_skills:
         return (
             "Load a specialized skill that provides domain-specific instructions "
             "and workflows. No skills are currently available."
@@ -123,7 +128,7 @@ async def build_skill_description(caller_agent: Optional[str] = None) -> str:
 
     # Build skill list
     skill_entries = []
-    for skill in skills:
+    for skill in all_skills:
         location_url = _path_to_file_url(skill.location)
         skill_entries.extend([
             "  <skill>",
@@ -134,7 +139,7 @@ async def build_skill_description(caller_agent: Optional[str] = None) -> str:
         ])
 
     # Build examples hint
-    examples = [f"'{s.name}'" for s in skills[:3]]
+    examples = [f"'{s.name}'" for s in all_skills[:3]]
     hint = f" (e.g., {', '.join(examples)}, ...)" if examples else ""
 
     description_parts = [
@@ -172,10 +177,11 @@ async def skill_execute(params: SkillParams, ctx: ToolContext) -> ToolResult:
     Raises:
         ValueError: If the skill is not found
     """
-    skill = await Skill.get(params.name)
+    skills = ctx.app.skills
+    skill = await skills.get(params.name)
 
     if not skill:
-        available = await Skill.names()
+        available = await skills.names()
         available_str = ", ".join(available) if available else "none"
         raise ValueError(
             f'Skill "{params.name}" not found. Available skills: {available_str}'

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from hotaru.lsp import LSP
 from hotaru.tool.lsp import LspParams, lsp_execute
 from hotaru.tool.tool import ToolContext
+from tests.helpers import fake_app
 
 
 class _Symbol(BaseModel):
@@ -18,6 +19,7 @@ class _Symbol(BaseModel):
 
 def _ctx(tmp_path: Path) -> ToolContext:
     ctx = ToolContext(
+        app=fake_app(lsp=LSP()),
         session_id="session_test",
         message_id="message_test",
         agent="build",

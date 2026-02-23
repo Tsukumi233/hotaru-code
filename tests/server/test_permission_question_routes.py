@@ -5,10 +5,10 @@ from hotaru.question.question import QuestionInfo, QuestionOption, QuestionReque
 from hotaru.server.server import Server
 
 
-def test_permission_routes_list_and_reply(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_permission_routes_list_and_reply(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, str] = {}
 
-    async def fake_list_pending(cls):  # type: ignore[no-untyped-def]
+    async def fake_list_pending():  # type: ignore[no-untyped-def]
         return [
             PermissionRequest(
                 id="per_1",
@@ -21,16 +21,16 @@ def test_permission_routes_list_and_reply(monkeypatch) -> None:  # type: ignore[
             )
         ]
 
-    async def fake_reply(cls, request_id: str, reply, message=None):  # type: ignore[no-untyped-def]
+    async def fake_reply(request_id: str, reply, message=None):  # type: ignore[no-untyped-def]
         captured["request_id"] = request_id
         captured["reply"] = str(reply.value if hasattr(reply, "value") else reply)
         if message:
             captured["message"] = message
 
-    monkeypatch.setattr("hotaru.permission.permission.Permission.list_pending", classmethod(fake_list_pending))
-    monkeypatch.setattr("hotaru.permission.permission.Permission.reply", classmethod(fake_reply))
+    monkeypatch.setattr(app_ctx.permission, "list_pending", fake_list_pending)
+    monkeypatch.setattr(app_ctx.permission, "reply", fake_reply)
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         listed = client.get("/v1/permissions")
         assert listed.status_code == 200
@@ -50,10 +50,10 @@ def test_permission_routes_list_and_reply(monkeypatch) -> None:  # type: ignore[
     }
 
 
-def test_question_routes_list_reply_and_reject(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_question_routes_list_reply_and_reject(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, object] = {}
 
-    async def fake_list_pending(cls):  # type: ignore[no-untyped-def]
+    async def fake_list_pending():  # type: ignore[no-untyped-def]
         return [
             QuestionRequest(
                 id="q_1",
@@ -71,18 +71,18 @@ def test_question_routes_list_reply_and_reject(monkeypatch) -> None:  # type: ig
             )
         ]
 
-    async def fake_reply(cls, request_id: str, answers):  # type: ignore[no-untyped-def]
+    async def fake_reply(request_id: str, answers):  # type: ignore[no-untyped-def]
         captured["reply_request_id"] = request_id
         captured["answers"] = answers
 
-    async def fake_reject(cls, request_id: str):  # type: ignore[no-untyped-def]
+    async def fake_reject(request_id: str):  # type: ignore[no-untyped-def]
         captured["reject_request_id"] = request_id
 
-    monkeypatch.setattr("hotaru.question.question.Question.list_pending", classmethod(fake_list_pending))
-    monkeypatch.setattr("hotaru.question.question.Question.reply", classmethod(fake_reply))
-    monkeypatch.setattr("hotaru.question.question.Question.reject", classmethod(fake_reject))
+    monkeypatch.setattr(app_ctx.question, "list_pending", fake_list_pending)
+    monkeypatch.setattr(app_ctx.question, "reply", fake_reply)
+    monkeypatch.setattr(app_ctx.question, "reject", fake_reject)
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         listed = client.get("/v1/questions")
         assert listed.status_code == 200

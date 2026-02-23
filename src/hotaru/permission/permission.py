@@ -5,6 +5,7 @@ Controls what actions AI agents can perform based on configurable rules.
 
 import asyncio
 import fnmatch
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -136,17 +137,24 @@ class Permission:
     Evaluates and manages permission rules for tool execution.
     """
 
-    # Pending permission requests
-    _pending: Dict[str, Dict[str, Any]] = {}
-    _pending_guard = asyncio.Lock()
+    @dataclass
+    class _Pending:
+        request: PermissionRequest
+        session_id: str
+        project_id: Optional[str]
+        scope: str
+        permission: str
+        always: List[str]
+        future: asyncio.Future[None]
 
-    # Approved rules per scope
-    _approved_session: Dict[str, List[PermissionRule]] = {}
-    _approved_project: Dict[str, List[PermissionRule]] = {}
-    _persisted_loaded: set[str] = set()
+    def __init__(self) -> None:
+        self._pending: Dict[str, Permission._Pending] = {}
+        self._pending_guard = asyncio.Lock()
+        self._approved_session: Dict[str, List[PermissionRule]] = {}
+        self._approved_project: Dict[str, List[PermissionRule]] = {}
+        self._persisted_loaded: set[str] = set()
 
-    @classmethod
-    async def _resolve_scope(cls) -> str:
+    async def _resolve_scope(self) -> str:
         scope = "session"
         try:
             from ..core.config import ConfigManager
@@ -161,8 +169,7 @@ class Permission:
             log.debug("failed to resolve permission memory scope", {"error": str(e)})
         return scope
 
-    @classmethod
-    async def _resolve_project_id(cls, session_id: str) -> Optional[str]:
+    async def _resolve_project_id(self, session_id: str) -> Optional[str]:
         try:
             from ..session.session import Session
 
@@ -173,39 +180,37 @@ class Permission:
             log.debug("failed to resolve project id for permission scope", {"session_id": session_id, "error": str(e)})
         return None
 
-    @classmethod
-    async def _ensure_persisted_loaded(cls, project_id: Optional[str]) -> None:
-        if not project_id or project_id in cls._persisted_loaded:
+    async def _ensure_persisted_loaded(self, project_id: Optional[str]) -> None:
+        if not project_id or project_id in self._persisted_loaded:
             return
-        cls._persisted_loaded.add(project_id)
+        self._persisted_loaded.add(project_id)
         from ..storage import NotFoundError, Storage
 
         try:
             data = await Storage.read(["permission_approval", project_id])
         except NotFoundError:
-            cls._approved_project[project_id] = []
+            self._approved_project[project_id] = []
             return
         except Exception as e:
             log.warn("failed to load persisted permission approvals", {"project_id": project_id, "error": str(e)})
-            cls._approved_project[project_id] = []
+            self._approved_project[project_id] = []
             return
 
         if isinstance(data, list):
             try:
-                cls._approved_project[project_id] = cls.from_config_list(data)
+                self._approved_project[project_id] = self.from_config_list(data)
                 return
             except Exception as e:
                 log.warn("invalid persisted permission approvals", {"project_id": project_id, "error": str(e)})
-        cls._approved_project[project_id] = []
+        self._approved_project[project_id] = []
 
-    @classmethod
-    async def _persist_project_approvals(cls, project_id: Optional[str]) -> None:
+    async def _persist_project_approvals(self, project_id: Optional[str]) -> None:
         if not project_id:
             return
         try:
             from ..storage import Storage
 
-            rules = cls._approved_project.get(project_id, [])
+            rules = self._approved_project.get(project_id, [])
             await Storage.write(
                 ["permission_approval", project_id],
                 [rule.model_dump() for rule in rules],
@@ -213,23 +218,21 @@ class Permission:
         except Exception as e:
             log.warn("failed to persist permission approvals", {"project_id": project_id, "error": str(e)})
 
-    @classmethod
     def _approved_rules(
-        cls,
+        self,
         *,
         scope: str,
         session_id: str,
         project_id: Optional[str],
     ) -> List[PermissionRule]:
         if scope == "session":
-            return cls._approved_session.get(session_id, [])
+            return self._approved_session.get(session_id, [])
         if scope in {"project", "persisted"} and project_id:
-            return cls._approved_project.get(project_id, [])
+            return self._approved_project.get(project_id, [])
         return []
 
-    @classmethod
     async def _remember_approvals(
-        cls,
+        self,
         *,
         scope: str,
         session_id: str,
@@ -240,9 +243,9 @@ class Permission:
         if scope == "turn":
             return
         if scope == "session":
-            store = cls._approved_session.setdefault(session_id, [])
+            store = self._approved_session.setdefault(session_id, [])
         elif scope in {"project", "persisted"} and project_id:
-            store = cls._approved_project.setdefault(project_id, [])
+            store = self._approved_project.setdefault(project_id, [])
         else:
             return
 
@@ -252,7 +255,7 @@ class Permission:
         )
 
         if scope == "persisted":
-            await cls._persist_project_approvals(project_id)
+            await self._persist_project_approvals(project_id)
 
     @classmethod
     def from_config(cls, config: Dict[str, Any] | str) -> List[PermissionRule]:
@@ -367,9 +370,8 @@ class Permission:
             for r in rules
         ]
 
-    @classmethod
     async def ask(
-        cls,
+        self,
         session_id: str,
         permission: str,
         patterns: List[str],
@@ -401,16 +403,16 @@ class Permission:
             RejectedError: If user rejects
             CorrectedError: If user rejects with feedback
         """
-        scope = await cls._resolve_scope()
+        scope = await self._resolve_scope()
         project_id: Optional[str] = None
         if scope in {"project", "persisted"}:
-            project_id = await cls._resolve_project_id(session_id)
+            project_id = await self._resolve_project_id(session_id)
             if scope == "persisted":
-                await cls._ensure_persisted_loaded(project_id)
-        approved = cls._approved_rules(scope=scope, session_id=session_id, project_id=project_id)
+                await self._ensure_persisted_loaded(project_id)
+        approved = self._approved_rules(scope=scope, session_id=session_id, project_id=project_id)
 
         for pattern in patterns:
-            rule = cls.evaluate(permission, pattern, ruleset, approved)
+            rule = self.evaluate(permission, pattern, ruleset, approved)
 
             log.info("evaluated", {
                 "permission": permission,
@@ -427,7 +429,7 @@ class Permission:
 
             if rule.action == PermissionAction.ASK:
                 rid = request_id or Identifier.ascending("permission")
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 future = loop.create_future()
 
                 request = PermissionRequest(
@@ -440,18 +442,17 @@ class Permission:
                     tool=tool,
                 )
 
-                item = {
-                    "request": request,
-                    "session_id": session_id,
-                    "project_id": project_id,
-                    "scope": scope,
-                    "permission": permission,
-                    "always": always or [],
-                    "resolve": lambda f=future: f.set_result(None) if not f.done() else None,
-                    "reject": lambda e, f=future: f.set_exception(e) if not f.done() else None,
-                }
-                async with cls._pending_guard:
-                    cls._pending[rid] = item
+                item = Permission._Pending(
+                    request=request,
+                    session_id=session_id,
+                    project_id=project_id,
+                    scope=scope,
+                    permission=permission,
+                    always=always or [],
+                    future=future,
+                )
+                async with self._pending_guard:
+                    self._pending[rid] = item
 
                 await Bus.publish(PermissionAsked, request)
                 await future  # Block until user responds
@@ -459,9 +460,18 @@ class Permission:
 
             # action == "allow" - continue to next pattern
 
-    @classmethod
+    @staticmethod
+    def _resolve_pending(pending: _Pending) -> None:
+        if not pending.future.done():
+            pending.future.set_result(None)
+
+    @staticmethod
+    def _reject_pending(pending: _Pending, error: Exception) -> None:
+        if not pending.future.done():
+            pending.future.set_exception(error)
+
     async def reply(
-        cls,
+        self,
         request_id: str,
         reply: PermissionReply,
         message: Optional[str] = None
@@ -477,12 +487,12 @@ class Permission:
             reply: Reply type
             message: Optional message for rejection
         """
-        async with cls._pending_guard:
-            pending = cls._pending.pop(request_id, None)
+        async with self._pending_guard:
+            pending = self._pending.pop(request_id, None)
         if not pending:
             return
 
-        session_id = pending["session_id"]
+        session_id = pending.session_id
 
         await Bus.publish(PermissionReplied, PermissionRepliedProperties(
             session_id=session_id,
@@ -493,16 +503,16 @@ class Permission:
         if reply == PermissionReply.REJECT:
             # Reject this request
             if message:
-                pending["reject"](CorrectedError(message))
+                self._reject_pending(pending, CorrectedError(message))
             else:
-                pending["reject"](RejectedError())
+                self._reject_pending(pending, RejectedError())
 
             # Also reject ALL other pending requests for this session
-            async with cls._pending_guard:
+            async with self._pending_guard:
                 session_pending = [
-                    (rid, cls._pending.pop(rid))
-                    for rid, p in list(cls._pending.items())
-                    if p["session_id"] == session_id
+                    (rid, self._pending.pop(rid))
+                    for rid, p in list(self._pending.items())
+                    if p.session_id == session_id
                 ]
             for rid, p in session_pending:
                 await Bus.publish(PermissionReplied, PermissionRepliedProperties(
@@ -510,51 +520,51 @@ class Permission:
                     request_id=rid,
                     reply=PermissionReply.REJECT,
                 ))
-                p["reject"](RejectedError())
+                self._reject_pending(p, RejectedError())
             return
 
         if reply == PermissionReply.ONCE:
-            pending["resolve"]()
+            self._resolve_pending(pending)
             return
 
         if reply == PermissionReply.ALWAYS:
-            await cls._remember_approvals(
-                scope=str(pending.get("scope") or "session"),
+            await self._remember_approvals(
+                scope=str(pending.scope or "session"),
                 session_id=session_id,
-                project_id=pending.get("project_id"),
-                permission=pending["permission"],
-                patterns=list(pending.get("always", [])),
+                project_id=pending.project_id,
+                permission=pending.permission,
+                patterns=list(pending.always),
             )
 
-            pending["resolve"]()
+            self._resolve_pending(pending)
 
             # Auto-resolve any other pending requests that now match
-            auto_pending = []
-            async with cls._pending_guard:
-                for rid, p in list(cls._pending.items()):
-                    if p["session_id"] != session_id:
+            auto_pending: List[tuple[str, Permission._Pending]] = []
+            async with self._pending_guard:
+                for rid, p in list(self._pending.items()):
+                    if p.session_id != session_id:
                         continue
-                    approved = cls._approved_rules(
-                        scope=str(p.get("scope") or "session"),
+                    approved = self._approved_rules(
+                        scope=str(p.scope or "session"),
                         session_id=session_id,
-                        project_id=p.get("project_id"),
+                        project_id=p.project_id,
                     )
                     all_approved = True
-                    for pat in p["request"].patterns:
-                        rule = cls.evaluate(p["permission"], pat, [], approved)
+                    for pat in p.request.patterns:
+                        rule = self.evaluate(p.permission, pat, [], approved)
                         if rule.action != PermissionAction.ALLOW:
                             all_approved = False
                             break
                     if not all_approved:
                         continue
-                    auto_pending.append((rid, cls._pending.pop(rid)))
+                    auto_pending.append((rid, self._pending.pop(rid)))
             for rid, p in auto_pending:
                 await Bus.publish(PermissionReplied, PermissionRepliedProperties(
                     session_id=session_id,
                     request_id=rid,
                     reply=PermissionReply.ALWAYS,
                 ))
-                p["resolve"]()
+                self._resolve_pending(p)
 
     @classmethod
     def disabled_tools(
@@ -585,21 +595,29 @@ class Permission:
 
         return result
 
-    @classmethod
-    async def list_pending(cls) -> List[PermissionRequest]:
+    async def list_pending(self) -> List[PermissionRequest]:
         """List pending permission requests.
 
         Returns:
             List of pending requests
         """
-        async with cls._pending_guard:
-            return [p["request"] for p in cls._pending.values()]
+        async with self._pending_guard:
+            return [p.request for p in self._pending.values()]
 
-    @classmethod
-    def reset(cls) -> None:
-        """Reset permission state."""
-        cls._pending.clear()
-        cls._pending_guard = asyncio.Lock()
-        cls._approved_session.clear()
-        cls._approved_project.clear()
-        cls._persisted_loaded.clear()
+    async def clear_session(self, session_id: str) -> None:
+        async with self._pending_guard:
+            request_ids = [rid for rid, item in self._pending.items() if item.session_id == session_id]
+            pending = [self._pending.pop(rid) for rid in request_ids]
+        self._approved_session.pop(session_id, None)
+        for p in pending:
+            self._reject_pending(p, RejectedError())
+
+    async def shutdown(self) -> None:
+        async with self._pending_guard:
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for item in pending:
+            self._reject_pending(item, RejectedError())
+        self._approved_session.clear()
+        self._approved_project.clear()
+        self._persisted_loaded.clear()

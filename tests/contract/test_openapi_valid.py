@@ -1,4 +1,5 @@
 from hotaru.server.server import Server
+from tests.helpers import create_test_app_context
 
 
 REQUIRED_PATHS: dict[str, set[str]] = {
@@ -27,7 +28,8 @@ REQUIRED_PATHS: dict[str, set[str]] = {
 
 
 def test_openapi_v1_contract_has_required_paths_and_schemas() -> None:
-    spec = Server._create_app().openapi()
+    with create_test_app_context() as ctx:
+        spec = Server._create_app(ctx).openapi()
 
     assert spec.get("openapi") == "3.1.0"
 

@@ -7,13 +7,16 @@ CLI/TUI layers don't duplicate workflow logic.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from ..agent import Agent
 from ..provider import Provider
 from ..provider.provider import ProcessedModelInfo
 from .session import Session
 from .system import SystemPrompt
+
+if TYPE_CHECKING:
+    from ..agent.agent import Agent
+    from ..runtime import AppContext
 
 
 @dataclass
@@ -32,6 +35,7 @@ class PromptContext:
 
 async def prepare_prompt_context(
     *,
+    app: AppContext,
     cwd: str,
     sandbox: str,
     project_id: str,
@@ -44,14 +48,14 @@ async def prepare_prompt_context(
     """Prepare context for one-shot run-style prompt execution."""
 
     provider_id, model_id, model_info = await _resolve_model(model=model)
-    validated_agent, warnings = await _validate_requested_agent(requested_agent)
+    validated_agent, warnings = await _validate_requested_agent(app.agents, requested_agent)
 
     if continue_session:
         sessions = await Session.list(project_id)
         if sessions:
             session = sessions[0]
         else:
-            initial_agent = validated_agent or await Agent.default_agent()
+            initial_agent = validated_agent or await app.agents.default_agent()
             session = await Session.create(
                 project_id=project_id,
                 agent=initial_agent,
@@ -64,7 +68,7 @@ async def prepare_prompt_context(
         if not session:
             raise ValueError(f"Session '{session_id}' not found")
     else:
-        initial_agent = validated_agent or await Agent.default_agent()
+        initial_agent = validated_agent or await app.agents.default_agent()
         session = await Session.create(
             project_id=project_id,
             agent=initial_agent,
@@ -73,7 +77,7 @@ async def prepare_prompt_context(
             provider_id=provider_id,
         )
 
-    agent_name = validated_agent or session.agent or await Agent.default_agent()
+    agent_name = validated_agent or session.agent or await app.agents.default_agent()
     if agent_name != session.agent:
         updated = await Session.update(session.id, agent=agent_name)
         if updated:
@@ -100,6 +104,7 @@ async def prepare_prompt_context(
 
 async def prepare_send_message_context(
     *,
+    app: AppContext,
     cwd: str,
     sandbox: str,
     project_vcs: Optional[str],
@@ -114,11 +119,11 @@ async def prepare_send_message_context(
     session = await Session.get(session_id)
     agent_name = requested_agent or (session.agent if session else None)
     if agent_name:
-        agent_info = await Agent.get(agent_name)
+        agent_info = await app.agents.get(agent_name)
         if not agent_info or agent_info.mode == "subagent":
-            agent_name = await Agent.default_agent()
+            agent_name = await app.agents.default_agent()
     else:
-        agent_name = await Agent.default_agent()
+        agent_name = await app.agents.default_agent()
 
     if session and session.agent != agent_name:
         updated = await Session.update(session_id, agent=agent_name)
@@ -152,11 +157,11 @@ async def _resolve_model(*, model: Optional[str]) -> tuple[str, str, ProcessedMo
     return provider_id, model_id, model_info
 
 
-async def _validate_requested_agent(requested_agent: Optional[str]) -> tuple[Optional[str], list[str]]:
+async def _validate_requested_agent(agents: Agent, requested_agent: Optional[str]) -> tuple[Optional[str], list[str]]:
     if not requested_agent:
         return None, []
 
-    agent_info = await Agent.get(requested_agent)
+    agent_info = await agents.get(requested_agent)
     if not agent_info:
         return None, [f"Agent '{requested_agent}' not found, using session/default"]
     if agent_info.mode == "subagent":

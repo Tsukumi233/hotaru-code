@@ -7,7 +7,7 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
-from ..question import Question, QuestionInfo, QuestionToolRef
+from ..question import QuestionInfo, QuestionToolRef
 from .tool import Tool, ToolContext, ToolResult
 
 DESCRIPTION = (Path(__file__).parent / "question.txt").read_text(encoding="utf-8")
@@ -20,7 +20,7 @@ class QuestionParams(BaseModel):
 
 
 async def question_execute(params: QuestionParams, ctx: ToolContext) -> ToolResult:
-    answers = await Question.ask(
+    answers = await ctx.app.question.ask(
         session_id=ctx.session_id,
         questions=params.questions,
         tool=QuestionToolRef(message_id=ctx.message_id, call_id=ctx.call_id or ""),
@@ -50,4 +50,3 @@ QuestionTool = Tool.define(
     execute_fn=question_execute,
     auto_truncate=False,
 )
-

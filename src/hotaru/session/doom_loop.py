@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from ..permission import Permission
 
 
 class DoomLoopDetector:
@@ -12,11 +15,13 @@ class DoomLoopDetector:
     def __init__(
         self,
         *,
+        permission: Permission,
         session_id: str,
         threshold: int = 3,
         window: int = 50,
         signatures: Optional[List[str]] = None,
     ) -> None:
+        self.permission = permission
         self.session_id = session_id
         self.threshold = threshold
         self.window = window
@@ -43,7 +48,7 @@ class DoomLoopDetector:
 
         from ..permission import Permission
 
-        await Permission.ask(
+        await self.permission.ask(
             session_id=self.session_id,
             permission="doom_loop",
             patterns=[tool_name],

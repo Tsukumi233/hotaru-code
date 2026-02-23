@@ -31,6 +31,7 @@ class BatchParams(BaseModel):
 
 def _clone_context(ctx: ToolContext, call_id: str) -> ToolContext:
     return ToolContext(
+        app=ctx.app,
         session_id=ctx.session_id,
         message_id=ctx.message_id,
         agent=ctx.agent,
@@ -44,11 +45,9 @@ def _clone_context(ctx: ToolContext, call_id: str) -> ToolContext:
 
 
 async def batch_execute(params: BatchParams, ctx: ToolContext) -> ToolResult:
-    from .registry import ToolRegistry
-
     calls = params.tool_calls[:MAX_CALLS]
     discarded = params.tool_calls[MAX_CALLS:]
-    tool_map = {tool.id: tool for tool in ToolRegistry.list()}
+    tool_map = {tool.id: tool for tool in ctx.app.tools.list()}
 
     async def _run(call: BatchCall) -> Dict[str, Any]:
         if call.tool in DISALLOWED:
@@ -67,7 +66,7 @@ async def batch_execute(params: BatchParams, ctx: ToolContext) -> ToolResult:
             }
 
         try:
-            result = await ToolRegistry.execute(
+            result = await ctx.app.tools.execute(
                 call.tool,
                 call.parameters,
                 _clone_context(ctx, Identifier.ascending("call")),

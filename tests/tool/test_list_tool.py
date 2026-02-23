@@ -5,6 +5,7 @@ import pytest
 from hotaru.tool.list import ListParams, LsTool, list_execute
 from hotaru.tool.registry import ToolRegistry
 from hotaru.tool.tool import ToolContext
+from tests.helpers import fake_app
 
 
 @pytest.mark.anyio
@@ -15,6 +16,7 @@ async def test_list_tool_requests_list_permission_and_ignores_common_dirs(tmp_pa
     (tmp_path / "node_modules" / "index.js").write_text("module.exports = {}\n", encoding="utf-8")
 
     ctx = ToolContext(
+        app=fake_app(),
         session_id="session_test",
         message_id="message_test",
         agent="build",
@@ -34,5 +36,5 @@ async def test_list_tool_requests_list_permission_and_ignores_common_dirs(tmp_pa
 
 
 def test_list_tool_is_registered() -> None:
-    ToolRegistry.reset()
-    assert "ls" in ToolRegistry.ids()
+    registry = ToolRegistry()
+    assert "ls" in registry.ids()

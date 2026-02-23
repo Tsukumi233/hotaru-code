@@ -7,10 +7,12 @@ import hotaru.tool.read as read_module
 from hotaru.lsp import LSP
 from hotaru.tool.read import ReadParams, read_execute
 from hotaru.tool.tool import ToolContext
+from tests.helpers import fake_app
 
 
 def _tool_context(tmp_path: Path) -> ToolContext:
     ctx = ToolContext(
+        app=fake_app(lsp=LSP()),
         session_id="session_test",
         message_id="message_test",
         agent="build",

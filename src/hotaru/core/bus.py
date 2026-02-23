@@ -24,6 +24,7 @@ Example:
     unsubscribe()
 """
 
+from contextvars import ContextVar, Token
 from typing import Any, Callable, Dict, List, TypeVar, Generic, Awaitable, Union, Optional
 from pydantic import BaseModel
 
@@ -98,32 +99,36 @@ class EventPayload(BaseModel):
 SubscriptionCallback = Callable[[EventPayload], Union[None, Awaitable[None]]]
 
 
+_bus_var: ContextVar['Bus'] = ContextVar('_bus_var')
+
+
 class Bus:
     """Event bus for publishing and subscribing to events.
 
-    Provides a simple pub/sub mechanism for decoupled communication
-    between components. Supports both synchronous and asynchronous
-    callbacks.
-
-    Note: This implementation uses class-level state. In a full
-    implementation, subscriptions would be scoped to Instance contexts.
+    ContextVar-backed: each AppContext owns a Bus instance.
+    Class methods resolve the active instance transparently.
     """
 
-    # Subscriptions by event type
-    _subscriptions: Dict[str, List[SubscriptionCallback]] = {}
+    def __init__(self) -> None:
+        self._subscriptions: Dict[str, List[SubscriptionCallback]] = {}
+
+    @classmethod
+    def _current(cls) -> 'Bus':
+        try:
+            return _bus_var.get()
+        except LookupError:
+            raise RuntimeError("No Bus is bound to the current context")
+
+    @classmethod
+    def provide(cls, bus: 'Bus') -> Token['Bus']:
+        return _bus_var.set(bus)
+
+    @classmethod
+    def restore(cls, token: Token['Bus']) -> None:
+        _bus_var.reset(token)
 
     @classmethod
     async def publish(cls, event: BusEvent[T], properties: T) -> None:
-        """Publish an event to all subscribers.
-
-        Args:
-            event: Event definition
-            properties: Event properties (must match event's properties_type)
-
-        Raises:
-            TypeError: If properties don't match the expected type
-        """
-        # Validate and convert properties
         if not isinstance(properties, event.properties_type):
             if isinstance(properties, dict):
                 properties = event.properties_type(**properties)
@@ -137,12 +142,11 @@ class Bus:
             properties=properties.model_dump()
         )
 
-        # Collect all matching subscribers (specific + wildcard)
+        bus = cls._current()
         callbacks = []
         for key in [event.type, "*"]:
-            callbacks.extend(cls._subscriptions.get(key, []))
+            callbacks.extend(bus._subscriptions.get(key, []))
 
-        # Execute all callbacks
         for callback in callbacks:
             try:
                 result = callback(payload)
@@ -160,31 +164,14 @@ class Bus:
         event: BusEvent[T],
         callback: Callable[[EventPayload], Union[None, Awaitable[None]]]
     ) -> Callable[[], None]:
-        """Subscribe to a specific event type.
-
-        Args:
-            event: Event definition to subscribe to
-            callback: Function to call when event is published
-
-        Returns:
-            Unsubscribe function - call to remove the subscription
-        """
-        return cls._raw_subscribe(event.type, callback)
+        return cls._current()._raw_subscribe(event.type, callback)
 
     @classmethod
     def subscribe_all(
         cls,
         callback: Callable[[EventPayload], Union[None, Awaitable[None]]]
     ) -> Callable[[], None]:
-        """Subscribe to all events.
-
-        Args:
-            callback: Function to call for any event
-
-        Returns:
-            Unsubscribe function
-        """
-        return cls._raw_subscribe("*", callback)
+        return cls._current()._raw_subscribe("*", callback)
 
     @classmethod
     def once(
@@ -192,15 +179,6 @@ class Bus:
         event: BusEvent[T],
         callback: Callable[[EventPayload], Union[None, Awaitable[None], bool]]
     ) -> None:
-        """Subscribe to an event, auto-unsubscribing after first call.
-
-        The callback can return True or "done" to trigger unsubscription,
-        or the subscription will be removed after the first event regardless.
-
-        Args:
-            event: Event definition to subscribe to
-            callback: Function that may return True/"done" to unsubscribe
-        """
         def wrapper(payload: EventPayload):
             result = callback(payload)
             if result == "done" or result is True:
@@ -208,40 +186,32 @@ class Bus:
 
         unsubscribe = cls.subscribe(event, wrapper)
 
-    @classmethod
     def _raw_subscribe(
-        cls,
+        self,
         event_type: str,
-        callback: SubscriptionCallback
+        callback: SubscriptionCallback,
     ) -> Callable[[], None]:
-        """Internal subscription method.
+        if event_type not in self._subscriptions:
+            self._subscriptions[event_type] = []
 
-        Args:
-            event_type: Event type string or "*" for all events
-            callback: Callback function
+        self._subscriptions[event_type].append(callback)
 
-        Returns:
-            Unsubscribe function
-        """
-        if event_type not in cls._subscriptions:
-            cls._subscriptions[event_type] = []
-
-        cls._subscriptions[event_type].append(callback)
-
-        def unsubscribe():
-            subs = cls._subscriptions.get(event_type, [])
+        def unsubscribe() -> None:
+            subs = self._subscriptions.get(event_type, [])
             if callback in subs:
                 subs.remove(callback)
 
         return unsubscribe
 
+    def clear(self) -> None:
+        self._subscriptions.clear()
+
     @classmethod
     def reset(cls) -> None:
-        """Reset all subscriptions.
-
-        Useful for testing or when reinitializing the application.
-        """
-        cls._subscriptions.clear()
+        try:
+            cls._current().clear()
+        except RuntimeError:
+            pass
 
 
 # Standard events

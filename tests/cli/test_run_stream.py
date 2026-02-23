@@ -6,6 +6,11 @@ import pytest
 
 from hotaru.provider.provider import ProcessedModelInfo
 from hotaru.cli.cmd.run import run_command
+from tests.helpers import fake_app
+
+
+def _fake_runtime():
+    return fake_app()
 
 
 @pytest.mark.anyio
@@ -119,6 +124,12 @@ async def test_run_command_json_emits_reasoning_and_tool_use_in_part_order(
     monkeypatch.setattr("hotaru.cli.cmd.run.prepare_prompt_context", fake_prepare_prompt_context)
     monkeypatch.setattr("hotaru.cli.cmd.run.SessionPrompt.prompt", classmethod(fake_prompt))
     monkeypatch.setattr("hotaru.cli.cmd.run.Bus.subscribe", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr("hotaru.cli.cmd.run.AppContext", _fake_runtime)
+
+    async def _noop_storage():
+        pass
+
+    monkeypatch.setattr("hotaru.cli.cmd.run.Storage.initialize", classmethod(lambda cls: _noop_storage()))
 
     await run_command(
         message="hello",

@@ -48,6 +48,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 filterwarnings = [
     "error::pydantic.warnings.PydanticDeprecatedSince20",
 ]

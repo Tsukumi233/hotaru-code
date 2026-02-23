@@ -8,16 +8,16 @@ from starlette.testclient import TestClient
 from hotaru.server.server import Server
 
 
-def test_request_directory_prefers_header_over_query(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_request_directory_prefers_header_over_query(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, str] = {}
 
-    async def fake_create(cls, payload: dict, cwd: str):
+    async def fake_create(cls, payload: dict, cwd: str, **_kw):
         captured["cwd"] = cwd
         return {"id": "ses_1", "project_id": payload.get("project_id", "proj_1")}
 
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.create", classmethod(fake_create))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         response = client.post(
             "/v1/sessions",
@@ -30,16 +30,16 @@ def test_request_directory_prefers_header_over_query(monkeypatch) -> None:  # ty
     assert captured["cwd"] == "/header/path"
 
 
-def test_request_directory_uses_query_when_header_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_request_directory_uses_query_when_header_missing(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, str] = {}
 
-    async def fake_message(cls, session_id: str, payload: dict, cwd: str):
+    async def fake_message(cls, session_id: str, payload: dict, cwd: str, **_kwargs):
         captured["cwd"] = cwd
         return {"ok": True, "assistant_message_id": session_id, "status": "stop", "error": None}
 
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.message", classmethod(fake_message))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         response = client.post(
             "/v1/sessions/ses_1/messages",
@@ -51,16 +51,16 @@ def test_request_directory_uses_query_when_header_missing(monkeypatch) -> None: 
     assert captured["cwd"] == "/query/path"
 
 
-def test_request_directory_falls_back_to_process_cwd(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_request_directory_falls_back_to_process_cwd(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, str] = {}
 
-    async def fake_compact(cls, session_id: str, payload: dict, cwd: str):
+    async def fake_compact(cls, session_id: str, payload: dict, cwd: str, **_kwargs):
         captured["cwd"] = cwd
         return {"ok": True, "id": session_id}
 
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.compact", classmethod(fake_compact))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         response = client.post("/v1/sessions/ses_1/compact", json={"auto": True})
 
@@ -68,17 +68,17 @@ def test_request_directory_falls_back_to_process_cwd(monkeypatch) -> None:  # ty
     assert captured["cwd"] == str(Path.cwd())
 
 
-def test_request_directory_decodes_percent_encoded_header(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_request_directory_decodes_percent_encoded_header(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, str] = {}
     encoded = quote("/tmp/热")
 
-    async def fake_create(cls, payload: dict, cwd: str):
+    async def fake_create(cls, payload: dict, cwd: str, **_kw):
         captured["cwd"] = cwd
         return {"id": "ses_1", "project_id": payload.get("project_id", "proj_1")}
 
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.create", classmethod(fake_create))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         response = client.post(
             "/v1/sessions",
@@ -90,8 +90,8 @@ def test_request_directory_decodes_percent_encoded_header(monkeypatch) -> None: 
     assert captured["cwd"] == "/tmp/热"
 
 
-def test_get_paths_reports_request_directory(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    app = Server._create_app()
+def test_get_paths_reports_request_directory(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         response = client.get(
             "/v1/path",
@@ -103,7 +103,7 @@ def test_get_paths_reports_request_directory(monkeypatch) -> None:  # type: igno
     assert payload["cwd"] == "/workspace/one"
 
 
-def test_list_sessions_uses_resolved_directory(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_list_sessions_uses_resolved_directory(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, str | None] = {}
 
     async def fake_list(cls, project_id: str | None, cwd: str):
@@ -113,7 +113,7 @@ def test_list_sessions_uses_resolved_directory(monkeypatch) -> None:  # type: ig
 
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.list", classmethod(fake_list))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         response = client.get(
             "/v1/sessions",

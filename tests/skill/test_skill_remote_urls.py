@@ -113,7 +113,8 @@ async def test_discovery_pull_returns_empty_on_invalid_index(
 
 @pytest.mark.anyio
 async def test_skill_loads_from_config_urls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    Skill.reset()
+    registry = Skill()
+    registry.reset()
     home = tmp_path / "home"
     project = tmp_path / "project"
     remote = tmp_path / "remote" / "url-skill"
@@ -144,5 +145,5 @@ async def test_skill_loads_from_config_urls(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setattr(Instance, "directory", classmethod(lambda cls: str(project)))
     monkeypatch.setattr(Instance, "worktree", classmethod(lambda cls: str(project)))
 
-    names = {skill.name for skill in await Skill.list()}
+    names = {skill.name for skill in await registry.list()}
     assert "url-skill" in names

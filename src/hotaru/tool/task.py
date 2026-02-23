@@ -46,27 +46,25 @@ def short_description(prompt: str) -> str:
     return " ".join(words[:5])
 
 
-async def build_task_description(caller_agent: Optional[str] = None) -> str:
+async def build_task_description(caller_agent: Optional[str] = None, *, agents: Agent) -> str:
     """Build dynamic task tool description with accessible subagents."""
-    agents = [agent for agent in await Agent.list() if agent.mode != AgentMode.PRIMARY]
+    subagents = [a for a in await agents.list() if a.mode != AgentMode.PRIMARY]
 
-    caller = await Agent.get(caller_agent) if caller_agent else None
+    caller = await agents.get(caller_agent) if caller_agent else None
     if caller:
         caller_ruleset = Permission.from_config_list(caller.permission)
-        filtered = []
-        for agent in agents:
-            decision = Permission.evaluate("task", agent.name, caller_ruleset)
-            if decision.action != PermissionAction.DENY:
-                filtered.append(agent)
-        agents = filtered
+        subagents = [
+            a for a in subagents
+            if Permission.evaluate("task", a.name, caller_ruleset).action != PermissionAction.DENY
+        ]
 
-    if not agents:
+    if not subagents:
         listing = "- (no subagents available)"
     else:
         lines = []
-        for agent in agents:
-            desc = agent.description or "Specialized assistant."
-            lines.append(f"- {agent.name}: {desc}")
+        for a in subagents:
+            desc = a.description or "Specialized assistant."
+            lines.append(f"- {a.name}: {desc}")
         listing = "\n".join(lines)
 
     return _DESCRIPTION_TEMPLATE.replace("{agents}", listing)
@@ -80,7 +78,7 @@ async def _resolve_task_model(
 ) -> tuple[str, str]:
     from ..provider import Provider
 
-    agent = await Agent.get(agent_name)
+    agent = await context.app.agents.get(agent_name)
     if agent and agent.model:
         return agent.model.provider_id, agent.model.model_id
 
@@ -102,7 +100,7 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
     from ..session.session import Session
     from ..session.system import SystemPrompt
 
-    agent = await Agent.get(params.subagent_type)
+    agent = await ctx.app.agents.get(params.subagent_type)
     if not agent:
         raise ValueError(f"Unknown subagent type: {params.subagent_type}")
     if agent.mode == AgentMode.PRIMARY:
@@ -141,6 +139,7 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
     )
 
     prompt_result = await SessionPrompt.prompt(
+        app=ctx.app,
         session_id=session.id,
         content=params.prompt,
         provider_id=provider_id,

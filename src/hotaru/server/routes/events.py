@@ -6,10 +6,12 @@ import json
 import time
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from ...app_services import EventService
+from ...runtime import AppContext
+from ..deps import resolve_app_context
 from ..schemas import SseEnvelope
 
 router = APIRouter(prefix="/v1/events", tags=["events"])
@@ -81,8 +83,11 @@ def _sse_response(iterator: AsyncIterator[str]) -> StreamingResponse:
 
 
 @router.get("", response_model=SseEnvelope)
-async def stream_events(session_id: str = Query(default="")) -> StreamingResponse:
-    stream = EventService.stream()
+async def stream_events(
+    ctx: AppContext = Depends(resolve_app_context),
+    session_id: str = Query(default=""),
+) -> StreamingResponse:
+    stream = EventService.stream(ctx.bus)
 
     async def event_generator() -> AsyncIterator[str]:
         try:

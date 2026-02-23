@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from ..runtime import AppContext
 from ..storage import Storage
 from ..util.log import Log
 from .app import create_app
@@ -33,10 +34,18 @@ class Server:
     _app: FastAPI | None = None
     _server: Any | None = None
     _info: ServerInfo | None = None
+    _ctx: AppContext | None = None
+    _task: asyncio.Task[Any] | None = None
 
     @classmethod
-    def _create_app(cls) -> FastAPI:
-        return create_app()
+    def _create_app(
+        cls,
+        ctx: AppContext,
+        *,
+        manage_lifecycle: bool = False,
+    ) -> FastAPI:
+        """Build a FastAPI app with an explicit application context."""
+        return create_app(ctx, manage_lifecycle=manage_lifecycle)
 
     @classmethod
     def _web_dist_candidates(cls) -> list[Path]:
@@ -51,7 +60,8 @@ class Server:
         import uvicorn
 
         await Storage.initialize()
-        cls._app = cls._create_app()
+        cls._ctx = AppContext()
+        cls._app = cls._create_app(cls._ctx, manage_lifecycle=True)
 
         config = uvicorn.Config(
             cls._app,
@@ -64,9 +74,9 @@ class Server:
         cls._info = ServerInfo(host=host, port=port)
 
         log.info("starting server", {"host": host, "port": port})
-        asyncio.create_task(cls._server.serve())
+        cls._task = asyncio.create_task(cls._server.serve())
 
-        while not cls._server.started:
+        while not cls._server.started and not cls._task.done():
             await asyncio.sleep(0.1)
 
         log.info("server started", {"url": cls._info.url})
@@ -80,13 +90,16 @@ class Server:
 
         log.info("stopping server")
         server.should_exit = True
-        while bool(getattr(server, "started", False)):
+        task = cls._task
+        while bool(getattr(server, "started", False)) and not (task and task.done()):
             await asyncio.sleep(0.05)
 
         if cls._server is server:
             cls._server = None
             cls._app = None
             cls._info = None
+            cls._ctx = None
+            cls._task = None
         log.info("server stopped")
 
     @classmethod

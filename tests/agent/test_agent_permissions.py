@@ -4,6 +4,7 @@ from hotaru.agent.agent import Agent
 from hotaru.core.global_paths import GlobalPath
 from hotaru.core.config import Config, ConfigManager
 from hotaru.permission import Permission, PermissionAction
+from hotaru.skill import Skill
 
 
 def _patch_config(monkeypatch: pytest.MonkeyPatch, config_data):
@@ -15,13 +16,17 @@ def _patch_config(monkeypatch: pytest.MonkeyPatch, config_data):
     monkeypatch.setattr(ConfigManager, "get", classmethod(fake_get))
 
 
+def _agents() -> Agent:
+    return Agent(Skill())
+
+
 @pytest.mark.anyio
 async def test_strict_permissions_enable_edit_and_bash_ask(monkeypatch: pytest.MonkeyPatch) -> None:
-    Agent.reset()
+    agents = _agents()
     _patch_config(monkeypatch, {"strict_permissions": True})
 
-    agent = await Agent.get("build")
-    explore = await Agent.get("explore")
+    agent = await agents.get("build")
+    explore = await agents.get("explore")
     assert agent is not None
     assert explore is not None
 
@@ -35,16 +40,14 @@ async def test_strict_permissions_enable_edit_and_bash_ask(monkeypatch: pytest.M
     assert bash_rule.action == PermissionAction.ASK
     assert explore_bash_rule.action == PermissionAction.ASK
 
-    Agent.reset()
-
 
 @pytest.mark.anyio
 async def test_strict_permissions_disabled_keeps_default_allow(monkeypatch: pytest.MonkeyPatch) -> None:
-    Agent.reset()
+    agents = _agents()
     _patch_config(monkeypatch, {"strict_permissions": False})
 
-    agent = await Agent.get("build")
-    explore = await Agent.get("explore")
+    agent = await agents.get("build")
+    explore = await agents.get("explore")
     assert agent is not None
     assert explore is not None
 
@@ -58,12 +61,10 @@ async def test_strict_permissions_disabled_keeps_default_allow(monkeypatch: pyte
     assert bash_rule.action == PermissionAction.ALLOW
     assert explore_bash_rule.action == PermissionAction.ALLOW
 
-    Agent.reset()
-
 
 @pytest.mark.anyio
 async def test_user_permission_can_override_strict_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    Agent.reset()
+    agents = _agents()
     _patch_config(
         monkeypatch,
         {
@@ -74,7 +75,7 @@ async def test_user_permission_can_override_strict_defaults(monkeypatch: pytest.
         },
     )
 
-    agent = await Agent.get("build")
+    agent = await agents.get("build")
     assert agent is not None
 
     ruleset = Permission.from_config_list(agent.permission)
@@ -84,12 +85,10 @@ async def test_user_permission_can_override_strict_defaults(monkeypatch: pytest.
     assert bash_rule.action == PermissionAction.ALLOW
     assert edit_rule.action == PermissionAction.ASK
 
-    Agent.reset()
-
 
 @pytest.mark.anyio
 async def test_global_permission_string_is_supported(monkeypatch: pytest.MonkeyPatch) -> None:
-    Agent.reset()
+    agents = _agents()
     _patch_config(
         monkeypatch,
         {
@@ -97,7 +96,7 @@ async def test_global_permission_string_is_supported(monkeypatch: pytest.MonkeyP
         },
     )
 
-    agent = await Agent.get("build")
+    agent = await agents.get("build")
     assert agent is not None
 
     ruleset = Permission.from_config_list(agent.permission)
@@ -107,17 +106,15 @@ async def test_global_permission_string_is_supported(monkeypatch: pytest.MonkeyP
     assert bash_rule.action == PermissionAction.ASK
     assert read_rule.action == PermissionAction.ASK
 
-    Agent.reset()
-
 
 @pytest.mark.anyio
 async def test_default_read_env_rules_require_confirmation_for_sensitive_env_files(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    Agent.reset()
+    agents = _agents()
     _patch_config(monkeypatch, {})
 
-    agent = await Agent.get("build")
+    agent = await agents.get("build")
     assert agent is not None
 
     ruleset = Permission.from_config_list(agent.permission)
@@ -129,16 +126,14 @@ async def test_default_read_env_rules_require_confirmation_for_sensitive_env_fil
     assert nested_env_rule.action == PermissionAction.ASK
     assert env_example_rule.action == PermissionAction.ALLOW
 
-    Agent.reset()
-
 
 @pytest.mark.anyio
 async def test_plan_mode_permissions_are_aligned(monkeypatch: pytest.MonkeyPatch) -> None:
-    Agent.reset()
+    agents = _agents()
     _patch_config(monkeypatch, {})
 
-    build = await Agent.get("build")
-    plan = await Agent.get("plan")
+    build = await agents.get("build")
+    plan = await agents.get("plan")
     assert build is not None
     assert plan is not None
 
@@ -161,5 +156,3 @@ async def test_plan_mode_permissions_are_aligned(monkeypatch: pytest.MonkeyPatch
     assert normal_edit.action == PermissionAction.DENY
     assert local_plan_edit.action == PermissionAction.ALLOW
     assert global_plan_edit.action == PermissionAction.ALLOW
-
-    Agent.reset()

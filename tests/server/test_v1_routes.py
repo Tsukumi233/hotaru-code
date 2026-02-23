@@ -7,10 +7,10 @@ from hotaru.agent.agent import AgentInfo, AgentMode
 from hotaru.server.server import Server
 
 
-def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_v1_session_routes_delegate_to_session_service(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, Any] = {}
 
-    async def fake_create(cls, payload: dict[str, Any], cwd: str):
+    async def fake_create(cls, payload: dict[str, Any], cwd: str, **_kw):
         captured["create"] = {"payload": payload, "cwd": cwd}
         return {"id": "ses_1", "project_id": payload.get("project_id", "proj_1")}
 
@@ -30,7 +30,7 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
         captured["list_messages"] = session_id
         return [{"id": "msg_1", "role": "assistant"}]
 
-    async def fake_interrupt(cls, session_id: str):
+    async def fake_interrupt(cls, session_id: str, **_kwargs):
         captured["interrupt"] = session_id
         return {"ok": True, "interrupted": True}
 
@@ -42,7 +42,7 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
         captured["restore_messages"] = {"session_id": session_id, "payload": payload}
         return {"restored": 1}
 
-    async def fake_compact(cls, session_id: str, payload: dict[str, Any], cwd: str):
+    async def fake_compact(cls, session_id: str, payload: dict[str, Any], cwd: str, **_kwargs):
         captured["compact"] = {"session_id": session_id, "payload": payload, "cwd": cwd}
         return {"ok": True}
 
@@ -56,7 +56,7 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.restore_messages", classmethod(fake_restore_messages))
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.compact", classmethod(fake_compact))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         created = client.post("/v1/sessions", json={"project_id": "proj_1"})
         assert created.status_code == 200
@@ -108,7 +108,7 @@ def test_v1_session_routes_delegate_to_session_service(monkeypatch) -> None:  # 
     assert captured["compact"]["payload"]["auto"] is True
 
 
-def test_v1_session_message_route_delegates_to_service(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_v1_session_message_route_delegates_to_service(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, Any] = {}
 
     async def fake_message(
@@ -116,13 +116,14 @@ def test_v1_session_message_route_delegates_to_service(monkeypatch) -> None:  # 
         session_id: str,
         payload: dict[str, Any],
         cwd: str,
+        **_kwargs,
     ) -> dict[str, Any]:
         captured["message"] = {"session_id": session_id, "payload": payload, "cwd": cwd}
         return {"ok": True, "assistant_message_id": "msg_1", "status": "stop", "error": None}
 
     monkeypatch.setattr("hotaru.app_services.session_service.SessionService.message", classmethod(fake_message))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         response = client.post("/v1/sessions/ses_1/messages", json={"content": "hello"})
         assert response.status_code == 200
@@ -132,7 +133,7 @@ def test_v1_session_message_route_delegates_to_service(monkeypatch) -> None:  # 
     assert captured["message"]["payload"]["content"] == "hello"
 
 
-def test_v1_provider_and_agent_routes_delegate_to_services(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_v1_provider_and_agent_routes_delegate_to_services(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, Any] = {}
 
     async def fake_list_providers(cls, cwd: str):
@@ -147,7 +148,7 @@ def test_v1_provider_and_agent_routes_delegate_to_services(monkeypatch) -> None:
         captured["provider_connect"] = payload
         return {"ok": True, "provider_id": payload["provider_id"]}
 
-    async def fake_list_agents(cls):
+    async def fake_list_agents(cls, **_kw):
         captured["agent_list"] = True
         return [{"name": "build"}]
 
@@ -156,7 +157,7 @@ def test_v1_provider_and_agent_routes_delegate_to_services(monkeypatch) -> None:
     monkeypatch.setattr("hotaru.app_services.provider_service.ProviderService.connect", classmethod(fake_connect))
     monkeypatch.setattr("hotaru.app_services.agent_service.AgentService.list", classmethod(fake_list_agents))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         providers = client.get("/v1/providers", headers={"x-hotaru-directory": "/workspace/provider"})
         assert providers.status_code == 200
@@ -187,7 +188,7 @@ def test_v1_provider_and_agent_routes_delegate_to_services(monkeypatch) -> None:
     assert captured["agent_list"] is True
 
 
-def test_v1_preference_routes_delegate_to_service(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_v1_preference_routes_delegate_to_service(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, Any] = {}
 
     async def fake_get_current(cls):
@@ -201,7 +202,7 @@ def test_v1_preference_routes_delegate_to_service(monkeypatch) -> None:  # type:
     monkeypatch.setattr("hotaru.app_services.preference_service.PreferenceService.get_current", classmethod(fake_get_current))
     monkeypatch.setattr("hotaru.app_services.preference_service.PreferenceService.update_current", classmethod(fake_update_current))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         fetched = client.get("/v1/preferences/current")
         assert fetched.status_code == 200
@@ -218,8 +219,8 @@ def test_v1_preference_routes_delegate_to_service(monkeypatch) -> None:  # type:
     assert captured["update"]["provider_id"] == "moonshot"
 
 
-def test_v1_agent_route_accepts_null_description(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    async def fake_agent_list(cls):
+def test_v1_agent_route_accepts_null_description(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
+    async def fake_agent_list(cls, **_kw):
         return [
             AgentInfo(
                 name="compaction",
@@ -229,9 +230,9 @@ def test_v1_agent_route_accepts_null_description(monkeypatch) -> None:  # type: 
             )
         ]
 
-    monkeypatch.setattr("hotaru.agent.agent.Agent.list", classmethod(fake_agent_list))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.list", fake_agent_list)
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         agents = client.get("/v1/agents")
         assert agents.status_code == 200
@@ -240,28 +241,28 @@ def test_v1_agent_route_accepts_null_description(monkeypatch) -> None:  # type: 
         assert payload[0]["description"] == ""
 
 
-def test_v1_permission_question_and_event_routes_delegate_to_services(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_v1_permission_question_and_event_routes_delegate_to_services(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     captured: dict[str, Any] = {}
 
-    async def fake_permission_list(cls):
+    async def fake_permission_list(cls, _app):
         return [{"id": "per_1"}]
 
-    async def fake_permission_reply(cls, request_id: str, payload: dict[str, Any]):
+    async def fake_permission_reply(cls, _app, request_id: str, payload: dict[str, Any]):
         captured["permission_reply"] = {"request_id": request_id, "payload": payload}
         return True
 
-    async def fake_question_list(cls):
+    async def fake_question_list(cls, _app):
         return [{"id": "q_1"}]
 
-    async def fake_question_reply(cls, request_id: str, payload: dict[str, Any]):
+    async def fake_question_reply(cls, _app, request_id: str, payload: dict[str, Any]):
         captured["question_reply"] = {"request_id": request_id, "payload": payload}
         return True
 
-    async def fake_question_reject(cls, request_id: str):
+    async def fake_question_reject(cls, _app, request_id: str):
         captured["question_reject"] = request_id
         return True
 
-    async def fake_events(cls) -> AsyncIterator[dict[str, Any]]:
+    async def fake_events(cls, bus) -> AsyncIterator[dict[str, Any]]:  # type: ignore[no-untyped-def]
         yield {"type": "server.connected", "data": {"healthy": True}}
 
     monkeypatch.setattr("hotaru.app_services.permission_service.PermissionService.list", classmethod(fake_permission_list))
@@ -271,7 +272,7 @@ def test_v1_permission_question_and_event_routes_delegate_to_services(monkeypatc
     monkeypatch.setattr("hotaru.app_services.question_service.QuestionService.reject", classmethod(fake_question_reject))
     monkeypatch.setattr("hotaru.app_services.event_service.EventService.stream", classmethod(fake_events))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         permissions = client.get("/v1/permissions")
         assert permissions.status_code == 200

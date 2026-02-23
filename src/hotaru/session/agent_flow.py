@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ..core.id import Identifier
 from ..tool import ToolContext
-from ..tool.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from ..runtime import AppContext
 
 _BUILD_SWITCH_PROMPT_PATH = Path(__file__).parent / "prompt" / "build-switch.txt"
 _BUILD_SWITCH_PROMPT = _BUILD_SWITCH_PROMPT_PATH.read_text(encoding="utf-8").strip()
@@ -178,6 +180,7 @@ class AgentFlow:
     async def handle_direct_subagent_mention(
         self,
         *,
+        app: AppContext,
         user_message: str,
         session_id: str,
         agent: str,
@@ -198,11 +201,11 @@ class AgentFlow:
             return None
 
         subagent_name, prompt = parsed
-        subagent = await Agent.get(subagent_name)
+        subagent = await app.agents.get(subagent_name)
         if not subagent or subagent.mode != AgentMode.SUBAGENT:
             return None
 
-        if not ToolRegistry.get("task"):
+        if not app.tools.get("task"):
             return None
 
         params = TaskParams(
@@ -211,6 +214,7 @@ class AgentFlow:
             subagent_type=subagent_name,
         )
         ctx = ToolContext(
+            app=app,
             session_id=session_id,
             message_id=Identifier.ascending("message"),
             agent=agent,
@@ -226,7 +230,7 @@ class AgentFlow:
         )
 
         try:
-            result = await ToolRegistry.execute("task", params, ctx)
+            result = await app.tools.execute("task", params, ctx)
         except Exception as e:
             return f"Failed to run @{subagent_name}: {e}"
         content = result.output

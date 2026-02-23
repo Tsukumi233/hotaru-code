@@ -10,8 +10,8 @@ from typing import Any, Dict, Optional
 import typer
 from pydantic import BaseModel
 
-from ...lsp import LSP
 from ...project.instance import Instance
+from ...runtime import AppContext
 
 app = typer.Typer(help="Debugging utilities")
 lsp_app = typer.Typer(help="LSP debugging utilities")
@@ -38,12 +38,14 @@ async def collect_lsp_diagnostics(
     target = target.resolve()
 
     async def run() -> Dict[str, Any]:
+        runtime = AppContext()
         try:
-            await LSP.touch_file(str(target), wait_for_diagnostics=True)
+            await runtime.startup()
+            await runtime.lsp.touch_file(str(target), wait_for_diagnostics=True)
             await asyncio.sleep(pause_seconds)
-            return await LSP.diagnostics()
+            return await runtime.lsp.diagnostics()
         finally:
-            await LSP.shutdown()
+            await runtime.shutdown()
 
     return await Instance.provide(directory=directory, fn=run)
 

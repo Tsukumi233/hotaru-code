@@ -319,30 +319,33 @@ def providers():
 @app.command()
 def agents():
     """List available agents."""
-    from ..agent import Agent
+    from ..runtime import AppContext
 
     async def list_agents():
-        agents = await Agent.list()
+        ctx = AppContext()
+        try:
+            agents = await ctx.agents.list()
 
-        console.print(f"\n[bold]Available Agents ({len(agents)})[/bold]\n")
+            console.print(f"\n[bold]Available Agents ({len(agents)})[/bold]\n")
 
-        for agent in agents:
-            if agent.hidden:
-                continue
+            for agent in agents:
+                if agent.hidden:
+                    continue
 
-            mode_badge = {
-                "primary": "[green]primary[/green]",
-                "subagent": "[blue]subagent[/blue]",
-                "all": "[yellow]all[/yellow]",
-            }.get(agent.mode, agent.mode)
+                mode_badge = {
+                    "primary": "[green]primary[/green]",
+                    "subagent": "[blue]subagent[/blue]",
+                    "all": "[yellow]all[/yellow]",
+                }.get(agent.mode, agent.mode)
 
-            console.print(f"  [cyan]{agent.name}[/cyan] {mode_badge}")
-            if agent.description:
-                # Truncate long descriptions
-                desc = agent.description[:80] + "..." if len(agent.description) > 80 else agent.description
-                console.print(f"    {desc}")
+                console.print(f"  [cyan]{agent.name}[/cyan] {mode_badge}")
+                if agent.description:
+                    desc = agent.description[:80] + "..." if len(agent.description) > 80 else agent.description
+                    console.print(f"    {desc}")
 
-        console.print()
+            console.print()
+        finally:
+            await ctx.shutdown()
 
     asyncio.run(list_agents())
 

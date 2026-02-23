@@ -331,6 +331,7 @@ async def edit_execute(params: EditParams, ctx: ToolContext) -> ToolResult:
 
     output = "Edit applied successfully."
     output, diagnostics = await append_lsp_error_feedback(
+        lsp=ctx.app.lsp,
         output=output,
         file_path=str(filepath),
     )

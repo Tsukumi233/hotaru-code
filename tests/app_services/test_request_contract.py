@@ -2,12 +2,13 @@ import pytest
 
 from hotaru.app_services.provider_service import ProviderService
 from hotaru.app_services.session_service import SessionService
+from tests.helpers import fake_app
 
 
 @pytest.mark.anyio
 async def test_session_service_create_rejects_legacy_project_id_field() -> None:
     with pytest.raises(ValueError, match="projectID"):
-        await SessionService.create({"projectID": "proj_legacy"}, cwd=".")
+        await SessionService.create({"projectID": "proj_legacy"}, cwd=".", app=fake_app())
 
 
 @pytest.mark.anyio

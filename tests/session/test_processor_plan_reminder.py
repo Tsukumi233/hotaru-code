@@ -1,8 +1,10 @@
 from hotaru.session.processor import SessionProcessor
+from tests.helpers import fake_app
 
 
 def _processor() -> SessionProcessor:
     return SessionProcessor(
+        app=fake_app(),
         session_id="session_plan",
         model_id="gpt-5",
         provider_id="openai",

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..core.config import ConfigManager
 from ..util.log import Log
+
+if TYPE_CHECKING:
+    from ..runtime import AppContext
 from .apply_patch import ApplyPatchTool
 from .bash import BashTool
 from .batch import BatchTool
@@ -38,11 +41,12 @@ log = Log.create({"service": "tool.registry"})
 class ToolRegistry:
     """Central registry for all available tools."""
 
-    _tools: Optional[Dict[str, ToolInfo]] = None
-    _initialized: bool = False
+    def __init__(self) -> None:
+        self._tools: Optional[Dict[str, ToolInfo]] = None
+        self._initialized: bool = False
 
-    @classmethod
-    def _load_custom_tools(cls) -> Dict[str, ToolInfo]:
+    @staticmethod
+    def _load_custom_tools() -> Dict[str, ToolInfo]:
         custom: Dict[str, ToolInfo] = {}
         dirs = ConfigManager.directories()
         if not dirs:
@@ -61,7 +65,7 @@ class ToolRegistry:
                         continue
                     seen_paths.add(resolved)
                     try:
-                        loaded = cls._load_tools_from_module(file_path)
+                        loaded = ToolRegistry._load_tools_from_module(file_path)
                     except Exception as exc:
                         log.warn("failed loading custom tool module", {"file": resolved, "error": str(exc)})
                         continue
@@ -69,8 +73,8 @@ class ToolRegistry:
 
         return custom
 
-    @classmethod
-    def _load_tools_from_module(cls, file_path: Path) -> List[ToolInfo]:
+    @staticmethod
+    def _load_tools_from_module(file_path: Path) -> List[ToolInfo]:
         module_name = f"_hotaru_custom_tool_{file_path.stem}_{abs(hash(str(file_path)))}"
         spec = importlib.util.spec_from_file_location(module_name, file_path)
         if spec is None or spec.loader is None:
@@ -109,10 +113,9 @@ class ToolRegistry:
 
         return discovered
 
-    @classmethod
-    def _initialize(cls) -> Dict[str, ToolInfo]:
-        if cls._tools is not None:
-            return cls._tools
+    def _initialize(self) -> Dict[str, ToolInfo]:
+        if self._tools is not None:
+            return self._tools
 
         tools: Dict[str, ToolInfo] = {}
         builtin_tools: List[ToolInfo] = [
@@ -142,27 +145,25 @@ class ToolRegistry:
         for tool in builtin_tools:
             tools[tool.id] = tool
 
-        custom_tools = cls._load_custom_tools()
+        custom_tools = self._load_custom_tools()
         tools.update(custom_tools)
 
         start_cleanup_task()
 
-        cls._tools = tools
-        cls._initialized = True
+        self._tools = tools
+        self._initialized = True
         return tools
 
-    @classmethod
-    def _all(cls) -> Dict[str, ToolInfo]:
-        return cls._initialize()
+    def _all(self) -> Dict[str, ToolInfo]:
+        return self._initialize()
 
-    @classmethod
-    def _apply_patch_enabled_for_model(cls, model_id: str) -> bool:
+    @staticmethod
+    def _apply_patch_enabled_for_model(model_id: str) -> bool:
         lowered = model_id.lower()
         return "gpt-" in lowered and "oss" not in lowered and "gpt-4" not in lowered
 
-    @classmethod
     async def _tool_enabled(
-        cls,
+        self,
         *,
         tool_id: str,
         provider_id: Optional[str],
@@ -183,42 +184,33 @@ class ToolRegistry:
             return experimental.lsp_tool
 
         if tool_id == "apply_patch":
-            return cls._apply_patch_enabled_for_model(model_id or "")
+            return self._apply_patch_enabled_for_model(model_id or "")
 
         if tool_id in {"edit", "write"}:
-            use_patch = cls._apply_patch_enabled_for_model(model_id or "")
+            use_patch = self._apply_patch_enabled_for_model(model_id or "")
             return not use_patch
 
         return True
 
-    @classmethod
-    def get(cls, tool_id: str) -> Optional[ToolInfo]:
-        tools = cls._all()
-        return tools.get(tool_id)
+    def get(self, tool_id: str) -> Optional[ToolInfo]:
+        return self._all().get(tool_id)
 
-    @classmethod
-    def list(cls) -> List[ToolInfo]:
-        tools = cls._all()
-        return list(tools.values())
+    def list(self) -> List[ToolInfo]:
+        return list(self._all().values())
 
-    @classmethod
     def ids(
-        cls,
+        self,
         *,
         provider_id: Optional[str] = None,
         model_id: Optional[str] = None,
     ) -> List[str]:
-        tools = cls._all()
-        return list(tools.keys())
+        return list(self._all().keys())
 
-    @classmethod
-    def register(cls, tool: ToolInfo) -> None:
-        tools = cls._all()
-        tools[tool.id] = tool
+    def register(self, tool: ToolInfo) -> None:
+        self._all()[tool.id] = tool
 
-    @classmethod
-    async def execute(cls, tool_id: str, args: Any, ctx: ToolContext) -> ToolResult:
-        tool = cls.get(tool_id)
+    async def execute(self, tool_id: str, args: Any, ctx: ToolContext) -> ToolResult:
+        tool = self.get(tool_id)
         if tool is None:
             raise ValueError(f"Unknown tool: {tool_id}")
 
@@ -231,19 +223,19 @@ class ToolRegistry:
         await PermissionGuard.check(permissions, ctx)
         return await tool.execute(parsed, ctx)
 
-    @classmethod
     async def get_tool_definitions(
-        cls,
+        self,
         *,
+        app: AppContext,
         caller_agent: Optional[str] = None,
         provider_id: Optional[str] = None,
         model_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        tools = cls._all()
+        tools = self._all()
         definitions = []
 
         for tool in tools.values():
-            if not await cls._tool_enabled(tool_id=tool.id, provider_id=provider_id, model_id=model_id):
+            if not await self._tool_enabled(tool_id=tool.id, provider_id=provider_id, model_id=model_id):
                 continue
 
             schema = tool.parameters_type.model_json_schema()
@@ -253,12 +245,12 @@ class ToolRegistry:
             description = tool.description
             if tool.id == "skill":
                 try:
-                    description = await build_skill_description(caller_agent)
+                    description = await build_skill_description(caller_agent, skills=app.skills, agents=app.agents)
                 except Exception:
                     pass
             elif tool.id == "task":
                 try:
-                    description = await build_task_description(caller_agent=caller_agent)
+                    description = await build_task_description(caller_agent=caller_agent, agents=app.agents)
                 except Exception:
                     pass
 
@@ -275,7 +267,6 @@ class ToolRegistry:
 
         return definitions
 
-    @classmethod
-    def reset(cls) -> None:
-        cls._tools = None
-        cls._initialized = False
+    def reset(self) -> None:
+        self._tools = None
+        self._initialized = False

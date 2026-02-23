@@ -12,6 +12,7 @@ from hotaru.core.global_paths import GlobalPath
 from hotaru.provider.models import ModelLimit
 from hotaru.provider.provider import ProcessedModelInfo
 from hotaru.provider.sdk.anthropic import ToolCall
+from hotaru.runtime import AppContext
 from hotaru.session import Session, SessionPrompt
 from hotaru.session.compaction import SessionCompaction
 from hotaru.session.llm import LLM, StreamChunk
@@ -39,14 +40,15 @@ async def test_session_prompt_writes_structured_messages(monkeypatch: pytest.Mon
         yield StreamChunk(type="text", text="done")
         yield StreamChunk(type="message_delta", usage={"input_tokens": 9, "output_tokens": 3})
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     result = await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="hello",
         provider_id="openai",
@@ -83,14 +85,15 @@ async def test_session_prompt_persists_reasoning_parts(monkeypatch: pytest.Monke
         yield StreamChunk(type="text", text="answer")
         yield StreamChunk(type="message_delta", usage={"input_tokens": 4, "output_tokens": 2})
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="hello",
         provider_id="openai",
@@ -122,18 +125,20 @@ async def test_session_prompt_emits_text_delta_events_without_callbacks(
         yield StreamChunk(type="text", text="llo")
         yield StreamChunk(type="message_delta", usage={"input_tokens": 4, "output_tokens": 2})
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
 
+    app = AppContext()
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
 
     events: list[dict] = []
     unsubscribe = Bus.subscribe_all(lambda payload: events.append({"type": payload.type, "properties": payload.properties}))
     try:
         await SessionPrompt.prompt(
+            app=app,
             session_id=session.id,
             content="hello",
             provider_id="openai",
@@ -169,14 +174,15 @@ async def test_session_prompt_persists_tool_updates_without_callbacks(
         yield StreamChunk(type="tool_call_end", tool_call=ToolCall(id="call_1", name="unknown_tool", input={}))
         yield StreamChunk(type="message_delta", usage={"input_tokens": 3, "output_tokens": 1}, stop_reason="tool_calls")
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="run tool",
         provider_id="openai",
@@ -207,14 +213,15 @@ async def test_session_prompt_non_git_workspace_skips_patch(monkeypatch: pytest.
         yield StreamChunk(type="text", text="done")
         yield StreamChunk(type="message_delta", usage={"input_tokens": 2, "output_tokens": 1})
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="write file",
         provider_id="openai",
@@ -254,14 +261,15 @@ async def test_session_prompt_git_workspace_records_patch(
         yield StreamChunk(type="text", text="done")
         yield StreamChunk(type="message_delta", usage={"input_tokens": 2, "output_tokens": 1})
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="write file",
         provider_id="openai",
@@ -300,7 +308,7 @@ async def test_session_prompt_computes_step_and_message_cost(
             },
         )
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     async def fake_get_model(cls, provider_id: str, model_id: str):
@@ -319,11 +327,12 @@ async def test_session_prompt_computes_step_and_message_cost(
         )
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
     monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="hello",
         provider_id="openai",
@@ -360,15 +369,16 @@ async def test_session_prompt_respects_assistant_message_id(
         yield StreamChunk(type="text", text="ok")
         yield StreamChunk(type="message_delta", usage={"input_tokens": 1, "output_tokens": 1})
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     expected_assistant_id = "message_custom_assistant"
     result = await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="hello",
         provider_id="openai",
@@ -411,7 +421,7 @@ async def test_session_prompt_compaction_summary_and_continue(
         yield StreamChunk(type="text", text="final")
         yield StreamChunk(type="message_delta", usage={"input_tokens": 5, "output_tokens": 2})
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         if name == "compaction":
             return AgentInfo(
                 name="compaction",
@@ -438,12 +448,13 @@ async def test_session_prompt_compaction_summary_and_continue(
         return overflow_checks["count"] == 1
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
     monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
     monkeypatch.setattr(SessionCompaction, "is_overflow", classmethod(fake_is_overflow))
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     result = await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="ship it",
         provider_id="openai",
@@ -487,7 +498,7 @@ async def test_session_prompt_handles_pending_compaction_on_resume(
         yield StreamChunk(type="text", text="resume summary")
         yield StreamChunk(type="message_delta", usage={"input_tokens": 12, "output_tokens": 4})
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         if name == "compaction":
             return AgentInfo(
                 name="compaction",
@@ -498,7 +509,7 @@ async def test_session_prompt_handles_pending_compaction_on_resume(
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     pending_id = Identifier.ascending("message")
@@ -522,6 +533,7 @@ async def test_session_prompt_handles_pending_compaction_on_resume(
     )
 
     result = await SessionPrompt.loop(
+        app=AppContext(),
         session_id=session.id,
         provider_id="openai",
         model_id="gpt-5",
@@ -559,14 +571,15 @@ async def test_session_prompt_structured_output_success(
         )
         yield StreamChunk(type="message_delta", usage={"input_tokens": 8, "output_tokens": 2}, stop_reason="tool_calls")
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     result = await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="return structured",
         format={
@@ -603,14 +616,15 @@ async def test_session_prompt_structured_output_missing_tool_errors(
         yield StreamChunk(type="text", text="plain response")
         yield StreamChunk(type="message_delta", usage={"input_tokens": 3, "output_tokens": 3}, stop_reason="stop")
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     result = await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="return structured",
         format={
@@ -646,7 +660,7 @@ async def test_session_prompt_builds_default_system_prompt_when_missing(
         yield StreamChunk(type="text", text="ok")
         yield StreamChunk(type="message_delta", usage={"input_tokens": 1, "output_tokens": 1})
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(cls, name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     async def fake_get_model(cls, provider_id: str, model_id: str):
@@ -664,13 +678,14 @@ async def test_session_prompt_builds_default_system_prompt_when_missing(
         return "auto-system"
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
+    monkeypatch.setattr("hotaru.agent.agent.Agent.get", fake_get_agent)
     monkeypatch.setattr("hotaru.session.prompting.Provider.get_model", classmethod(fake_get_model))
     monkeypatch.setattr("hotaru.session.prompting.Project.from_directory", classmethod(fake_project_from_directory))
     monkeypatch.setattr("hotaru.session.prompting.SystemPrompt.build_full_prompt", classmethod(fake_build_full_prompt))
 
     session = await Session.create(project_id="p1", agent="build", directory=str(tmp_path))
     result = await SessionPrompt.prompt(
+        app=AppContext(),
         session_id=session.id,
         content="hello",
         provider_id="openai",
@@ -689,10 +704,10 @@ async def test_session_prompt_builds_default_system_prompt_when_missing(
 async def test_resolve_tools_strictifies_mcp_and_structured_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_defs(cls, **_kwargs):
+    async def fake_defs(**_kwargs):
         return []
 
-    async def fake_mcp_tools(cls):
+    async def fake_mcp_tools():
         return {
             "mcp_demo": {
                 "description": "demo",
@@ -717,10 +732,20 @@ async def test_resolve_tools_strictifies_mcp_and_structured_schema(
             }
         }
 
-    monkeypatch.setattr("hotaru.tool.resolver.ToolRegistry.get_tool_definitions", classmethod(fake_defs))
-    monkeypatch.setattr("hotaru.mcp.MCP.tools", classmethod(fake_mcp_tools))
-
+    from types import SimpleNamespace
+    app = AppContext()
+    app.tools = SimpleNamespace(get_tool_definitions=fake_defs)
+    app.mcp = SimpleNamespace(tools=fake_mcp_tools)
+    app.started = True
+    app.health = {
+        "status": "ready",
+        "subsystems": {
+            "mcp": {"status": "ready", "critical": True, "error": None},
+            "lsp": {"status": "ready", "critical": False, "error": None},
+        },
+    }
     tools = await SessionPrompt.resolve_tools(
+        app=app,
         session_id="ses_missing",
         agent_name="build",
         provider_id="openai",

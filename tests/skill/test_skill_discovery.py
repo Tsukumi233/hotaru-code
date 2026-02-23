@@ -44,7 +44,8 @@ def _patch_instance(monkeypatch: pytest.MonkeyPatch, directory: Path, worktree: 
 
 @pytest.mark.anyio
 async def test_discovers_skills_from_opencode_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    Skill.reset()
+    registry = Skill()
+    registry.reset()
     home = tmp_path / "home"
     project = tmp_path / "project"
 
@@ -62,11 +63,11 @@ async def test_discovers_skills_from_opencode_roots(monkeypatch: pytest.MonkeyPa
     )
     monkeypatch.setattr(GlobalPath, "home", classmethod(lambda cls: str(home)))
 
-    skills = await Skill.list()
+    skills = await registry.list()
     names = {skill.name for skill in skills}
     assert names == {"legacy-skill", "plural-skill", "global-skill"}
 
-    directories = set(await Skill.directories())
+    directories = set(await registry.directories())
     assert str((project / ".opencode" / "skill" / "legacy-skill").resolve()) in directories
     assert str((project / ".opencode" / "skills" / "plural-skill").resolve()) in directories
     assert str((home / ".config" / "opencode" / "skills" / "global-skill").resolve()) in directories
@@ -77,7 +78,8 @@ async def test_discovers_external_and_hotaru_compatible_paths(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    Skill.reset()
+    registry = Skill()
+    registry.reset()
     home = tmp_path / "home"
     project = tmp_path / "project"
     nested = project / "src" / "nested"
@@ -95,7 +97,7 @@ async def test_discovers_external_and_hotaru_compatible_paths(
     _patch_config(monkeypatch, directories=[])
     monkeypatch.setattr(GlobalPath, "home", classmethod(lambda cls: str(home)))
 
-    names = {skill.name for skill in await Skill.list()}
+    names = {skill.name for skill in await registry.list()}
     assert names == {
         "global-claude",
         "global-agent",
@@ -111,7 +113,8 @@ async def test_discovers_codex_skill_paths(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    Skill.reset()
+    registry = Skill()
+    registry.reset()
     home = tmp_path / "home"
     project = tmp_path / "project"
     nested = project / "src" / "nested"
@@ -124,14 +127,15 @@ async def test_discovers_codex_skill_paths(
     _patch_config(monkeypatch, directories=[])
     monkeypatch.setattr(GlobalPath, "home", classmethod(lambda cls: str(home)))
 
-    names = {skill.name for skill in await Skill.list()}
+    names = {skill.name for skill in await registry.list()}
     assert "global-codex" in names
     assert "local-codex" in names
 
 
 @pytest.mark.anyio
 async def test_project_external_scan_stops_at_worktree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    Skill.reset()
+    registry = Skill()
+    registry.reset()
     home = tmp_path / "home"
     outer = tmp_path / "outer"
     worktree = outer / "repo"
@@ -145,7 +149,7 @@ async def test_project_external_scan_stops_at_worktree(monkeypatch: pytest.Monke
     _patch_config(monkeypatch, directories=[])
     monkeypatch.setattr(GlobalPath, "home", classmethod(lambda cls: str(home)))
 
-    names = {skill.name for skill in await Skill.list()}
+    names = {skill.name for skill in await registry.list()}
     assert "inside-skill" in names
     assert "outside-skill" not in names
 
@@ -155,7 +159,8 @@ async def test_skips_skills_with_missing_required_frontmatter(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    Skill.reset()
+    registry = Skill()
+    registry.reset()
     home = tmp_path / "home"
     project = tmp_path / "project"
 
@@ -171,7 +176,7 @@ async def test_skips_skills_with_missing_required_frontmatter(
     _patch_config(monkeypatch, directories=[str(project / ".opencode")])
     monkeypatch.setattr(GlobalPath, "home", classmethod(lambda cls: str(home)))
 
-    names = {skill.name for skill in await Skill.list()}
+    names = {skill.name for skill in await registry.list()}
     assert names == {"valid-skill"}
 
 
@@ -180,7 +185,8 @@ async def test_project_skill_overrides_global_skill_with_same_name(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    Skill.reset()
+    registry = Skill()
+    registry.reset()
     home = tmp_path / "home"
     project = tmp_path / "project"
 
@@ -191,6 +197,6 @@ async def test_project_skill_overrides_global_skill_with_same_name(
     _patch_config(monkeypatch, directories=[])
     monkeypatch.setattr(GlobalPath, "home", classmethod(lambda cls: str(home)))
 
-    skill = await Skill.get("same-skill")
+    skill = await registry.get("same-skill")
     assert skill is not None
     assert skill.description == "Project description"

@@ -49,18 +49,6 @@ npm run build  # Outputs to src/hotaru/webui/dist
 
 Hotaru Code is an AI coding agent with three interfaces: TUI (Textual), WebUI (React + Starlette/SSE), and one-shot CLI (`hotaru run`).
 
-### Session Loop (core execution path)
-
-`SessionPrompt` (prompting.py) orchestrates the multi-turn loop: message persistence, compaction, structured output, and tool-call dispatch. Each turn, `SessionProcessor` (processor.py) runs a single streaming LLM response via `LLM` (llm.py), executes tool calls through `ToolRegistry`, and returns results. The processor includes doom-loop detection (repeated identical tool failures).
-
-### Provider Abstraction
-
-`Provider` (provider/provider.py) is a registry of AI backends (Anthropic, OpenAI, OpenAI-compatible). `ProviderTransform` (provider/transform.py) normalizes messages, tool-call IDs, and cache hints across providers. SDK wrappers live in `provider/sdk/`.
-
-### Event Bus
-
-`Bus` (core/bus.py) is a type-safe pub/sub system using Pydantic models. Events are defined via `BusEvent.define(name, PropsModel)` and published/subscribed globally. Used by permission, MCP, project, session store, TUI, and server layers.
-
 ### Configuration
 
 `ConfigManager` (core/config.py) merges configs from multiple sources (lowest to highest priority): global config dir, project `hotaru.json`/`.hotaru/hotaru.json`, env var `HOTARU_CONFIG_CONTENT`, managed config. Paths resolved via `platformdirs` in `core/global_paths.py`.

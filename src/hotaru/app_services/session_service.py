@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
+from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
 from ..agent import Agent
-from ..core.bus import Bus
 from ..project import Project
 from ..provider import Provider
+from ..runtime import AppContext
 from ..session import (
+    PromptResult,
     Session,
     SessionCompaction,
     SessionPrompt,
-    SessionStatus,
-    SessionStatusProperties,
 )
 from ..session.message_store import MessageInfo as StoredMessageInfo
 from ..session.message_store import parse_part
@@ -62,26 +61,29 @@ def _session_to_dict(session: Any) -> dict[str, Any]:
 class SessionService:
     """Thin orchestration for session workflows."""
 
-    _tasks: dict[str, asyncio.Task[object]] = {}
-
     @classmethod
-    def _register_task(cls, session_id: str, task: asyncio.Task[object]) -> None:
-        prev = cls._tasks.get(session_id)
-        if prev and not prev.done():
-            raise ValueError("Session already has an active request")
-        cls._tasks[session_id] = task
-
-    @classmethod
-    def _clear_task(cls, session_id: str, task: asyncio.Task[object]) -> None:
-        current = cls._tasks.get(session_id)
-        if current is task:
-            del cls._tasks[session_id]
-
-    @classmethod
-    def reset_runtime(cls) -> None:
-        for task in list(cls._tasks.values()):
-            task.cancel()
-        cls._tasks.clear()
+    async def _start(
+        cls,
+        session_id: str,
+        task: Coroutine[object, object, PromptResult],
+        *,
+        app: AppContext,
+    ) -> dict[str, Any]:
+        try:
+            result = await app.runner.start(session_id, task)
+            return {
+                "ok": result.result.error is None,
+                "assistant_message_id": result.assistant_message_id,
+                "status": result.result.status,
+                "error": result.result.error,
+            }
+        except asyncio.CancelledError:
+            return {
+                "ok": False,
+                "assistant_message_id": "",
+                "status": "interrupted",
+                "error": None,
+            }
 
     @classmethod
     async def _resolve_model(
@@ -123,7 +125,7 @@ class SessionService:
         return project.id
 
     @classmethod
-    async def create(cls, payload: dict[str, Any], cwd: str) -> dict[str, Any]:
+    async def create(cls, payload: dict[str, Any], cwd: str, *, app: AppContext) -> dict[str, Any]:
         _reject_legacy_fields(
             payload,
             {
@@ -134,7 +136,7 @@ class SessionService:
         directory = str(payload.get("directory") or payload.get("cwd") or cwd)
         project_id = await cls._resolve_project_id(payload, directory)
         provider_id, model_id = await cls._resolve_model(payload)
-        agent_name = payload.get("agent") or await Agent.default_agent()
+        agent_name = payload.get("agent") or await app.agents.default_agent()
         if not isinstance(agent_name, str) or not agent_name.strip():
             raise ValueError("Field 'agent' must be a non-empty string")
         title = payload.get("title")
@@ -185,10 +187,15 @@ class SessionService:
         return _session_to_dict(updated)
 
     @classmethod
-    async def delete(cls, session_id: str) -> dict[str, bool]:
-        deleted = await Session.delete(session_id)
+    async def delete(cls, session_id: str, *, app: AppContext) -> dict[str, bool]:
+        session = await Session.get(session_id)
+        if not session:
+            raise NotFoundError("Session", session_id)
+        await app.runner.interrupt(session_id)
+        deleted = await Session.delete(session_id, project_id=session.project_id)
         if not deleted:
             raise NotFoundError("Session", session_id)
+        await app.clear_session(session_id)
         return {"ok": True}
 
     @classmethod
@@ -268,7 +275,14 @@ class SessionService:
         return {"restored": restored}
 
     @classmethod
-    async def compact(cls, session_id: str, payload: dict[str, Any], cwd: str) -> dict[str, Any]:
+    async def compact(
+        cls,
+        session_id: str,
+        payload: dict[str, Any],
+        cwd: str,
+        *,
+        app: AppContext,
+    ) -> dict[str, Any]:
         session = await Session.get(session_id)
         if not session:
             raise NotFoundError("Session", session_id)
@@ -285,7 +299,7 @@ class SessionService:
             raise ValueError(str(exc)) from exc
 
         auto = bool(payload.get("auto", False))
-        agent_name = session.agent or await Agent.default_agent()
+        agent_name = session.agent or await app.agents.default_agent()
         worktree = session.directory or cwd
 
         await SessionCompaction.create(
@@ -296,23 +310,21 @@ class SessionService:
             auto=auto,
         )
 
-        result = await SessionPrompt.loop(
-            session_id=session_id,
-            provider_id=provider_id,
-            model_id=model_id,
-            agent=agent_name,
-            cwd=worktree,
-            worktree=worktree,
-            resume_history=True,
-            auto_compaction=False,
+        return await cls._start(
+            session_id,
+            SessionPrompt.loop(
+                app=app,
+                session_id=session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                agent=agent_name,
+                cwd=worktree,
+                worktree=worktree,
+                resume_history=True,
+                auto_compaction=False,
+            ),
+            app=app,
         )
-
-        return {
-            "ok": result.result.error is None,
-            "assistant_message_id": result.assistant_message_id,
-            "status": result.result.status,
-            "error": result.result.error,
-        }
 
     @classmethod
     async def message(
@@ -320,6 +332,8 @@ class SessionService:
         session_id: str,
         payload: dict[str, Any],
         cwd: str,
+        *,
+        app: AppContext,
     ) -> dict[str, Any]:
         content = payload.get("content")
         if not isinstance(content, str) or not content.strip():
@@ -335,13 +349,15 @@ class SessionService:
             fallback_model_id=session.model_id,
         )
 
-        agent_name = payload.get("agent") or session.agent or await Agent.default_agent()
+        agent_name = payload.get("agent") or session.agent or await app.agents.default_agent()
         if not isinstance(agent_name, str) or not agent_name.strip():
             raise ValueError("Field 'agent' must be a non-empty string")
 
         worktree = session.directory or cwd
-        task = asyncio.create_task(
+        return await cls._start(
+            session_id,
             SessionPrompt.prompt(
+                app=app,
                 session_id=session_id,
                 content=content,
                 provider_id=str(provider_id),
@@ -350,58 +366,13 @@ class SessionService:
                 cwd=str(Path(worktree)),
                 worktree=str(Path(worktree)),
                 resume_history=True,
-            )
+            ),
+            app=app,
         )
 
-        try:
-            cls._register_task(session_id, task)
-        except ValueError:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-            raise
-        working = False
-
-        try:
-            await Bus.publish(
-                SessionStatus,
-                SessionStatusProperties(session_id=session_id, status={"type": "working"}),
-            )
-            working = True
-            result = await task
-            return {
-                "ok": result.result.error is None,
-                "assistant_message_id": result.assistant_message_id,
-                "status": result.result.status,
-                "error": result.result.error,
-            }
-        except asyncio.CancelledError:
-            return {
-                "ok": False,
-                "assistant_message_id": "",
-                "status": "interrupted",
-                "error": None,
-            }
-        finally:
-            cls._clear_task(session_id, task)
-            if not task.done():
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
-            if working:
-                await Bus.publish(
-                    SessionStatus,
-                    SessionStatusProperties(session_id=session_id, status={"type": "idle"}),
-                )
-
     @classmethod
-    async def interrupt(cls, session_id: str) -> dict[str, Any]:
+    async def interrupt(cls, session_id: str, *, app: AppContext) -> dict[str, Any]:
         session = await Session.get(session_id)
         if not session:
             raise NotFoundError("Session", session_id)
-
-        task = cls._tasks.get(session_id)
-        if not task or task.done():
-            return {"ok": True, "interrupted": False}
-        task.cancel()
-        return {"ok": True, "interrupted": True}
+        return {"ok": True, "interrupted": await app.runner.interrupt(session_id)}

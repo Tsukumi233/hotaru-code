@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple, TYPE_CHECKING
 from ..util.log import Log
 
 if TYPE_CHECKING:
+    from ..lsp import LSP
     from ..lsp.client import LSPDiagnostic
 
 
@@ -22,6 +23,7 @@ def _normalize_path(path: str) -> str:
 
 
 async def append_lsp_error_feedback(
+    lsp: LSP,
     output: str,
     file_path: str,
     include_project_files: bool = False,
@@ -32,11 +34,9 @@ async def append_lsp_error_feedback(
     fails, output is returned unchanged and diagnostics is empty.
     """
     try:
-        from ..lsp import LSP
-
-        has_clients = await LSP.has_clients(file_path)
-        connected_clients = await LSP.touch_file(file_path, wait_for_diagnostics=True)
-        diagnostics = await LSP.diagnostics()
+        has_clients = await lsp.has_clients(file_path)
+        connected_clients = await lsp.touch_file(file_path, wait_for_diagnostics=True)
+        diagnostics = await lsp.diagnostics()
     except Exception as e:
         log.warn("failed to collect LSP diagnostics", {"file": file_path, "error": str(e)})
         output += f"\n\nLSP status: diagnostics unavailable ({e})."
@@ -64,7 +64,7 @@ async def append_lsp_error_feedback(
         if _normalize_path(diag_file) == normalized_file:
             output += (
                 f'\n\nLSP errors detected in this file, please fix:\n<diagnostics file="{file_path}">\n'
-                + "\n".join(LSP.format_diagnostic(item) for item in limited)
+                + "\n".join(lsp.format_diagnostic(item) for item in limited)
                 + f"{suffix}\n</diagnostics>"
             )
             continue
@@ -75,7 +75,7 @@ async def append_lsp_error_feedback(
         project_diagnostics_count += 1
         output += (
             f'\n\nLSP errors detected in other files:\n<diagnostics file="{diag_file}">\n'
-            + "\n".join(LSP.format_diagnostic(item) for item in limited)
+            + "\n".join(lsp.format_diagnostic(item) for item in limited)
             + f"{suffix}\n</diagnostics>"
         )
 

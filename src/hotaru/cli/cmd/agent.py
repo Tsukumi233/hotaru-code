@@ -63,10 +63,14 @@ def _disabled_tools(selected: list[str]) -> dict[str, bool]:
 
 
 async def _unique_identifier(base: str) -> str:
-    existing = {agent.name for agent in await Agent.list()}
+    from ...runtime import AppContext
+    ctx = AppContext()
+    try:
+        existing = {agent.name for agent in await ctx.agents.list()}
+    finally:
+        await ctx.shutdown()
     if base not in existing:
         return base
-
     index = 2
     while f"{base}-{index}" in existing:
         index += 1
@@ -155,10 +159,15 @@ def list_agents() -> None:
     """List agents with mode and visibility."""
 
     async def _list() -> None:
-        agents = await Agent.list()
-        for agent in agents:
-            visibility = "hidden" if agent.hidden else "visible"
-            native = "native" if agent.native else "custom"
-            console.print(f"{agent.name} ({agent.mode}, {visibility}, {native})")
+        from ...runtime import AppContext
+        ctx = AppContext()
+        try:
+            agents = await ctx.agents.list()
+            for agent in agents:
+                visibility = "hidden" if agent.hidden else "visible"
+                native = "native" if agent.native else "custom"
+                console.print(f"{agent.name} ({agent.mode}, {visibility}, {native})")
+        finally:
+            await ctx.shutdown()
 
     asyncio.run(_list())

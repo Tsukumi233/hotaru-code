@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from ..agent import Agent
 from ..core.context import ContextNotFoundError
 from ..core.id import Identifier
 from ..project import Instance, Project
@@ -24,6 +23,7 @@ from ..snapshot import SnapshotTracker
 from ..tool.resolver import ToolResolver
 from ..tool.schema import strictify_schema
 from ..util.log import Log
+from ..runtime import AppContext
 from .compaction import SessionCompaction
 from .message_store import (
     CompactionPart,
@@ -292,6 +292,7 @@ class SessionPrompt:
     async def prompt(
         cls,
         *,
+        app: AppContext,
         session_id: str,
         content: str,
         format: Optional[Dict[str, Any]] = None,
@@ -353,6 +354,7 @@ class SessionPrompt:
                 log.debug("title summary failed", {"error": str(e)})
 
             return await cls.loop(
+                app=app,
                 session_id=session_id,
                 provider_id=provider_id,
                 model_id=model_id,
@@ -391,6 +393,7 @@ class SessionPrompt:
     async def loop(
         cls,
         *,
+        app: AppContext,
         session_id: str,
         provider_id: str,
         model_id: str,
@@ -417,6 +420,7 @@ class SessionPrompt:
     ) -> PromptResult:
         """Run outer loop by repeatedly calling processor.process_step."""
         processor = SessionProcessorFactory.build(
+            app=app,
             session_id=session_id,
             model_id=model_id,
             provider_id=provider_id,
@@ -493,6 +497,7 @@ class SessionPrompt:
             pending_compaction = await cls._pending_compaction(session_id=session_id)
             if pending_compaction is not None:
                 compaction = await cls._run_compaction(
+                    app=app,
                     processor=processor,
                     session_id=session_id,
                     agent=agent,
@@ -519,6 +524,7 @@ class SessionPrompt:
                 continue
 
             resolved_tools = await cls.resolve_tools(
+                app=app,
                 session_id=session_id,
                 agent_name=processor.agent,
                 provider_id=provider_id,
@@ -625,6 +631,7 @@ class SessionPrompt:
                 continue
 
             compaction = await cls._run_compaction(
+                app=app,
                 processor=processor,
                 session_id=session_id,
                 agent=agent,
@@ -1078,13 +1085,14 @@ class SessionPrompt:
     async def resolve_tools(
         cls,
         *,
+        app: AppContext,
         session_id: str,
         agent_name: str,
         provider_id: str,
         model_id: str,
         output_format: Optional[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        agent_info = await Agent.get(agent_name)
+        agent_info = await app.agents.get(agent_name)
         session = await Session.get(session_id)
         rules = []
         if agent_info and agent_info.permission:
@@ -1092,7 +1100,7 @@ class SessionPrompt:
         session_rules = getattr(session, "permission", None) if session else None
         if isinstance(session_rules, list):
             rules.extend(session_rules)
-        tools = await ToolResolver.resolve(
+        tools = await ToolResolver(app=app).resolve(
             caller_agent=agent_name,
             provider_id=provider_id,
             model_id=model_id,
@@ -1119,6 +1127,7 @@ class SessionPrompt:
     async def _run_compaction(
         cls,
         *,
+        app: AppContext,
         processor: SessionProcessor,
         session_id: str,
         agent: str,
@@ -1155,8 +1164,8 @@ class SessionPrompt:
         if append_prompt_to_memory:
             processor.messages.append({"role": "user", "content": _COMPACTION_USER_TEXT})
 
-        compact_agent_name = await SessionCompaction.compact_agent_name()
-        compact_agent = await Agent.get(compact_agent_name)
+        compact_agent_name = await SessionCompaction.compact_agent_name(app.agents)
+        compact_agent = await app.agents.get(compact_agent_name)
         compact_provider_id = provider_id
         compact_model_id = model_id
         if compact_agent and compact_agent.model:
@@ -1170,6 +1179,7 @@ class SessionPrompt:
             )
 
         compact_processor = SessionProcessorFactory.build(
+            app=app,
             session_id=session_id,
             model_id=compact_model_id,
             provider_id=compact_provider_id,

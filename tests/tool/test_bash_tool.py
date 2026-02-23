@@ -4,6 +4,7 @@ import pytest
 
 from hotaru.tool.bash import BashParams, BashTool, _requires_conservative_approval
 from hotaru.tool.tool import ToolContext
+from tests.helpers import fake_app
 
 
 def test_requires_conservative_approval_for_complex_shell_constructs() -> None:
@@ -20,6 +21,7 @@ def test_simple_commands_do_not_require_conservative_approval() -> None:
 @pytest.mark.anyio
 async def test_bash_tool_exposes_permissions_from_permission_hook(tmp_path: Path) -> None:
     ctx = ToolContext(
+        app=fake_app(),
         session_id="ses",
         message_id="msg",
         call_id="call",

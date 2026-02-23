@@ -164,13 +164,13 @@ def _instance_paths() -> Tuple[str, Optional[str]]:
 class Skill:
     """Skill discovery and management."""
 
-    _cache: Optional[Dict[str, SkillInfo]] = None
-    _directories: Optional[Set[str]] = None
+    def __init__(self) -> None:
+        self._cache: Optional[Dict[str, SkillInfo]] = None
+        self._directories: Optional[Set[str]] = None
 
-    @classmethod
-    async def _initialize(cls) -> tuple[Dict[str, SkillInfo], Set[str]]:
-        if cls._cache is not None and cls._directories is not None:
-            return cls._cache, cls._directories
+    async def _initialize(self) -> tuple[Dict[str, SkillInfo], Set[str]]:
+        if self._cache is not None and self._directories is not None:
+            return self._cache, self._directories
 
         log.info("initializing skills")
         skills: Dict[str, SkillInfo] = {}
@@ -270,32 +270,27 @@ class Skill:
             log.error("error loading remote skills", {"error": str(e)})
 
         log.info("skills initialized", {"count": len(skills)})
-        cls._cache = skills
-        cls._directories = directories
+        self._cache = skills
+        self._directories = directories
         return skills, directories
 
-    @classmethod
-    async def get(cls, name: str) -> Optional[SkillInfo]:
-        skills, _ = await cls._initialize()
+    async def get(self, name: str) -> Optional[SkillInfo]:
+        skills, _ = await self._initialize()
         return skills.get(name)
 
-    @classmethod
-    async def list(cls) -> List[SkillInfo]:
-        skills, _ = await cls._initialize()
+    async def list(self) -> List[SkillInfo]:
+        skills, _ = await self._initialize()
         return list(skills.values())
 
-    @classmethod
-    async def names(cls) -> List[str]:
-        skills, _ = await cls._initialize()
+    async def names(self) -> List[str]:
+        skills, _ = await self._initialize()
         return list(skills.keys())
 
-    @classmethod
-    async def directories(cls) -> List[str]:
-        _, directories = await cls._initialize()
+    async def directories(self) -> List[str]:
+        _, directories = await self._initialize()
         return list(directories)
 
-    @classmethod
-    def reset(cls) -> None:
-        cls._cache = None
-        cls._directories = None
+    def reset(self) -> None:
+        self._cache = None
+        self._directories = None
         log.info("skill cache reset")

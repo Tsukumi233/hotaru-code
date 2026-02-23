@@ -3,6 +3,7 @@ import pytest
 
 from hotaru.tool.registry import ToolRegistry
 from hotaru.tool.tool import PermissionSpec, Tool, ToolContext, ToolResult
+from tests.helpers import fake_app
 
 
 class _PermParams(BaseModel):
@@ -11,7 +12,7 @@ class _PermParams(BaseModel):
 
 @pytest.mark.anyio
 async def test_registry_execute_checks_permissions_before_tool_execution() -> None:
-    ToolRegistry.reset()
+    registry = ToolRegistry()
     events: list[str] = []
 
     async def run(args: _PermParams, _ctx: ToolContext) -> ToolResult:
@@ -29,7 +30,7 @@ async def test_registry_execute_checks_permissions_before_tool_execution() -> No
             )
         ]
 
-    ToolRegistry.register(
+    registry.register(
         Tool.define(
             tool_id="perm_probe",
             description="permission probe",
@@ -41,7 +42,7 @@ async def test_registry_execute_checks_permissions_before_tool_execution() -> No
     )
 
     asks: list[dict[str, object]] = []
-    ctx = ToolContext(session_id="ses", message_id="msg", call_id="call", agent="build")
+    ctx = ToolContext(app=fake_app(tools=registry), session_id="ses", message_id="msg", call_id="call", agent="build")
 
     async def fake_ask(*, permission, patterns, always=None, metadata=None) -> None:
         asks.append(
@@ -55,7 +56,7 @@ async def test_registry_execute_checks_permissions_before_tool_execution() -> No
 
     ctx.ask = fake_ask  # type: ignore[method-assign]
 
-    out = await ToolRegistry.execute("perm_probe", {"value": "abc"}, ctx)
+    out = await registry.execute("perm_probe", {"value": "abc"}, ctx)
 
     assert out.output == "abc"
     assert events == ["permission:abc", "execute:abc"]

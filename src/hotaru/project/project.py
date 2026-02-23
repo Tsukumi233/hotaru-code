@@ -107,33 +107,10 @@ class Project:
     """
 
     _initialized_projects: Dict[str, int] = {}
-    _command_event_subscription_started: bool = False
 
     @staticmethod
     def _project_key(project_id: str) -> List[str]:
         return ["project", project_id]
-
-    @classmethod
-    def ensure_command_event_subscription(cls) -> None:
-        """Subscribe once to command-executed events."""
-        if cls._command_event_subscription_started:
-            return
-
-        from ..command import CommandEvent
-
-        async def _on_command_executed(payload) -> None:
-            name = payload.properties.get("name")
-            project_id = payload.properties.get("project_id")
-
-            if name != "init":
-                return
-            if not isinstance(project_id, str) or not project_id:
-                return
-
-            await cls.set_initialized(project_id)
-
-        Bus.subscribe(CommandEvent.Executed, _on_command_executed)
-        cls._command_event_subscription_started = True
 
     @staticmethod
     async def from_directory(directory: str) -> tuple["ProjectInfo", str]:
@@ -146,7 +123,6 @@ class Project:
             Tuple of (ProjectInfo, sandbox_directory)
         """
         log.info("from_directory", {"directory": directory})
-        Project.ensure_command_event_subscription()
 
         git_dir = _find_git_dir(directory)
 
@@ -327,9 +303,8 @@ class Project:
 
     @staticmethod
     def reset_runtime_state() -> None:
-        """Reset runtime-only state used for subscriptions/tests."""
+        """Reset runtime-only in-memory state used by tests."""
         Project._initialized_projects.clear()
-        Project._command_event_subscription_started = False
 
     @staticmethod
     async def add_sandbox(project_id: str, directory: str) -> Optional[ProjectInfo]:

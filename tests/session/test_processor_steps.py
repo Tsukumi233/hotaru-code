@@ -9,6 +9,7 @@ from hotaru.session.llm import LLM, StreamChunk
 from hotaru.session.processor import SessionProcessor
 from hotaru.tool.registry import ToolRegistry
 from hotaru.tool.tool import Tool, ToolContext, ToolResult
+from tests.helpers import fake_agents, fake_app
 
 
 @pytest.mark.anyio
@@ -22,7 +23,7 @@ async def test_processor_disables_tools_when_agent_step_limit_reached(
         captured["messages"] = stream_input.messages
         yield StreamChunk(type="text", text="Step limit reached summary.")
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(
             name=name,
             mode=AgentMode.PRIMARY,
@@ -32,9 +33,9 @@ async def test_processor_disables_tools_when_agent_step_limit_reached(
         )
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent)),
         session_id="ses_test",
         model_id="model",
         provider_id="provider",
@@ -62,13 +63,13 @@ async def test_processor_binds_instance_context_for_tool_execution(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    ToolRegistry.reset()
+    registry = ToolRegistry()
 
     async def probe_execute(_params: _ProbeParams, _ctx: ToolContext) -> ToolResult:
         # Fails without Instance context.
         return ToolResult(title="probe", output=Instance.directory())
 
-    ToolRegistry.register(
+    registry.register(
         Tool.define(
             tool_id="ctx_probe",
             description="Context probe",
@@ -96,7 +97,7 @@ async def test_processor_binds_instance_context_for_tool_execution(
             return
         yield StreamChunk(type="text", text="done")
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(
             name=name,
             mode=AgentMode.PRIMARY,
@@ -105,9 +106,9 @@ async def test_processor_binds_instance_context_for_tool_execution(
         )
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent), tools=registry),
         session_id="ses_ctx",
         model_id="model",
         provider_id="provider",
@@ -128,7 +129,7 @@ async def test_processor_binds_instance_context_for_tool_execution(
 async def test_processor_emits_tool_updates_with_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ToolRegistry.reset()
+    registry = ToolRegistry()
 
     class _MetaParams(BaseModel):
         pass
@@ -137,7 +138,7 @@ async def test_processor_emits_tool_updates_with_metadata(
         ctx.metadata(title="Probe running", metadata={"progress": "half"})
         return ToolResult(title="Probe done", output="ok", metadata={"result": 1})
 
-    ToolRegistry.register(
+    registry.register(
         Tool.define(
             tool_id="meta_probe",
             description="Metadata probe",
@@ -158,7 +159,7 @@ async def test_processor_emits_tool_updates_with_metadata(
             tool_call=ToolCall(id="call_meta_probe", name="meta_probe", input={}),
         )
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(
             name=name,
             mode=AgentMode.PRIMARY,
@@ -167,11 +168,11 @@ async def test_processor_emits_tool_updates_with_metadata(
         )
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
 
     updates = []
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent), tools=registry),
         session_id="ses_updates",
         model_id="model",
         provider_id="provider",
@@ -206,7 +207,7 @@ async def test_processor_emits_tool_updates_with_metadata(
 async def test_processor_uses_assistant_and_tool_call_ids_in_tool_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ToolRegistry.reset()
+    registry = ToolRegistry()
     captured: dict[str, str] = {}
 
     class _ProbeIDsParams(BaseModel):
@@ -217,7 +218,7 @@ async def test_processor_uses_assistant_and_tool_call_ids_in_tool_context(
         captured["call_id"] = str(ctx.call_id)
         return ToolResult(title="ok", output="ok")
 
-    ToolRegistry.register(
+    registry.register(
         Tool.define(
             tool_id="probe_ids",
             description="Probe IDs",
@@ -234,13 +235,13 @@ async def test_processor_uses_assistant_and_tool_call_ids_in_tool_context(
             tool_call=ToolCall(id="call_probe_ids", name="probe_ids", input={}),
         )
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent), tools=registry),
         session_id="ses_ids",
         model_id="model",
         provider_id="provider",
@@ -271,7 +272,7 @@ async def test_processor_uses_assistant_and_tool_call_ids_in_tool_context(
 async def test_processor_stops_turn_when_tool_permission_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ToolRegistry.reset()
+    registry = ToolRegistry()
 
     class _RejectParams(BaseModel):
         pass
@@ -279,7 +280,7 @@ async def test_processor_stops_turn_when_tool_permission_is_rejected(
     async def reject_execute(_params: _RejectParams, _ctx: ToolContext) -> ToolResult:
         raise RejectedError()
 
-    ToolRegistry.register(
+    registry.register(
         Tool.define(
             tool_id="reject_tool",
             description="Reject tool",
@@ -296,13 +297,13 @@ async def test_processor_stops_turn_when_tool_permission_is_rejected(
             tool_call=ToolCall(id="call_reject", name="reject_tool", input={}),
         )
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent), tools=registry),
         session_id="ses_reject",
         model_id="model",
         provider_id="provider",
@@ -334,7 +335,7 @@ async def test_processor_stops_turn_when_tool_permission_is_rejected(
 async def test_processor_can_continue_loop_on_deny_when_config_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ToolRegistry.reset()
+    registry = ToolRegistry()
 
     class _RejectParams(BaseModel):
         pass
@@ -342,7 +343,7 @@ async def test_processor_can_continue_loop_on_deny_when_config_enabled(
     async def reject_execute(_params: _RejectParams, _ctx: ToolContext) -> ToolResult:
         raise RejectedError()
 
-    ToolRegistry.register(
+    registry.register(
         Tool.define(
             tool_id="reject_tool",
             description="Reject tool",
@@ -359,17 +360,17 @@ async def test_processor_can_continue_loop_on_deny_when_config_enabled(
             tool_call=ToolCall(id="call_reject", name="reject_tool", input={}),
         )
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     async def fake_get_config(cls):  # type: ignore[no-untyped-def]
         return type("Cfg", (), {"continue_loop_on_deny": True})()
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
     monkeypatch.setattr("hotaru.core.config.ConfigManager.get", classmethod(fake_get_config))
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent), tools=registry),
         session_id="ses_reject_continue",
         model_id="model",
         provider_id="provider",
@@ -407,13 +408,13 @@ async def test_processor_emits_reasoning_callbacks(
         yield StreamChunk(type="text", text="done")
         yield StreamChunk(type="message_delta", stop_reason="stop")
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent)),
         session_id="ses_reasoning",
         model_id="model",
         provider_id="provider",
@@ -448,13 +449,13 @@ async def test_processor_includes_reasoning_text_in_assistant_tool_message(
             tool_call=ToolCall(id="call_1", name="unknown_tool", input={}),
         )
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent)),
         session_id="ses_reasoning_tools",
         model_id="model",
         provider_id="provider",
@@ -484,7 +485,7 @@ async def test_processor_includes_reasoning_text_in_assistant_tool_message(
 async def test_processor_routes_unknown_tool_to_resolver_mcp_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     async def fake_mcp_info(cls, tool_id: str):
@@ -509,12 +510,14 @@ async def test_processor_routes_unknown_tool_to_resolver_mcp_lookup(
         captured["tool_input"] = tool_input
         return {"output": "ok", "title": "", "metadata": {}}
 
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
-    monkeypatch.setattr("hotaru.session.processor.ToolRegistry.get", lambda _tool_id: None)
+    from types import SimpleNamespace
+    tools_stub = SimpleNamespace(get=lambda _tool_id: None)
+
     monkeypatch.setattr("hotaru.session.processor.ToolResolver.mcp_info", classmethod(fake_mcp_info))
     monkeypatch.setattr(SessionProcessor, "_execute_mcp_tool", fake_exec_mcp)
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent), tools=tools_stub),
         session_id="ses_mcp_lookup",
         model_id="model",
         provider_id="provider",
@@ -538,13 +541,13 @@ async def test_processor_reraises_unexpected_turn_error(
     async def fake_stream(cls, _stream_input):
         yield StreamChunk(type="text", text="hello")
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent)),
         session_id="ses_turn_type_error",
         model_id="model",
         provider_id="provider",
@@ -565,13 +568,13 @@ async def test_processor_marks_turn_timeout_as_recoverable_error(
         raise TimeoutError("upstream timeout")
         yield StreamChunk(type="text", text="never")
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
 
     monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
 
     processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent)),
         session_id="ses_turn_timeout",
         model_id="model",
         provider_id="provider",

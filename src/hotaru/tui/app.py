@@ -33,6 +33,7 @@ from .state import select_runtime_status
 from .context.route import PromptInfo
 from ..util.log import Log
 from ..command import render_init_prompt, publish_command_executed
+from ..runtime import AppContext
 
 log = Log.create({"service": "tui.app"})
 
@@ -231,6 +232,7 @@ class TuiApp(App):
         self._runtime_unsubscribers: List[Callable[[], None]] = []
         self._lsp_refresh_task: Optional[asyncio.Task[None]] = None
         self._server_retry_alert = False
+        self.runtime: AppContext = AppContext()
 
         # Load theme preference
         ThemeManager.load_preference()
@@ -411,6 +413,7 @@ class TuiApp(App):
 
     async def on_mount(self) -> None:
         """Handle application mount — runs async bootstrap then shows screen."""
+        await self.runtime.startup()
         await self.sdk_ctx.start_event_stream()
         await self._bootstrap()
         self._start_runtime_subscriptions()
@@ -437,16 +440,9 @@ class TuiApp(App):
         await self.sdk_ctx.aclose()
 
         try:
-            from ..mcp import MCP
-            await MCP.shutdown()
+            await self.runtime.shutdown()
         except Exception as e:
-            log.warning("failed to shutdown MCP", {"error": str(e)})
-
-        try:
-            from ..lsp import LSP
-            await LSP.shutdown()
-        except Exception as e:
-            log.warning("failed to shutdown LSP", {"error": str(e)})
+            log.warning("failed to shutdown runtime", {"error": str(e)})
 
     async def _bootstrap(self) -> None:
         """Load persisted data into contexts before showing the first screen."""
@@ -564,9 +560,7 @@ class TuiApp(App):
     async def _refresh_runtime_status(self) -> None:
         """Refresh MCP and LSP runtime status in sync context."""
         try:
-            from ..mcp import MCP
-
-            mcp_status = await MCP.status()
+            mcp_status = await self.runtime.mcp.status()
             self.sync_ctx.set_mcp_status({
                 name: status.model_dump()
                 for name, status in mcp_status.items()
@@ -580,12 +574,11 @@ class TuiApp(App):
     async def _refresh_lsp_status(self) -> None:
         """Refresh only LSP runtime status in sync context."""
         try:
-            from ..lsp import LSP
             from ..project.instance import Instance
 
             lsp_status = await Instance.provide(
                 directory=self.sdk_ctx.cwd,
-                fn=LSP.status,
+                fn=self.runtime.lsp.status,
             )
             self.sync_ctx.set_lsp_status([item.model_dump() for item in lsp_status])
         except Exception as e:

@@ -4,14 +4,19 @@ Provides base classes and utilities for defining tools that can be
 invoked by AI agents.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import inspect
-from typing import Any, Awaitable, Callable, Dict, Generic, List, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Generic, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from .truncation import Truncate
+
+if TYPE_CHECKING:
+    from ..runtime import AppContext
 
 T = TypeVar('T', bound=BaseModel)
 M = TypeVar('M', bound=Dict[str, Any])
@@ -20,6 +25,7 @@ M = TypeVar('M', bound=Dict[str, Any])
 @dataclass
 class ToolContext:
     """Context provided to tool execution."""
+    app: AppContext
     session_id: str
     message_id: str
     agent: str
@@ -75,7 +81,7 @@ class ToolContext:
                 "call_id": self.call_id,
             }
 
-        await Permission.ask(
+        await self.app.permission.ask(
             session_id=self.session_id,
             permission=permission,
             patterns=patterns,

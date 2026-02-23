@@ -8,6 +8,7 @@ from hotaru.storage import Storage
 from hotaru.tool.task import build_task_description, extract_subagent_mention
 from hotaru.tool.task import TaskParams, _run_subagent_task
 from hotaru.tool.tool import ToolContext
+from tests.helpers import fake_agents, fake_app
 
 
 @pytest.mark.anyio
@@ -38,18 +39,15 @@ async def test_task_description_respects_task_permission_rules(
         options={},
     )
 
-    async def fake_list(cls):
+    async def fake_list(**_kw):
         return [general, explore]
 
-    async def fake_get(cls, name: str):
+    async def fake_get(name: str, **_kw):
         if name == "build":
             return caller
         return None
 
-    monkeypatch.setattr("hotaru.agent.agent.Agent.list", classmethod(fake_list))
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get))
-
-    description = await build_task_description(caller_agent="build")
+    description = await build_task_description(caller_agent="build", agents=fake_agents(get=fake_get, list=fake_list))
 
     assert "- general:" in description
     assert "- explore:" not in description
@@ -88,7 +86,7 @@ async def test_task_tool_reuses_existing_task_session(
         parent_id=parent.id,
     )
 
-    async def fake_get_agent(cls, name: str):
+    async def fake_get_agent(name: str, **_kw):
         if name == "explore":
             return AgentInfo(name="explore", mode=AgentMode.SUBAGENT, permission=[], options={})
         if name == "build":
@@ -121,7 +119,6 @@ async def test_task_tool_reuses_existing_task_session(
             text="resumed",
         )
 
-    monkeypatch.setattr("hotaru.agent.agent.Agent.get", classmethod(fake_get_agent))
     monkeypatch.setattr("hotaru.provider.provider.Provider.get_model", classmethod(fake_get_model))
     monkeypatch.setattr("hotaru.project.project.Project.from_directory", staticmethod(fake_from_directory))
     monkeypatch.setattr("hotaru.session.system.SystemPrompt.build_full_prompt", classmethod(fake_build_full_prompt))
@@ -135,6 +132,7 @@ async def test_task_tool_reuses_existing_task_session(
             task_id=existing.id,
         ),
         ToolContext(
+            app=fake_app(agents=fake_agents(get=fake_get_agent)),
             session_id=parent.id,
             message_id="message_parent",
             agent="build",

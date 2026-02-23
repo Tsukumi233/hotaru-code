@@ -222,7 +222,12 @@ async def apply_patch_execute(params: ApplyPatchParams, ctx: ToolContext) -> Too
         if change.change_type == "delete":
             continue
         target = str(change.move_path or change.file_path)
-        output, per_file = await append_lsp_error_feedback(output, target, include_project_files=False)
+        output, per_file = await append_lsp_error_feedback(
+            ctx.app.lsp,
+            output,
+            target,
+            include_project_files=False,
+        )
         diagnostics.update(per_file)
 
     return ToolResult(

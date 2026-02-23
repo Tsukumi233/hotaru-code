@@ -2,19 +2,42 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from ..runtime import AppContext
 from .errors import register_error_handlers
 from .routes import agents, events, permissions, preferences, providers, ptys, questions, sessions, system
 from .schemas import ErrorResponse
 
 
-def create_app() -> FastAPI:
+def create_app(
+    ctx: AppContext,
+    *,
+    manage_lifecycle: bool = False,
+) -> FastAPI:
+    """Create a FastAPI application.
+
+    ``ctx`` is the application-level service container.  It must be provided
+    by all callers — entry-points create it via ``AppContext()``.
+    """
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        await ctx.startup()
+        try:
+            yield
+        finally:
+            await ctx.shutdown()
+
     app = FastAPI(
         title="Hotaru Code API",
         version="1.0.0",
         openapi_version="3.1.0",
+        lifespan=_lifespan if manage_lifecycle else None,
         responses={
             400: {"model": ErrorResponse},
             404: {"model": ErrorResponse},
@@ -22,6 +45,7 @@ def create_app() -> FastAPI:
             500: {"model": ErrorResponse},
         },
     )
+    app.state.ctx = ctx
 
     app.add_middleware(
         CORSMiddleware,

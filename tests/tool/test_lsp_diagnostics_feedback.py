@@ -7,6 +7,7 @@ from hotaru.lsp.client import LSPDiagnostic
 from hotaru.tool.edit import EditParams, edit_execute
 from hotaru.tool.tool import ToolContext
 from hotaru.tool.write import WriteParams, write_execute
+from tests.helpers import fake_app
 
 
 def _diagnostic(message: str) -> LSPDiagnostic:
@@ -25,6 +26,7 @@ def _diagnostic(message: str) -> LSPDiagnostic:
 
 def _tool_context(tmp_path: Path) -> ToolContext:
     ctx = ToolContext(
+        app=fake_app(lsp=LSP()),
         session_id="session_test",
         message_id="message_test",
         agent="build",

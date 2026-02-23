@@ -138,6 +138,6 @@ class SessionCompaction:
         log.info("pruned tool outputs", {"count": len(candidates), "tokens": pruned})
 
     @classmethod
-    async def compact_agent_name(cls) -> str:
-        agent = await Agent.get("compaction")
+    async def compact_agent_name(cls, agents: Agent) -> str:
+        agent = await agents.get("compaction")
         return agent.name if agent else "compaction"

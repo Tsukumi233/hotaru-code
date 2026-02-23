@@ -6,7 +6,8 @@ from fastapi import Body, Depends, Query
 
 from ...app_services import SessionService
 from ...app_services.errors import NotFoundError
-from ..deps import resolve_request_directory
+from ...runtime import AppContext
+from ..deps import resolve_app_context, resolve_request_directory
 from ..schemas import (
     SessionCompactRequest,
     SessionCreateRequest,
@@ -27,8 +28,9 @@ from .crud import crud_router, many, one
 async def create_session(
     payload: SessionCreateRequest | None = Body(default=None),
     cwd: str = Depends(resolve_request_directory),
+    app: AppContext = Depends(resolve_app_context),
 ) -> dict[str, object]:
-    return await SessionService.create((payload.model_dump(exclude_none=True) if payload else {}), cwd)
+    return await SessionService.create((payload.model_dump(exclude_none=True) if payload else {}), cwd, app=app)
 
 
 async def list_sessions(
@@ -53,8 +55,11 @@ async def update_session(
     return item
 
 
-async def delete_session(session_id: str) -> dict[str, object]:
-    return await SessionService.delete(session_id)
+async def delete_session(
+    session_id: str,
+    ctx: AppContext = Depends(resolve_app_context),
+) -> dict[str, object]:
+    return await SessionService.delete(session_id, app=ctx)
 
 
 async def list_messages(session_id: str) -> list[dict[str, object]]:
@@ -65,20 +70,30 @@ async def message_session(
     session_id: str,
     payload: SessionMessageRequest = Body(...),
     cwd: str = Depends(resolve_request_directory),
+    ctx: AppContext = Depends(resolve_app_context),
 ) -> dict[str, object]:
-    return await SessionService.message(session_id, payload.model_dump(exclude_none=True), cwd)
+    return await SessionService.message(session_id, payload.model_dump(exclude_none=True), cwd, app=ctx)
 
 
-async def interrupt_session(session_id: str) -> dict[str, object]:
-    return await SessionService.interrupt(session_id)
+async def interrupt_session(
+    session_id: str,
+    ctx: AppContext = Depends(resolve_app_context),
+) -> dict[str, object]:
+    return await SessionService.interrupt(session_id, app=ctx)
 
 
 async def compact_session(
     session_id: str,
     payload: SessionCompactRequest | None = Body(default=None),
     cwd: str = Depends(resolve_request_directory),
+    ctx: AppContext = Depends(resolve_app_context),
 ) -> dict[str, object]:
-    return await SessionService.compact(session_id, (payload.model_dump(exclude_none=True) if payload else {}), cwd)
+    return await SessionService.compact(
+        session_id,
+        (payload.model_dump(exclude_none=True) if payload else {}),
+        cwd,
+        app=ctx,
+    )
 
 
 async def delete_messages(

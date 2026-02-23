@@ -3,6 +3,7 @@ import pytest
 from hotaru.agent.agent import Agent
 from hotaru.core.config import Config, ConfigManager
 from hotaru.permission import Permission, PermissionAction
+from hotaru.skill import Skill
 
 
 def _patch_config(monkeypatch: pytest.MonkeyPatch, config_data: dict) -> None:
@@ -14,9 +15,13 @@ def _patch_config(monkeypatch: pytest.MonkeyPatch, config_data: dict) -> None:
     monkeypatch.setattr(ConfigManager, "get", classmethod(fake_get))
 
 
+def _agents() -> Agent:
+    return Agent(Skill())
+
+
 @pytest.mark.anyio
 async def test_agent_tools_and_legacy_maxsteps_are_applied(monkeypatch: pytest.MonkeyPatch) -> None:
-    Agent.reset()
+    agents = _agents()
     _patch_config(
         monkeypatch,
         {
@@ -35,7 +40,7 @@ async def test_agent_tools_and_legacy_maxsteps_are_applied(monkeypatch: pytest.M
         },
     )
 
-    review = await Agent.get("review")
+    review = await agents.get("review")
     assert review is not None
     ruleset = Permission.from_config_list(review.permission)
 
@@ -47,12 +52,10 @@ async def test_agent_tools_and_legacy_maxsteps_are_applied(monkeypatch: pytest.M
     assert review.steps == 4
     assert review.options.get("reasoningEffort") == "high"
 
-    Agent.reset()
-
 
 @pytest.mark.anyio
 async def test_agent_tools_ls_maps_to_list_permission(monkeypatch: pytest.MonkeyPatch) -> None:
-    Agent.reset()
+    agents = _agents()
     _patch_config(
         monkeypatch,
         {
@@ -68,11 +71,9 @@ async def test_agent_tools_ls_maps_to_list_permission(monkeypatch: pytest.Monkey
         },
     )
 
-    review = await Agent.get("review")
+    review = await agents.get("review")
     assert review is not None
     ruleset = Permission.from_config_list(review.permission)
 
     list_rule = Permission.evaluate("list", "src", ruleset)
     assert list_rule.action == PermissionAction.DENY
-
-    Agent.reset()

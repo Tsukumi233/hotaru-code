@@ -891,8 +891,8 @@ class SessionScreen(Screen):
     async def _send_message_async(self, content: str) -> None:
         """Send a message and stream assistant output."""
         from ..core.bus import Bus
-        from ..permission import Permission, PermissionAsked, PermissionReply
-        from ..question import Question, QuestionAsked
+        from ..permission import PermissionAsked, PermissionReply
+        from ..question import QuestionAsked
 
         async def on_permission_asked(payload: Any) -> None:
             request_data = payload.properties
@@ -901,13 +901,13 @@ class SessionScreen(Screen):
             try:
                 result = await self.app.push_screen_wait(PermissionDialog(request=request_data))
                 reply_type, message = result or ("reject", None)
-                await Permission.reply(
+                await self.app.runtime.permission.reply(
                     request_id=request_data["id"],
                     reply=PermissionReply(reply_type),
                     message=message,
                 )
             except Exception:
-                await Permission.reply(
+                await self.app.runtime.permission.reply(
                     request_id=request_data["id"],
                     reply=PermissionReply.REJECT,
                 )
@@ -973,9 +973,9 @@ class SessionScreen(Screen):
                     else:
                         answers.append([selected])
 
-                await Question.reply(request_data["id"], answers)
+                await self.app.runtime.question.reply(request_data["id"], answers)
             except Exception:
-                await Question.reject(request_data["id"])
+                await self.app.runtime.question.reject(request_data["id"])
             finally:
                 prompt.disabled = False
 

@@ -9,6 +9,8 @@ from hotaru.mcp.mcp import MCP, MCPAuthError, _auth_http_error
 async def test_remote_unauthorized_maps_to_needs_auth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    mcp = MCP()
+
     async def fail_connect(self, url: str, headers=None, oauth_auth=None) -> None:
         raise MCPAuthError(
             status_code=401,
@@ -18,7 +20,7 @@ async def test_remote_unauthorized_maps_to_needs_auth(
 
     monkeypatch.setattr(mcp_module.MCPClient, "connect_remote", fail_connect)
 
-    result = await MCP._create_remote_client(
+    result = await mcp._create_remote_client(
         "demo",
         {"type": "remote", "url": "https://example.com"},
     )
@@ -33,12 +35,14 @@ async def test_remote_registration_errors_map_to_registration_status(
     monkeypatch: pytest.MonkeyPatch,
     code: str,
 ) -> None:
+    mcp = MCP()
+
     async def fail_connect(self, url: str, headers=None, oauth_auth=None) -> None:
         raise MCPAuthError(status_code=401, error_code=code)
 
     monkeypatch.setattr(mcp_module.MCPClient, "connect_remote", fail_connect)
 
-    result = await MCP._create_remote_client(
+    result = await mcp._create_remote_client(
         "demo",
         {"type": "remote", "url": "https://example.com"},
     )
@@ -51,12 +55,14 @@ async def test_remote_registration_errors_map_to_registration_status(
 async def test_remote_plain_message_no_longer_uses_string_matching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    mcp = MCP()
+
     async def fail_connect(self, url: str, headers=None, oauth_auth=None) -> None:
         raise RuntimeError("Your client_id is unauthorized")
 
     monkeypatch.setattr(mcp_module.MCPClient, "connect_remote", fail_connect)
 
-    result = await MCP._create_remote_client(
+    result = await mcp._create_remote_client(
         "demo",
         {"type": "remote", "url": "https://example.com"},
     )

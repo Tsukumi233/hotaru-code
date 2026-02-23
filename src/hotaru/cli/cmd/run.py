@@ -18,9 +18,10 @@ from ...command import (
 )
 from ...core.bus import Bus
 from ...core.id import Identifier
-from ...permission import Permission, PermissionAsked, PermissionReply
-from ...question import Question, QuestionAsked
+from ...permission import PermissionAsked, PermissionReply
+from ...question import QuestionAsked
 from ...project import Project
+from ...runtime import AppContext
 from ...session import SessionPrompt
 from ...session.orchestration import prepare_prompt_context
 from ...session.part_callbacks import create_part_callbacks
@@ -88,6 +89,8 @@ async def run_command(
     """
     cwd = str(Path.cwd())
     await Storage.initialize()
+    runtime = AppContext()
+    await runtime.startup()
 
     # Initialize project context
     project, sandbox = await Project.from_directory(cwd)
@@ -108,6 +111,7 @@ async def run_command(
 
     try:
         prompt_ctx = await prepare_prompt_context(
+            app=runtime,
             cwd=cwd,
             sandbox=sandbox,
             project_id=project.id,
@@ -123,12 +127,15 @@ async def run_command(
         console.print("No AI providers are configured. Set an API key:")
         console.print("  export ANTHROPIC_API_KEY=your-key")
         console.print("  export OPENAI_API_KEY=your-key")
+        await runtime.shutdown()
         sys.exit(1)
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
+        await runtime.shutdown()
         sys.exit(1)
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
+        await runtime.shutdown()
         sys.exit(1)
 
     provider_id = prompt_ctx.provider_id
@@ -277,7 +284,7 @@ async def run_command(
     async def on_permission_asked(payload):
         req = payload.properties
         if yes:
-            await Permission.reply(
+            await runtime.permission.reply(
                 req["id"],
                 PermissionReply.ONCE,
             )
@@ -315,7 +322,7 @@ async def run_command(
             )
             msg = msg.strip() or None
 
-        await Permission.reply(
+        await runtime.permission.reply(
             req["id"],
             PermissionReply(reply_map[choice]),
             msg,
@@ -392,15 +399,16 @@ async def run_command(
                         idx = int(selected)
                         answers.append([options[idx - 1].get("label", f"Option {idx}")])
 
-            await Question.reply(req["id"], answers)
+            await runtime.question.reply(req["id"], answers)
         except Exception:
-            await Question.reject(req["id"])
+            await runtime.question.reject(req["id"])
 
     unsub = Bus.subscribe(PermissionAsked, on_permission_asked)
     unsub_question = Bus.subscribe(QuestionAsked, on_question_asked)
 
     try:
         prompt_result = await SessionPrompt.prompt(
+            app=runtime,
             session_id=session.id,
             content=message,
             provider_id=provider_id,
@@ -443,6 +451,7 @@ async def run_command(
     finally:
         unsub()
         unsub_question()
+        await runtime.shutdown()
 
     if init_arguments is not None:
         await publish_command_executed(

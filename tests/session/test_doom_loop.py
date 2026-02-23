@@ -1,18 +1,22 @@
 import pytest
+from types import SimpleNamespace
 
 from hotaru.session.doom_loop import DoomLoopDetector
 
 
 @pytest.mark.anyio
-async def test_doom_loop_detector_only_asks_after_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_doom_loop_detector_only_asks_after_threshold() -> None:
     calls: list[dict] = []
 
-    async def fake_ask(cls, **kwargs):  # type: ignore[no-untyped-def]
+    async def fake_ask(**kwargs):  # type: ignore[no-untyped-def]
         calls.append(dict(kwargs))
 
-    monkeypatch.setattr("hotaru.permission.permission.Permission.ask", classmethod(fake_ask))
-
-    det = DoomLoopDetector(session_id="ses", threshold=3, window=50)
+    det = DoomLoopDetector(
+        permission=SimpleNamespace(ask=fake_ask),
+        session_id="ses",
+        threshold=3,
+        window=50,
+    )
     rules: list[dict] = []
 
     await det.check(tool_name="read", tool_input={"path": "a"}, ruleset=rules)
@@ -26,15 +30,18 @@ async def test_doom_loop_detector_only_asks_after_threshold(monkeypatch: pytest.
 
 
 @pytest.mark.anyio
-async def test_doom_loop_detector_ignores_non_identical_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_doom_loop_detector_ignores_non_identical_sequence() -> None:
     calls: list[dict] = []
 
-    async def fake_ask(cls, **kwargs):  # type: ignore[no-untyped-def]
+    async def fake_ask(**kwargs):  # type: ignore[no-untyped-def]
         calls.append(dict(kwargs))
 
-    monkeypatch.setattr("hotaru.permission.permission.Permission.ask", classmethod(fake_ask))
-
-    det = DoomLoopDetector(session_id="ses", threshold=3, window=50)
+    det = DoomLoopDetector(
+        permission=SimpleNamespace(ask=fake_ask),
+        session_id="ses",
+        threshold=3,
+        window=50,
+    )
     rules: list[dict] = []
 
     await det.check(tool_name="read", tool_input={"path": "a"}, ruleset=rules)

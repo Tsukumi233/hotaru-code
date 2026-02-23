@@ -28,27 +28,35 @@ async def test_collect_lsp_diagnostics_calls_touch_then_fetch(
         events.append(("directory", directory))
         return await fn()
 
-    async def fake_touch_file(cls, file: str, wait_for_diagnostics: bool = False) -> int:
-        del cls
+    async def fake_touch_file(file: str, wait_for_diagnostics: bool = False) -> int:
         events.append(("touch", (file, wait_for_diagnostics)))
         return 1
 
-    async def fake_diagnostics(cls):
-        del cls
+    async def fake_diagnostics():
         events.append(("diagnostics", None))
         return {str(target): [{"message": "E"}]}
 
-    async def fake_shutdown(cls) -> None:
-        del cls
+    async def fake_runtime_shutdown() -> None:
         events.append(("shutdown", None))
+
+    async def fake_runtime_startup() -> None:
+        return None
+
+    class _Runtime:
+        def __init__(self) -> None:
+            self.lsp = type("L", (), {"touch_file": staticmethod(fake_touch_file), "diagnostics": staticmethod(fake_diagnostics)})()
+
+        async def startup(self) -> None:
+            await fake_runtime_startup()
+
+        async def shutdown(self) -> None:
+            await fake_runtime_shutdown()
 
     async def fake_sleep(seconds: float) -> None:
         events.append(("sleep", seconds))
 
     monkeypatch.setattr("hotaru.cli.cmd.debug.Instance.provide", classmethod(fake_provide))
-    monkeypatch.setattr("hotaru.cli.cmd.debug.LSP.touch_file", classmethod(fake_touch_file))
-    monkeypatch.setattr("hotaru.cli.cmd.debug.LSP.diagnostics", classmethod(fake_diagnostics))
-    monkeypatch.setattr("hotaru.cli.cmd.debug.LSP.shutdown", classmethod(fake_shutdown))
+    monkeypatch.setattr("hotaru.cli.cmd.debug.AppContext", lambda: _Runtime())
     monkeypatch.setattr("hotaru.cli.cmd.debug.asyncio.sleep", fake_sleep)
 
     result = await debug_module.collect_lsp_diagnostics(str(target), cwd=str(tmp_path), pause_seconds=0.5)

@@ -12,7 +12,7 @@ class EventService:
     """Thin orchestration for bus event streaming."""
 
     @classmethod
-    async def stream(cls) -> AsyncIterator[dict[str, Any]]:
+    async def stream(cls, bus: Bus) -> AsyncIterator[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
         def on_event(event: Any) -> None:
@@ -36,7 +36,7 @@ class EventService:
 
             queue.put_nowait({"type": event_type, "data": data})
 
-        unsubscribe = Bus.subscribe_all(on_event)
+        unsubscribe = bus._raw_subscribe("*", on_event)
 
         try:
             yield {"type": "server.connected", "data": {}}

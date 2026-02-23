@@ -1,18 +1,26 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
 from hotaru.tool.resolver import ToolResolver
+from tests.helpers import fake_app
+
+
+def _tools_stub(**overrides):
+    async def _noop(**_kw):
+        return []
+    return SimpleNamespace(get_tool_definitions=overrides.get("get_tool_definitions", _noop))
 
 
 @pytest.mark.anyio
 async def test_resolver_strictifies_mcp_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_defs(cls, **_kwargs):
+    async def fake_defs(**_kwargs):
         return []
 
-    async def fake_mcp_tools(cls):
+    async def fake_mcp_tools():
         return {
             "mcp_demo": {
                 "description": "demo",
@@ -37,10 +45,13 @@ async def test_resolver_strictifies_mcp_schema(
             }
         }
 
-    monkeypatch.setattr("hotaru.tool.resolver.ToolRegistry.get_tool_definitions", classmethod(fake_defs))
-    monkeypatch.setattr("hotaru.mcp.MCP.tools", classmethod(fake_mcp_tools))
+    resolver = ToolResolver(app=fake_app(
+        started=True,
+        tools=_tools_stub(get_tool_definitions=fake_defs),
+        mcp=SimpleNamespace(tools=fake_mcp_tools),
+    ))
 
-    tools = await ToolResolver.resolve(
+    tools = await resolver.resolve(
         caller_agent="build",
         provider_id="openai",
         model_id="gpt-5",
@@ -62,22 +73,25 @@ async def test_resolver_strictifies_mcp_schema(
 async def test_resolver_propagates_real_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_defs(cls, **_kwargs):
+    async def fake_defs(**_kwargs):
         return []
 
-    async def fake_mcp_tools(cls):
+    async def fake_mcp_tools():
         raise asyncio.CancelledError("cancelled")
 
     class _Task:
         def cancelling(self) -> int:
             return 1
 
-    monkeypatch.setattr("hotaru.tool.resolver.ToolRegistry.get_tool_definitions", classmethod(fake_defs))
-    monkeypatch.setattr("hotaru.mcp.MCP.tools", classmethod(fake_mcp_tools))
+    resolver = ToolResolver(app=fake_app(
+        started=True,
+        tools=_tools_stub(get_tool_definitions=fake_defs),
+        mcp=SimpleNamespace(tools=fake_mcp_tools),
+    ))
     monkeypatch.setattr("hotaru.tool.resolver.asyncio.current_task", lambda: _Task())
 
     with pytest.raises(asyncio.CancelledError):
-        await ToolResolver.resolve(
+        await resolver.resolve(
             caller_agent="build",
             provider_id="openai",
             model_id="gpt-5",
@@ -88,7 +102,7 @@ async def test_resolver_propagates_real_cancellation(
 async def test_resolver_treats_noncancelling_cancelled_error_as_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_defs(cls, **_kwargs):
+    async def fake_defs(**_kwargs):
         return [
             {
                 "type": "function",
@@ -100,21 +114,72 @@ async def test_resolver_treats_noncancelling_cancelled_error_as_unavailable(
             }
         ]
 
-    async def fake_mcp_tools(cls):
+    async def fake_mcp_tools():
         raise asyncio.CancelledError("transport failure")
 
     class _Task:
         def cancelling(self) -> int:
             return 0
 
-    monkeypatch.setattr("hotaru.tool.resolver.ToolRegistry.get_tool_definitions", classmethod(fake_defs))
-    monkeypatch.setattr("hotaru.mcp.MCP.tools", classmethod(fake_mcp_tools))
+    resolver = ToolResolver(app=fake_app(
+        started=True,
+        tools=_tools_stub(get_tool_definitions=fake_defs),
+        mcp=SimpleNamespace(tools=fake_mcp_tools),
+    ))
     monkeypatch.setattr("hotaru.tool.resolver.asyncio.current_task", lambda: _Task())
 
-    tools = await ToolResolver.resolve(
+    tools = await resolver.resolve(
         caller_agent="build",
         provider_id="openai",
         model_id="gpt-5",
     )
 
     assert [item["function"]["name"] for item in tools] == ["read"]
+
+
+@pytest.mark.anyio
+async def test_resolver_skips_mcp_when_subsystem_is_degraded() -> None:
+    calls: list[str] = []
+
+    async def fake_defs(**_kwargs):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": "read",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+    async def fake_mcp_tools():
+        calls.append("mcp")
+        return {
+            "mcp_demo": {
+                "description": "demo",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        }
+
+    resolver = ToolResolver(app=fake_app(
+        started=True,
+        health={
+            "status": "degraded",
+            "subsystems": {
+                "mcp": {"status": "failed", "critical": True, "error": "offline"},
+                "lsp": {"status": "ready", "critical": False, "error": None},
+            },
+        },
+        tools=_tools_stub(get_tool_definitions=fake_defs),
+        mcp=SimpleNamespace(tools=fake_mcp_tools),
+    ))
+
+    tools = await resolver.resolve(
+        caller_agent="build",
+        provider_id="openai",
+        model_id="gpt-5",
+    )
+
+    assert [item["function"]["name"] for item in tools] == ["read"]
+    assert calls == []

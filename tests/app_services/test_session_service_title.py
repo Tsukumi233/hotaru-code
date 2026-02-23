@@ -7,6 +7,7 @@ from hotaru.core.bus import Bus
 from hotaru.core.global_paths import GlobalPath
 from hotaru.session import Session
 from hotaru.storage import Storage
+from tests.helpers import fake_app
 
 
 def _setup_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -14,15 +15,14 @@ def _setup_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(GlobalPath, "data", classmethod(lambda cls: str(data)))
     Storage.reset()
-    Bus.reset()
-    SessionService.reset_runtime()
+    Bus.provide(Bus())
 
 
 @pytest.mark.anyio
 async def test_create_defaults_title(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _setup_storage(monkeypatch, tmp_path)
 
-    created = await SessionService.create({"project_id": "p1"}, str(tmp_path))
+    created = await SessionService.create({"project_id": "p1"}, str(tmp_path), app=fake_app())
 
     assert created["title"] == "New Session"
     saved = await Session.get(created["id"], project_id="p1")
@@ -33,7 +33,7 @@ async def test_create_defaults_title(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 async def test_create_uses_explicit_title(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _setup_storage(monkeypatch, tmp_path)
 
-    created = await SessionService.create({"project_id": "p1", "title": "  Demo  "}, str(tmp_path))
+    created = await SessionService.create({"project_id": "p1", "title": "  Demo  "}, str(tmp_path), app=fake_app())
 
     assert created["title"] == "Demo"
     saved = await Session.get(created["id"], project_id="p1")

@@ -57,6 +57,7 @@ async def write_execute(params: WriteParams, ctx: ToolContext) -> ToolResult:
 
     output = "Wrote file successfully."
     output, diagnostics = await append_lsp_error_feedback(
+        lsp=ctx.app.lsp,
         output=output,
         file_path=str(filepath),
         include_project_files=True,

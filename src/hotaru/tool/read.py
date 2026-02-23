@@ -1,11 +1,13 @@
 """Read tool for reading file contents."""
 
+from __future__ import annotations
+
 import asyncio
 import mimetypes
 import os
 from base64 import b64encode
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,6 +15,9 @@ from ..core.id import Identifier
 from ..util.log import Log
 from .external_directory import assert_external_directory
 from .tool import PermissionSpec, Tool, ToolContext, ToolResult
+
+if TYPE_CHECKING:
+    from ..lsp import LSP
 
 log = Log.create({"service": "read"})
 
@@ -68,12 +73,10 @@ def _is_binary_file(filepath: Path) -> bool:
     return False
 
 
-async def _warm_lsp(file_path: str) -> None:
+async def _warm_lsp(lsp: LSP, file_path: str) -> None:
     """Best-effort LSP warmup after a successful text read."""
     try:
-        from ..lsp import LSP
-
-        await LSP.touch_file(file_path, wait_for_diagnostics=False)
+        await lsp.touch_file(file_path, wait_for_diagnostics=False)
     except Exception as e:
         log.warning("failed to warm LSP on read", {"file": file_path, "error": str(e)})
 
@@ -254,7 +257,7 @@ async def read_execute(params: ReadParams, ctx: ToolContext) -> ToolResult:
         output += f"\n\n(End of file - total {total_lines} lines)"
 
     output += "\n</content>"
-    asyncio.create_task(_warm_lsp(str(filepath)))
+    asyncio.create_task(_warm_lsp(ctx.app.lsp, str(filepath)))
 
     return ToolResult(
         title=title,

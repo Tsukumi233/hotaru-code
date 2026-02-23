@@ -86,16 +86,12 @@ class LSPStatus(BaseModel):
 
 class LSPState:
     """State container for LSP clients."""
-
     def __init__(self):
         self.clients: List[LSPClient] = []
         self.servers: Dict[str, LSPServerInfo] = {}
         self.broken: Set[str] = set()
         self.spawning: Dict[str, asyncio.Task] = {}
 
-
-# Global state
-_state: Optional[LSPState] = None
 
 
 class LSP:
@@ -105,23 +101,28 @@ class LSP:
     accessing their features like diagnostics, hover, and navigation.
     """
 
-    @classmethod
-    async def _get_state(cls) -> LSPState:
+    def __init__(self) -> None:
+        self._state: Optional[LSPState] = None
+        self._init_lock = asyncio.Lock()
+
+    async def _get_state(self) -> LSPState:
         """Get or initialize the LSP state.
 
         Returns:
             LSPState instance
         """
-        global _state
-        if _state is None:
-            _state = LSPState()
-            await cls._init_servers()
-        return _state
+        if self._state is not None:
+            return self._state
+        async with self._init_lock:
+            if self._state is not None:
+                return self._state
+            self._state = LSPState()
+            await self._init_servers()
+            return self._state
 
-    @classmethod
-    async def _init_servers(cls) -> None:
+    async def _init_servers(self) -> None:
         """Initialize available LSP servers from configuration."""
-        state = _state
+        state = self._state
         if not state:
             return
 
@@ -135,7 +136,6 @@ class LSP:
         # Add built-in servers (copy objects so config overrides are instance-local)
         for server_id, server in ALL_SERVERS.items():
             state.servers[server_id] = server.configured()
-
         def deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
             result = dict(base)
             for key, value in override.items():
@@ -144,7 +144,6 @@ class LSP:
                 else:
                     result[key] = value
             return result
-
         def parse_string_dict(value: Any) -> Dict[str, str]:
             if not isinstance(value, dict):
                 return {}
@@ -153,12 +152,10 @@ class LSP:
                 if isinstance(key, str) and isinstance(item, str):
                     result[key] = item
             return result
-
         def parse_dict(value: Any) -> Dict[str, Any]:
             if not isinstance(value, dict):
                 return {}
             return dict(value)
-
         def parse_extensions(value: Any, fallback: List[str]) -> List[str]:
             if not isinstance(value, list):
                 return list(fallback)
@@ -201,12 +198,10 @@ class LSP:
                         {"server_id": name},
                     )
                     continue
-
                 async def custom_root(file: str) -> Optional[str]:
                     return Instance.directory()
 
                 cmd = list(command)
-
                 async def custom_spawn(
                     root: str,
                     spawn_env: Dict[str, str],
@@ -257,19 +252,17 @@ class LSP:
             "server_ids": ", ".join(state.servers.keys())
         })
 
-    @classmethod
-    async def init(cls) -> None:
+    async def init(self) -> None:
         """Initialize LSP manager."""
-        await cls._get_state()
+        await self._get_state()
 
-    @classmethod
-    async def status(cls) -> List[LSPStatus]:
+    async def status(self) -> List[LSPStatus]:
         """Get status of all connected LSP servers.
 
         Returns:
             List of server status objects
         """
-        state = await cls._get_state()
+        state = await self._get_state()
         result: List[LSPStatus] = []
 
         for client in state.clients:
@@ -284,8 +277,7 @@ class LSP:
 
         return result
 
-    @classmethod
-    async def _get_clients(cls, file: str) -> List[LSPClient]:
+    async def _get_clients(self, file: str) -> List[LSPClient]:
         """Get or create LSP clients for a file.
 
         Args:
@@ -294,10 +286,9 @@ class LSP:
         Returns:
             List of applicable LSP clients
         """
-        state = await cls._get_state()
+        state = await self._get_state()
         extension = os.path.splitext(file)[1] or file
         result: List[LSPClient] = []
-
         async def schedule(
             server: LSPServerInfo,
             root: str,
@@ -388,8 +379,7 @@ class LSP:
 
         return result
 
-    @classmethod
-    async def has_clients(cls, file: str) -> bool:
+    async def has_clients(self, file: str) -> bool:
         """Check if any LSP servers can handle a file.
 
         Args:
@@ -398,7 +388,7 @@ class LSP:
         Returns:
             True if at least one server can handle the file
         """
-        state = await cls._get_state()
+        state = await self._get_state()
         extension = os.path.splitext(file)[1] or file
 
         for server in state.servers.values():
@@ -417,9 +407,8 @@ class LSP:
 
         return False
 
-    @classmethod
     async def touch_file(
-        cls,
+        self,
         file: str,
         wait_for_diagnostics: bool = False
     ) -> int:
@@ -433,8 +422,7 @@ class LSP:
             Number of connected clients that were notified.
         """
         log.info("touching file", {"file": file})
-        clients = await cls._get_clients(file)
-
+        clients = await self._get_clients(file)
         async def process_client(client: LSPClient) -> None:
             wait_task: Optional[asyncio.Task] = None
             if wait_for_diagnostics:
@@ -458,14 +446,13 @@ class LSP:
             log.error("failed to touch file", {"file": file, "error": str(e)})
         return len(clients)
 
-    @classmethod
-    async def diagnostics(cls) -> Dict[str, List[LSPDiagnostic]]:
+    async def diagnostics(self) -> Dict[str, List[LSPDiagnostic]]:
         """Get all diagnostics from all connected servers.
 
         Returns:
             Dictionary of file path to diagnostics
         """
-        state = await cls._get_state()
+        state = await self._get_state()
         results: Dict[str, List[LSPDiagnostic]] = {}
 
         for client in state.clients:
@@ -484,9 +471,8 @@ class LSP:
             return [item for item in result if item]
         return [result]
 
-    @classmethod
     async def _position_request(
-        cls,
+        self,
         file: str,
         line: int,
         character: int,
@@ -494,7 +480,7 @@ class LSP:
         *,
         extra_params: Optional[Dict[str, Any]] = None,
     ) -> List[Any]:
-        clients = await cls._get_clients(file)
+        clients = await self._get_clients(file)
         results: List[Any] = []
 
         for client in clients:
@@ -508,18 +494,17 @@ class LSP:
                 response = await client._send_request(method, params)
             except Exception:
                 continue
-            results.extend(cls._flatten_response(response))
+            results.extend(self._flatten_response(response))
 
         return results
 
-    @classmethod
     async def _file_request(
-        cls,
+        self,
         file: str,
         method: str,
         params_factory: Callable[[LSPClient], Dict[str, Any]],
     ) -> List[Any]:
-        clients = await cls._get_clients(file)
+        clients = await self._get_clients(file)
         results: List[Any] = []
 
         for client in clients:
@@ -527,13 +512,12 @@ class LSP:
                 response = await client._send_request(method, params_factory(client))
             except Exception:
                 continue
-            results.extend(cls._flatten_response(response))
+            results.extend(self._flatten_response(response))
 
         return results
 
-    @classmethod
     async def hover(
-        cls,
+        self,
         file: str,
         line: int,
         character: int
@@ -548,11 +532,10 @@ class LSP:
         Returns:
             List of hover results from all applicable servers
         """
-        return await cls._position_request(file, line, character, "textDocument/hover")
+        return await self._position_request(file, line, character, "textDocument/hover")
 
-    @classmethod
     async def definition(
-        cls,
+        self,
         file: str,
         line: int,
         character: int
@@ -567,11 +550,10 @@ class LSP:
         Returns:
             List of definition locations
         """
-        return await cls._position_request(file, line, character, "textDocument/definition")
+        return await self._position_request(file, line, character, "textDocument/definition")
 
-    @classmethod
     async def references(
-        cls,
+        self,
         file: str,
         line: int,
         character: int
@@ -586,7 +568,7 @@ class LSP:
         Returns:
             List of reference locations
         """
-        return await cls._position_request(
+        return await self._position_request(
             file,
             line,
             character,
@@ -594,35 +576,32 @@ class LSP:
             extra_params={"context": {"includeDeclaration": True}},
         )
 
-    @classmethod
     async def implementation(
-        cls,
+        self,
         file: str,
         line: int,
         character: int,
     ) -> List[Any]:
         """Get implementation locations for a symbol."""
-        return await cls._position_request(file, line, character, "textDocument/implementation")
+        return await self._position_request(file, line, character, "textDocument/implementation")
 
-    @classmethod
     async def prepare_call_hierarchy(
-        cls,
+        self,
         file: str,
         line: int,
         character: int,
     ) -> List[Any]:
         """Get call hierarchy items at a position."""
-        return await cls._position_request(file, line, character, "textDocument/prepareCallHierarchy")
+        return await self._position_request(file, line, character, "textDocument/prepareCallHierarchy")
 
-    @classmethod
     async def incoming_calls(
-        cls,
+        self,
         file: str,
         line: int,
         character: int,
     ) -> List[Any]:
         """Get incoming calls for the symbol at a given position."""
-        clients = await cls._get_clients(file)
+        clients = await self._get_clients(file)
         results: List[Any] = []
 
         for client in clients:
@@ -637,7 +616,7 @@ class LSP:
             except Exception:
                 continue
 
-            hierarchy_items = cls._flatten_response(items)
+            hierarchy_items = self._flatten_response(items)
             if not hierarchy_items:
                 continue
 
@@ -649,19 +628,18 @@ class LSP:
             except Exception:
                 continue
 
-            results.extend(cls._flatten_response(response))
+            results.extend(self._flatten_response(response))
 
         return results
 
-    @classmethod
     async def outgoing_calls(
-        cls,
+        self,
         file: str,
         line: int,
         character: int,
     ) -> List[Any]:
         """Get outgoing calls for the symbol at a given position."""
-        clients = await cls._get_clients(file)
+        clients = await self._get_clients(file)
         results: List[Any] = []
 
         for client in clients:
@@ -676,7 +654,7 @@ class LSP:
             except Exception:
                 continue
 
-            hierarchy_items = cls._flatten_response(items)
+            hierarchy_items = self._flatten_response(items)
             if not hierarchy_items:
                 continue
 
@@ -688,12 +666,11 @@ class LSP:
             except Exception:
                 continue
 
-            results.extend(cls._flatten_response(response))
+            results.extend(self._flatten_response(response))
 
         return results
 
-    @classmethod
-    async def workspace_symbol(cls, query: str) -> List[LSPSymbol]:
+    async def workspace_symbol(self, query: str) -> List[LSPSymbol]:
         """Search for symbols in the workspace.
 
         Args:
@@ -702,7 +679,7 @@ class LSP:
         Returns:
             List of matching symbols
         """
-        state = await cls._get_state()
+        state = await self._get_state()
         results: List[LSPSymbol] = []
 
         # Symbol kinds to include
@@ -722,8 +699,7 @@ class LSP:
 
         return results[:10]  # Limit results
 
-    @classmethod
-    async def document_symbol(cls, uri: str) -> List[Any]:
+    async def document_symbol(self, uri: str) -> List[Any]:
         """Get symbols in a document.
 
         Args:
@@ -739,26 +715,23 @@ class LSP:
         if os.name == "nt" and file.startswith("/"):
             file = file[1:]
 
-        return await cls._file_request(
+        return await self._file_request(
             file,
             "textDocument/documentSymbol",
             lambda _client: {"textDocument": {"uri": uri}},
         )
 
-    @classmethod
-    async def shutdown(cls) -> None:
+    async def shutdown(self) -> None:
         """Shutdown all LSP clients."""
-        global _state
-        if _state:
-            for client in _state.clients:
+        if self._state:
+            for client in self._state.clients:
                 try:
                     await client.shutdown()
                 except Exception as e:
                     log.error("Failed to shutdown LSP client", {"error": str(e)})
-            _state = None
+            self._state = None
 
-    @classmethod
-    def format_diagnostic(cls, diagnostic: LSPDiagnostic) -> str:
+    def format_diagnostic(self, diagnostic: LSPDiagnostic) -> str:
         """Format a diagnostic for display.
 
         Args:

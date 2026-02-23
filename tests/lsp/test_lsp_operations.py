@@ -32,40 +32,43 @@ class _FakeClient:
 
 @pytest.mark.anyio
 async def test_implementation_merges_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    lsp = LSP()
     file_path = tmp_path / "main.py"
     client_one = _FakeClient("one", {"textDocument/implementation": [{"uri": "one"}]})
     client_two = _FakeClient("two", {"textDocument/implementation": {"uri": "two"}})
 
-    async def fake_get_clients(cls, file: str):
-        del cls
+    async def fake_get_clients(self, file: str):
+        del self
         assert file == str(file_path)
         return [client_one, client_two]
 
-    monkeypatch.setattr(LSP, "_get_clients", classmethod(fake_get_clients))
+    monkeypatch.setattr(LSP, "_get_clients", fake_get_clients)
 
-    result = await LSP.implementation(str(file_path), 2, 3)
+    result = await lsp.implementation(str(file_path), 2, 3)
 
     assert result == [{"uri": "one"}, {"uri": "two"}]
 
 
 @pytest.mark.anyio
 async def test_prepare_call_hierarchy_filters_falsy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    lsp = LSP()
     file_path = tmp_path / "main.py"
     client = _FakeClient("one", {"textDocument/prepareCallHierarchy": [None, {"name": "callable"}]})
 
-    async def fake_get_clients(cls, _file: str):
-        del cls
+    async def fake_get_clients(self, _file: str):
+        del self
         return [client]
 
-    monkeypatch.setattr(LSP, "_get_clients", classmethod(fake_get_clients))
+    monkeypatch.setattr(LSP, "_get_clients", fake_get_clients)
 
-    result = await LSP.prepare_call_hierarchy(str(file_path), 4, 5)
+    result = await lsp.prepare_call_hierarchy(str(file_path), 4, 5)
 
     assert result == [{"name": "callable"}]
 
 
 @pytest.mark.anyio
 async def test_incoming_calls_uses_first_hierarchy_item(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    lsp = LSP()
     file_path = tmp_path / "main.py"
     primary = {"name": "foo", "uri": _file_uri(file_path)}
     client = _FakeClient(
@@ -76,13 +79,13 @@ async def test_incoming_calls_uses_first_hierarchy_item(monkeypatch: pytest.Monk
         },
     )
 
-    async def fake_get_clients(cls, _file: str):
-        del cls
+    async def fake_get_clients(self, _file: str):
+        del self
         return [client]
 
-    monkeypatch.setattr(LSP, "_get_clients", classmethod(fake_get_clients))
+    monkeypatch.setattr(LSP, "_get_clients", fake_get_clients)
 
-    result = await LSP.incoming_calls(str(file_path), 1, 1)
+    result = await lsp.incoming_calls(str(file_path), 1, 1)
 
     assert result == [{"from": {"name": "caller"}}]
     assert client.requests[1][0] == "callHierarchy/incomingCalls"
@@ -94,6 +97,7 @@ async def test_outgoing_calls_skips_clients_without_hierarchy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    lsp = LSP()
     file_path = tmp_path / "main.py"
     empty_client = _FakeClient("empty", {"textDocument/prepareCallHierarchy": []})
     ok_client = _FakeClient(
@@ -104,13 +108,13 @@ async def test_outgoing_calls_skips_clients_without_hierarchy(
         },
     )
 
-    async def fake_get_clients(cls, _file: str):
-        del cls
+    async def fake_get_clients(self, _file: str):
+        del self
         return [empty_client, ok_client]
 
-    monkeypatch.setattr(LSP, "_get_clients", classmethod(fake_get_clients))
+    monkeypatch.setattr(LSP, "_get_clients", fake_get_clients)
 
-    result = await LSP.outgoing_calls(str(file_path), 3, 7)
+    result = await lsp.outgoing_calls(str(file_path), 3, 7)
 
     assert result == [{"to": {"name": "callee"}}]
     assert [method for method, _ in empty_client.requests] == ["textDocument/prepareCallHierarchy"]

@@ -19,10 +19,14 @@ class PreparedTurn:
     assistant_agent_for_turn: str
     allowed_tools: Optional[Set[str]]
     is_last_step: bool
+    ruleset: List[Dict[str, Any]]
 
 
 class TurnPreparer:
     """Resolve turn config and build stream input."""
+
+    def __init__(self, *, resolver: ToolResolver) -> None:
+        self.resolver = resolver
 
     async def load_continue_loop_on_deny(self) -> bool:
         try:
@@ -48,10 +52,18 @@ class TurnPreparer:
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         retries: int = 0,
     ) -> PreparedTurn:
-        from ..agent import Agent
+        from .session import Session
 
-        agent_info = await Agent.get(agent)
+        agent_info = await self.resolver.app.agents.get(agent)
         assistant_agent_for_turn = agent
+
+        ruleset: List[Dict[str, Any]] = []
+        if agent_info and agent_info.permission:
+            ruleset.extend(agent_info.permission)
+        session = await Session.get(session_id)
+        session_permission = getattr(session, "permission", None) if session else None
+        if isinstance(session_permission, list):
+            ruleset.extend(session_permission)
 
         max_steps = agent_info.steps if agent_info else None
         is_last_step = bool(max_steps is not None and turn >= max_steps)
@@ -61,12 +73,11 @@ class TurnPreparer:
         else:
             effective_tools = []
             if not is_last_step:
-                rules = list(agent_info.permission) if agent_info and agent_info.permission else None
-                effective_tools = await ToolResolver.resolve(
+                effective_tools = await self.resolver.resolve(
                     caller_agent=agent,
                     provider_id=provider_id,
                     model_id=model_id,
-                    permission_rules=rules,
+                    permission_rules=ruleset or None,
                 )
 
         if is_last_step:
@@ -108,4 +119,5 @@ class TurnPreparer:
             assistant_agent_for_turn=assistant_agent_for_turn,
             allowed_tools=allowed_tools,
             is_last_step=is_last_step,
+            ruleset=ruleset,
         )

@@ -2,12 +2,14 @@ import pytest
 
 from hotaru.core.config import Config, ConfigManager, ExperimentalConfig
 from hotaru.tool.registry import ToolRegistry
+from tests.helpers import fake_app
 
 
 @pytest.mark.anyio
 async def test_registry_prefers_apply_patch_for_gpt_models() -> None:
-    ToolRegistry.reset()
-    definitions = await ToolRegistry.get_tool_definitions(
+    registry = ToolRegistry()
+    definitions = await registry.get_tool_definitions(
+        app=fake_app(tools=registry),
         provider_id="openai",
         model_id="gpt-5",
     )
@@ -19,14 +21,15 @@ async def test_registry_prefers_apply_patch_for_gpt_models() -> None:
 
 @pytest.mark.anyio
 async def test_registry_exposes_batch_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    ToolRegistry.reset()
+    registry = ToolRegistry()
 
     async def fake_get(cls):  # type: ignore[no-untyped-def]
         return Config(experimental=ExperimentalConfig(batch_tool=True, enable_exa=False, plan_mode=False))
 
     monkeypatch.setattr(ConfigManager, "get", classmethod(fake_get))
 
-    definitions = await ToolRegistry.get_tool_definitions(
+    definitions = await registry.get_tool_definitions(
+        app=fake_app(tools=registry),
         provider_id="openai",
         model_id="claude-sonnet",
     )
@@ -38,14 +41,15 @@ async def test_registry_exposes_batch_when_enabled(monkeypatch: pytest.MonkeyPat
 async def test_registry_keeps_plan_tools_visible_when_plan_flag_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ToolRegistry.reset()
+    registry = ToolRegistry()
 
     async def fake_get(cls):  # type: ignore[no-untyped-def]
         return Config(experimental=ExperimentalConfig(plan_mode=False, batch_tool=False, enable_exa=False))
 
     monkeypatch.setattr(ConfigManager, "get", classmethod(fake_get))
 
-    definitions = await ToolRegistry.get_tool_definitions(
+    definitions = await registry.get_tool_definitions(
+        app=fake_app(tools=registry),
         provider_id="openai",
         model_id="gpt-5",
     )
@@ -56,8 +60,9 @@ async def test_registry_keeps_plan_tools_visible_when_plan_flag_disabled(
 
 @pytest.mark.anyio
 async def test_registry_strictifies_builtin_tool_schema() -> None:
-    ToolRegistry.reset()
-    definitions = await ToolRegistry.get_tool_definitions(
+    registry = ToolRegistry()
+    definitions = await registry.get_tool_definitions(
+        app=fake_app(tools=registry),
         provider_id="openai",
         model_id="gpt-5",
     )

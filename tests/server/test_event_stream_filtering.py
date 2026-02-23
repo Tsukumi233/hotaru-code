@@ -17,14 +17,14 @@ def _decode_sse(response: Any) -> list[dict[str, Any]]:
     return events
 
 
-def test_v1_event_stream_filters_by_session_id(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    async def fake_events(cls) -> AsyncIterator[dict[str, Any]]:
+def test_v1_event_stream_filters_by_session_id(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
+    async def fake_events(cls, bus) -> AsyncIterator[dict[str, Any]]:  # type: ignore[no-untyped-def]
         yield {"type": "message.updated", "data": {"info": {"session_id": "session_1", "id": "m_1"}}}
         yield {"type": "message.updated", "data": {"info": {"session_id": "session_2", "id": "m_2"}}}
 
     monkeypatch.setattr("hotaru.app_services.event_service.EventService.stream", classmethod(fake_events))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         with client.stream("GET", "/v1/events", params={"session_id": "session_1"}) as response:
             assert response.status_code == 200
@@ -35,14 +35,14 @@ def test_v1_event_stream_filters_by_session_id(monkeypatch) -> None:  # type: ig
     assert events[0]["data"]["info"]["id"] == "m_1"
 
 
-def test_v1_event_stream_without_session_filter_returns_all(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    async def fake_events(cls) -> AsyncIterator[dict[str, Any]]:
+def test_v1_event_stream_without_session_filter_returns_all(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
+    async def fake_events(cls, bus) -> AsyncIterator[dict[str, Any]]:  # type: ignore[no-untyped-def]
         yield {"type": "session.status", "data": {"session_id": "session_1", "status": {"type": "working"}}}
         yield {"type": "session.status", "data": {"session_id": "session_2", "status": {"type": "idle"}}}
 
     monkeypatch.setattr("hotaru.app_services.event_service.EventService.stream", classmethod(fake_events))
 
-    app = Server._create_app()
+    app = Server._create_app(app_ctx)
     with TestClient(app) as client:
         with client.stream("GET", "/v1/events") as response:
             assert response.status_code == 200

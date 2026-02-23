@@ -8,8 +8,8 @@ from starlette.responses import FileResponse, HTMLResponse
 
 from ...app_services.errors import NotFoundError
 from ...core.global_paths import GlobalPath
-from ...skill import Skill
-from ..deps import resolve_request_directory
+from ...runtime import AppContext
+from ..deps import resolve_app_context, resolve_request_directory
 from ..schemas import HealthResponse, PathsResponse, SkillResponse, WebHealthResponse, WebReadyResponse
 from ..webui import web_asset_path, web_dist_path, web_index_response
 
@@ -63,8 +63,8 @@ async def get_paths(cwd: str = Depends(resolve_request_directory)) -> PathsRespo
 
 
 @router.get("/v1/skill", response_model=list[SkillResponse])
-async def list_skills() -> list[SkillResponse]:
-    skills = await Skill.list()
+async def list_skills(ctx: AppContext = Depends(resolve_app_context)) -> list[SkillResponse]:
+    skills = await ctx.skills.list()
     return [
         SkillResponse(name=skill.name, description=skill.description, location=skill.location)
         for skill in skills

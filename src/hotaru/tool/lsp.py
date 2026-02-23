@@ -85,32 +85,33 @@ async def lsp_execute(args: LspParams, ctx: ToolContext) -> ToolResult:
 
     if not file_path.exists() or file_path.is_dir():
         raise FileNotFoundError(f"File not found: {file_path}")
-    if not await LSP.has_clients(str(file_path)):
+    lsp = ctx.app.lsp
+    if not await lsp.has_clients(str(file_path)):
         raise RuntimeError("No LSP server available for this file type.")
 
-    await LSP.touch_file(str(file_path), wait_for_diagnostics=True)
+    await lsp.touch_file(str(file_path), wait_for_diagnostics=True)
     line = args.line - 1
     character = args.character - 1
     uri = _to_file_uri(str(file_path))
 
     if args.operation == "goToDefinition":
-        result = await LSP.definition(str(file_path), line, character)
+        result = await lsp.definition(str(file_path), line, character)
     elif args.operation == "findReferences":
-        result = await LSP.references(str(file_path), line, character)
+        result = await lsp.references(str(file_path), line, character)
     elif args.operation == "hover":
-        result = await LSP.hover(str(file_path), line, character)
+        result = await lsp.hover(str(file_path), line, character)
     elif args.operation == "documentSymbol":
-        result = await LSP.document_symbol(uri)
+        result = await lsp.document_symbol(uri)
     elif args.operation == "workspaceSymbol":
-        result = await LSP.workspace_symbol("")
+        result = await lsp.workspace_symbol("")
     elif args.operation == "goToImplementation":
-        result = await LSP.implementation(str(file_path), line, character)
+        result = await lsp.implementation(str(file_path), line, character)
     elif args.operation == "prepareCallHierarchy":
-        result = await LSP.prepare_call_hierarchy(str(file_path), line, character)
+        result = await lsp.prepare_call_hierarchy(str(file_path), line, character)
     elif args.operation == "incomingCalls":
-        result = await LSP.incoming_calls(str(file_path), line, character)
+        result = await lsp.incoming_calls(str(file_path), line, character)
     elif args.operation == "outgoingCalls":
-        result = await LSP.outgoing_calls(str(file_path), line, character)
+        result = await lsp.outgoing_calls(str(file_path), line, character)
     else:
         raise RuntimeError(f"LSP operation not yet implemented in hotaru: {args.operation}")
 

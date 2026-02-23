@@ -2,22 +2,32 @@
 
 from __future__ import annotations
 
-from fastapi import Body
+from fastapi import Body, Depends
 
 from ...app_services import QuestionService
+from ...runtime import AppContext
+from ..deps import resolve_app_context
 from ..schemas import QuestionReplyRequest
 from .crud import crud_router, raw
 
-async def list_questions() -> list[dict[str, object]]:
-    return await QuestionService.list()
+
+async def list_questions(ctx: AppContext = Depends(resolve_app_context)) -> list[dict[str, object]]:
+    return await QuestionService.list(ctx)
 
 
-async def reply_question(request_id: str, payload: QuestionReplyRequest = Body(...)) -> bool:
-    return await QuestionService.reply(request_id, payload.model_dump(exclude_none=True))
+async def reply_question(
+    request_id: str,
+    payload: QuestionReplyRequest = Body(...),
+    ctx: AppContext = Depends(resolve_app_context),
+) -> bool:
+    return await QuestionService.reply(ctx, request_id, payload.model_dump(exclude_none=True))
 
 
-async def reject_question(request_id: str) -> bool:
-    return await QuestionService.reject(request_id)
+async def reject_question(
+    request_id: str,
+    ctx: AppContext = Depends(resolve_app_context),
+) -> bool:
+    return await QuestionService.reject(ctx, request_id)
 
 
 router = crud_router(

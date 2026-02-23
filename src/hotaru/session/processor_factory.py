@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .agent_flow import AgentFlow
 from .history_loader import HistoryLoader
 from .processor import SessionProcessor
-from .turn_preparer import TurnPreparer
+
+if TYPE_CHECKING:
+    from ..runtime import AppContext
 
 
 class SessionProcessorFactory:
@@ -16,6 +18,7 @@ class SessionProcessorFactory:
     @staticmethod
     def build(
         *,
+        app: AppContext,
         session_id: str,
         model_id: str,
         provider_id: str,
@@ -27,6 +30,7 @@ class SessionProcessorFactory:
     ) -> SessionProcessor:
         # Processor wires DoomLoopDetector + ToolExecutor + TurnRunner by default.
         return SessionProcessor(
+            app=app,
             session_id=session_id,
             model_id=model_id,
             provider_id=provider_id,
@@ -37,7 +41,7 @@ class SessionProcessorFactory:
             sync_agent_from_session=sync_agent_from_session,
             history=HistoryLoader(),
             agentflow=AgentFlow(),
-            turnprep=TurnPreparer(),
+            turnprep=None,
             turnrun=None,
             tools=None,
             doom=None,

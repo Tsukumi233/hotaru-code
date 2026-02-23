@@ -7,7 +7,6 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from ..question import (
-    Question,
     QuestionInfo,
     QuestionOption,
     QuestionToolRef,
@@ -42,7 +41,7 @@ async def plan_enter_execute(_params: PlanParams, ctx: ToolContext) -> ToolResul
         except ValueError:
             pass
 
-    answers = await Question.ask(
+    answers = await ctx.app.question.ask(
         session_id=ctx.session_id,
         questions=[
             QuestionInfo(
@@ -105,7 +104,7 @@ async def plan_exit_execute(_params: PlanParams, ctx: ToolContext) -> ToolResult
         except ValueError:
             pass
 
-    answers = await Question.ask(
+    answers = await ctx.app.question.ask(
         session_id=ctx.session_id,
         questions=[
             QuestionInfo(

@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from ..provider.transform import ProviderTransform
-from ..tool.registry import ToolRegistry
 from ..tool.resolver import ToolResolver
 from ..util.log import Log
 from .agent_flow import AgentFlow
@@ -19,6 +18,9 @@ from .retry import SessionRetry
 from .tool_executor import ToolExecutor
 from .turn_preparer import TurnPreparer
 from .turn_runner import TurnRunner
+
+if TYPE_CHECKING:
+    from ..runtime import AppContext
 
 try:
     from openai import APIConnectionError as OpenAIAPIConnectionError
@@ -76,6 +78,8 @@ class SessionProcessor:
 
     def __init__(
         self,
+        *,
+        app: AppContext,
         session_id: str,
         model_id: str,
         provider_id: str,
@@ -84,7 +88,6 @@ class SessionProcessor:
         worktree: Optional[str] = None,
         max_turns: int = 100,
         sync_agent_from_session: bool = True,
-        *,
         history: Optional[HistoryLoader] = None,
         agentflow: Optional[AgentFlow] = None,
         turnprep: Optional[TurnPreparer] = None,
@@ -92,6 +95,7 @@ class SessionProcessor:
         tools: Optional[ToolExecutor] = None,
         doom: Optional[DoomLoopDetector] = None,
     ):
+        self.app = app
         self.session_id = session_id
         self.model_id = model_id
         self.provider_id = provider_id
@@ -112,14 +116,17 @@ class SessionProcessor:
 
         self.history = history or HistoryLoader()
         self.agentflow = agentflow or AgentFlow()
-        self.turnprep = turnprep or TurnPreparer()
+        self.resolver = ToolResolver(app=self.app)
+        self.turnprep = turnprep or TurnPreparer(resolver=self.resolver)
         self.doom = doom or DoomLoopDetector(
+            permission=self.app.permission,
             session_id=self.session_id,
             threshold=DOOM_LOOP_THRESHOLD,
             window=50,
             signatures=self._recent_tool_signatures,
         )
         self.tools = tools or ToolExecutor(
+            app=self.app,
             session_id=self.session_id,
             model_id=self.model_id,
             provider_id=self.provider_id,
@@ -218,10 +225,8 @@ class SessionProcessor:
         self.messages.append({"role": "user", "content": user_message})
 
     async def try_direct_subagent_mention(self, user_message: str) -> Optional[str]:
-        from ..agent import Agent
-
         await self._sync_agent_from_session()
-        agent_info = await Agent.get(self.agent)
+        agent_info = await self.app.agents.get(self.agent)
         return await self._handle_direct_subagent_mention(user_message, agent_info)
 
     async def process_step(
@@ -279,7 +284,7 @@ class SessionProcessor:
         )
 
         self._allowed_tools = prepared.allowed_tools
-        self.tools.reset_turn()
+        self.tools.reset_turn(ruleset=prepared.ruleset)
 
         turn_result = await self._process_turn(
             prepared.stream_input,
@@ -388,6 +393,7 @@ class SessionProcessor:
         agent_info: Any,
     ) -> Optional[str]:
         return await self.agentflow.handle_direct_subagent_mention(
+            app=self.app,
             user_message=user_message,
             session_id=self.session_id,
             agent=self.agent,
@@ -465,8 +471,8 @@ class SessionProcessor:
         if self._allowed_tools is not None and tool_name not in self._allowed_tools:
             return {"error": f"Unknown tool: {tool_name}"}
 
-        if tool_name != _STRUCTURED_OUTPUT_TOOL and not ToolRegistry.get(tool_name):
-            mcp_info = await ToolResolver.mcp_info(tool_name)
+        if tool_name != _STRUCTURED_OUTPUT_TOOL and not self.app.tools.get(tool_name):
+            mcp_info = await self.resolver.mcp_info(tool_name)
             if mcp_info:
                 return await self._execute_mcp_tool(
                     tool_id=tool_name,

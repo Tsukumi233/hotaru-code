@@ -3,9 +3,11 @@
 Agents are configured AI personas with specific permissions and behaviors.
 """
 
+from __future__ import annotations
+
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,6 +15,9 @@ from ..core.config import ConfigManager
 from ..core.global_paths import GlobalPath
 from ..permission.constants import permission_for_tool
 from ..util.log import Log
+
+if TYPE_CHECKING:
+    from ..skill.skill import Skill
 
 log = Log.create({"service": "agent"})
 
@@ -81,16 +86,16 @@ PROMPT_COMPACTION = _read_prompt(
 class Agent:
     """Agent registry and management.
 
-    Provides access to configured agents with their permissions and settings.
+    Instance-scoped: each AppContext owns an Agent instance.
     """
 
-    _agents: Optional[Dict[str, AgentInfo]] = None
+    def __init__(self, skills: Skill) -> None:
+        self._skills = skills
+        self._agents: Optional[Dict[str, AgentInfo]] = None
 
-    @classmethod
-    async def _initialize(cls) -> Dict[str, AgentInfo]:
-        """Initialize agents from configuration."""
-        if cls._agents is not None:
-            return cls._agents
+    async def _initialize(self) -> Dict[str, AgentInfo]:
+        if self._agents is not None:
+            return self._agents
 
         log.info("initializing agents")
         config = await ConfigManager.get()
@@ -150,9 +155,7 @@ class Agent:
         tool_output_glob = str(Path(GlobalPath.data()) / "tool-output" / "*")
         strict_permissions = bool(config.strict_permissions)
         try:
-            from ..skill.skill import Skill
-
-            skill_globs = [str(Path(directory) / "*") for directory in await Skill.directories()]
+            skill_globs = [str(Path(directory) / "*") for directory in await self._skills.directories()]
         except Exception:
             skill_globs = []
 
@@ -376,49 +379,25 @@ class Agent:
                         parse_permissions(agent_config.permission),
                     )
 
-        cls._agents = agents
+        self._agents = agents
         return agents
 
-    @classmethod
-    async def get(cls, name: str) -> Optional[AgentInfo]:
-        """Get an agent by name.
-
-        Args:
-            name: Agent name
-
-        Returns:
-            AgentInfo or None
-        """
-        agents = await cls._initialize()
+    async def get(self, name: str) -> Optional[AgentInfo]:
+        agents = await self._initialize()
         return agents.get(name)
 
-    @classmethod
-    async def list(cls) -> List[AgentInfo]:
-        """List all agents.
-
-        Returns:
-            List of agents, sorted with default agent first
-        """
+    async def list(self) -> List[AgentInfo]:
         config = await ConfigManager.get()
-        agents = await cls._initialize()
-
+        agents = await self._initialize()
         default_name = config.default_agent or "build"
-
-        # Sort with default agent first
         return sorted(
             agents.values(),
             key=lambda a: (a.name != default_name, a.name)
         )
 
-    @classmethod
-    async def default_agent(cls) -> str:
-        """Get the default agent name.
-
-        Returns:
-            Name of the default agent
-        """
+    async def default_agent(self) -> str:
         config = await ConfigManager.get()
-        agents = await cls._initialize()
+        agents = await self._initialize()
 
         if config.default_agent:
             agent = agents.get(config.default_agent)
@@ -430,14 +409,11 @@ class Agent:
                 raise ValueError(f"Default agent '{config.default_agent}' is hidden")
             return agent.name
 
-        # Find first primary visible agent
         for agent in agents.values():
             if agent.mode != AgentMode.SUBAGENT and not agent.hidden:
                 return agent.name
 
         raise ValueError("No primary visible agent found")
 
-    @classmethod
-    def reset(cls) -> None:
-        """Reset the agent cache."""
-        cls._agents = None
+    def reset(self) -> None:
+        self._agents = None
