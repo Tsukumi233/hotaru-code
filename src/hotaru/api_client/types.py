@@ -30,13 +30,17 @@ class SessionRestoreMessagesPayload(TypedDict):
     messages: list[dict[str, Any]]
 
 
+class ProviderConnectConfig(TypedDict):
+    type: str
+    name: str
+    options: dict[str, Any]
+    models: dict[str, dict[str, Any]]
+
+
 class ProviderConnectPayload(TypedDict):
     provider_id: str
-    provider_type: str
-    provider_name: str
-    base_url: str
     api_key: str
-    model_ids: list[str]
+    config: ProviderConnectConfig
 
 
 class PermissionReplyPayload(TypedDict, total=False):

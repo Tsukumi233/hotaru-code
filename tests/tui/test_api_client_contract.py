@@ -94,11 +94,13 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
     await client.connect_provider(
         {
             "provider_id": "openai",
-            "provider_type": "openai",
-            "provider_name": "OpenAI",
-            "base_url": "https://api.openai.com/v1",
             "api_key": "sk-test",
-            "model_ids": ["gpt-5"],
+            "config": {
+                "type": "openai",
+                "name": "OpenAI",
+                "options": {"baseURL": "https://api.openai.com/v1"},
+                "models": {"gpt-5": {"name": "gpt-5"}},
+            },
         }
     )
     await client.list_agents()

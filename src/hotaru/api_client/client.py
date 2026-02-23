@@ -303,52 +303,12 @@ class HotaruAPIClient:
         return result if isinstance(result, list) else []
 
     async def connect_provider(self, payload: ProviderConnectPayload | dict[str, Any]) -> dict[str, Any]:
-        request_payload = self._normalize_provider_connect_payload(dict(payload))
         result = await self._request_json(
             "POST",
             "/v1/providers/connect",
-            json_body=request_payload,
+            json_body=dict(payload),
         )
         return result if isinstance(result, dict) else {"ok": bool(result)}
-
-    @staticmethod
-    def _normalize_provider_connect_payload(payload: dict[str, Any]) -> dict[str, Any]:
-        if "config" in payload:
-            return payload
-
-        provider_id = payload.get("provider_id")
-        api_key = payload.get("api_key")
-        provider_type = payload.get("provider_type")
-        provider_name = payload.get("provider_name") or provider_id
-        base_url = payload.get("base_url")
-        model_ids = payload.get("model_ids") or []
-
-        if not isinstance(provider_id, str):
-            return payload
-        if not isinstance(api_key, str):
-            return payload
-        if not isinstance(provider_type, str):
-            return payload
-        if not isinstance(provider_name, str):
-            return payload
-        if not isinstance(base_url, str):
-            return payload
-        if not isinstance(model_ids, list):
-            return payload
-
-        normalized_model_ids = [str(item).strip() for item in model_ids if str(item).strip()]
-        models = {model_id: {"name": model_id} for model_id in normalized_model_ids}
-
-        return {
-            "provider_id": provider_id,
-            "api_key": api_key,
-            "config": {
-                "type": provider_type,
-                "name": provider_name,
-                "options": {"baseURL": base_url},
-                "models": models,
-            },
-        }
 
     async def list_agents(self) -> list[dict[str, Any]]:
         result = await self._request_json(
