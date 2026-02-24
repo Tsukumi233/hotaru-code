@@ -145,3 +145,8 @@ class State:
                 await warning_task
             except asyncio.CancelledError:
                 pass
+
+    @classmethod
+    def reset_runtime_state(cls) -> None:
+        """Reset in-memory state cache for tests/runtime teardown."""
+        cls._records_by_key.clear()

@@ -11,8 +11,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..core.bus import Bus
+from ..project import instance_bootstrap, run_in_instance
 from ..runtime import AppContext
 from ..util.log import Log
+from .deps import resolve_request_directory
 from .errors import register_error_handlers
 from .routes import agents, events, permissions, preferences, providers, ptys, questions, sessions, system
 from .schemas import ErrorResponse
@@ -52,13 +54,24 @@ def create_app(
             500: {"model": ErrorResponse},
         },
     )
-    app.state.ctx = ctx
 
     @app.middleware("http")
-    async def _bind_bus_for_request(request: Request, call_next):
+    async def _scope_request_context(request: Request, call_next):
         token = Bus.provide(ctx.bus)
         try:
-            return await call_next(request)
+            if not request.url.path.startswith("/v1/"):
+                return await call_next(request)
+
+            directory = resolve_request_directory(request)
+            request.state.request_directory = directory
+
+            async def _dispatch():
+                return await call_next(request)
+
+            async def _init():
+                await instance_bootstrap(app=ctx)
+
+            return await run_in_instance(directory=directory, fn=_dispatch, init=_init)
         finally:
             Bus.restore(token)
 

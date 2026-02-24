@@ -11,12 +11,10 @@ import inspect
 import json
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from ..core.context import ContextNotFoundError
 from ..core.id import Identifier
-from ..project import Instance, Project
+from ..project import Project, run_in_instance
 from ..provider import Provider
 from ..provider.provider import ModelNotFoundError, ProcessedModelInfo
 from ..snapshot import SnapshotTracker
@@ -380,14 +378,7 @@ class SessionPrompt:
                 auto_compaction=auto_compaction,
             )
 
-        try:
-            current_dir = Instance.directory()
-        except ContextNotFoundError:
-            current_dir = None
-
-        if current_dir is None or Path(current_dir).resolve() != Path(cwd).resolve():
-            return await Instance.provide(directory=cwd, fn=_run)
-        return await _run()
+        return await run_in_instance(directory=cwd, fn=_run)
 
     @classmethod
     async def loop(

@@ -211,3 +211,18 @@ class Instance:
             await _disposal_all
         finally:
             _disposal_all = None
+
+    @classmethod
+    def reset_runtime_state(cls) -> None:
+        """Reset in-memory instance cache for tests/runtime teardown."""
+        global _disposal_all
+
+        for task in _cache.values():
+            if task.done():
+                continue
+            task.cancel()
+        _cache.clear()
+
+        if _disposal_all is not None and not _disposal_all.done():
+            _disposal_all.cancel()
+        _disposal_all = None

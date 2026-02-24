@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from ..provider.transform import ProviderTransform
@@ -163,20 +162,20 @@ class SessionProcessor:
         on_reasoning_delta: Optional[callable] = None,
         on_reasoning_end: Optional[callable] = None,
     ) -> ProcessorResult:
-        from ..core.context import ContextNotFoundError
-        from ..project import Instance
+        from ..project import run_in_instance
 
-        current_instance_dir: Optional[str]
-        try:
-            current_instance_dir = Instance.directory()
-        except ContextNotFoundError:
-            current_instance_dir = None
+        async def _run() -> ProcessorResult:
+            self.add_user_message(user_message)
+            self._continue_loop_on_deny = await self.turnprep.load_continue_loop_on_deny()
 
-        if current_instance_dir is None or Path(current_instance_dir).resolve() != Path(self.cwd).resolve():
-            return await Instance.provide(
-                directory=self.cwd,
-                fn=lambda: self.process(
-                    user_message=user_message,
+            direct_subagent_result = await self.try_direct_subagent_mention(user_message)
+            if direct_subagent_result is not None:
+                self.messages.append({"role": "assistant", "content": direct_subagent_result})
+                return ProcessorResult(status="stop", text=direct_subagent_result)
+
+            result = ProcessorResult(status="continue")
+            while result.status == "continue":
+                turn_result = await self.process_step(
                     system_prompt=system_prompt,
                     on_text=on_text,
                     on_tool_start=on_tool_start,
@@ -185,41 +184,21 @@ class SessionProcessor:
                     on_reasoning_start=on_reasoning_start,
                     on_reasoning_delta=on_reasoning_delta,
                     on_reasoning_end=on_reasoning_end,
-                ),
-            )
+                )
+                result.text += turn_result.text
+                result.tool_calls.extend(turn_result.tool_calls)
+                for key, value in (turn_result.usage or {}).items():
+                    result.usage[key] = result.usage.get(key, 0) + value
+                if turn_result.error:
+                    result.status = "error"
+                    result.error = turn_result.error
+                    break
+                result.status = turn_result.status
+                if result.status != "continue":
+                    break
+            return result
 
-        self.add_user_message(user_message)
-        self._continue_loop_on_deny = await self.turnprep.load_continue_loop_on_deny()
-
-        direct_subagent_result = await self.try_direct_subagent_mention(user_message)
-        if direct_subagent_result is not None:
-            self.messages.append({"role": "assistant", "content": direct_subagent_result})
-            return ProcessorResult(status="stop", text=direct_subagent_result)
-
-        result = ProcessorResult(status="continue")
-        while result.status == "continue":
-            turn_result = await self.process_step(
-                system_prompt=system_prompt,
-                on_text=on_text,
-                on_tool_start=on_tool_start,
-                on_tool_end=on_tool_end,
-                on_tool_update=on_tool_update,
-                on_reasoning_start=on_reasoning_start,
-                on_reasoning_delta=on_reasoning_delta,
-                on_reasoning_end=on_reasoning_end,
-            )
-            result.text += turn_result.text
-            result.tool_calls.extend(turn_result.tool_calls)
-            for key, value in (turn_result.usage or {}).items():
-                result.usage[key] = result.usage.get(key, 0) + value
-            if turn_result.error:
-                result.status = "error"
-                result.error = turn_result.error
-                break
-            result.status = turn_result.status
-            if result.status != "continue":
-                break
-        return result
+        return await run_in_instance(directory=self.cwd, fn=_run)
 
     def add_user_message(self, user_message: str) -> None:
         self.messages.append({"role": "user", "content": user_message})

@@ -7,6 +7,7 @@ from urllib.parse import unquote
 
 from fastapi import Request
 
+from ..project import use_runtime
 from ..runtime import AppContext
 from ..util.log import Log
 
@@ -28,6 +29,10 @@ def decode_directory_value(value: str | None) -> str | None:
 
 
 def resolve_request_directory(request: Request) -> str:
+    from_state = getattr(request.state, "request_directory", None)
+    if isinstance(from_state, str) and from_state.strip():
+        return from_state
+
     for source, value in (
         ("header", request.headers.get("x-hotaru-directory")),
         ("query", request.query_params.get("directory")),
@@ -43,7 +48,7 @@ def resolve_request_directory(request: Request) -> str:
 
 
 def resolve_app_context(request: Request) -> AppContext:
-    ctx = getattr(request.app.state, "ctx", None)
-    if isinstance(ctx, AppContext):
-        return ctx
-    raise RuntimeError("Application context is not initialized")
+    try:
+        return use_runtime()
+    except RuntimeError as exc:
+        raise RuntimeError("Application context is not initialized") from exc

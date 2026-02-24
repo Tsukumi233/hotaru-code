@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from hotaru.core.bus import Bus
+from hotaru.project import Instance, State
 from hotaru.runtime import AppContext
 from hotaru.runtime.runner import SessionRuntime
 
@@ -116,6 +117,8 @@ def create_test_app_context() -> Iterator[AppContext]:
         ctx.skills.reset()
         ctx.agents.reset()
         ctx.tools.reset()
+        State.reset_runtime_state()
+        Instance.reset_runtime_state()
         ctx.started = False
         ctx.health = {
             "status": "failed",

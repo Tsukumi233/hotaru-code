@@ -5,6 +5,7 @@ from urllib.parse import quote
 
 from starlette.testclient import TestClient
 
+from hotaru.project import Instance
 from hotaru.server.server import Server
 
 
@@ -123,3 +124,52 @@ def test_list_sessions_uses_resolved_directory(monkeypatch, app_ctx) -> None:  #
     assert response.status_code == 200
     assert captured["project_id"] is None
     assert captured["cwd"] == "/workspace/two"
+
+
+def test_request_directory_binds_instance_context(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
+    captured: dict[str, str] = {}
+
+    async def fake_create(cls, payload: dict, cwd: str, **_kw):
+        captured["cwd"] = cwd
+        captured["instance_directory"] = Instance.directory()
+        return {"id": "ses_1", "project_id": payload.get("project_id", "proj_1")}
+
+    monkeypatch.setattr("hotaru.app_services.session_service.SessionService.create", classmethod(fake_create))
+
+    app = Server._create_app(app_ctx)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/sessions",
+            headers={"x-hotaru-directory": "/workspace/scoped"},
+            json={"project_id": "proj_1"},
+        )
+
+    assert response.status_code == 200
+    assert captured["cwd"] == "/workspace/scoped"
+    assert captured["instance_directory"] == "/workspace/scoped"
+
+
+def test_instance_bootstrap_runs_once_per_directory(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
+    calls: dict[str, int] = {}
+    first = "/workspace/bootstrap-one"
+    second = "/workspace/bootstrap-two"
+
+    async def fake_bootstrap(*, app):
+        directory = Instance.directory()
+        calls[directory] = calls.get(directory, 0) + 1
+
+    monkeypatch.setattr("hotaru.server.app.instance_bootstrap", fake_bootstrap)
+
+    app = Server._create_app(app_ctx)
+    with TestClient(app) as client:
+        response_one = client.get("/v1/path", headers={"x-hotaru-directory": first})
+        response_two = client.get("/v1/path", headers={"x-hotaru-directory": first})
+        response_three = client.get("/v1/path", headers={"x-hotaru-directory": second})
+
+    assert response_one.status_code == 200
+    assert response_two.status_code == 200
+    assert response_three.status_code == 200
+    assert calls == {
+        first: 1,
+        second: 1,
+    }

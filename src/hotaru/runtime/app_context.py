@@ -7,15 +7,9 @@ from collections.abc import Awaitable, Callable
 from contextvars import Token
 from typing import Literal, TypedDict
 
-from ..agent.agent import Agent
 from ..core.bus import Bus, EventPayload
-from ..lsp import LSP
-from ..mcp import MCP
-from ..permission import Permission
-from ..question import Question
-from ..skill import Skill
-from ..tool.registry import ToolRegistry
 from ..util.log import Log
+from .app_runtime import AppRuntime
 
 log = Log.create({"service": "runtime"})
 
@@ -35,7 +29,7 @@ class AppHealth(TypedDict):
     subsystems: dict[str, NodeHealth]
 
 
-class AppContext:
+class AppContext(AppRuntime):
     """Application-level service container.
 
     Created once per application lifetime (CLI run, TUI session, or web server)
@@ -45,36 +39,18 @@ class AppContext:
     """
 
     __slots__ = (
-        "bus",
         "_bus_token",
         "_command_event_unsubscribe",
-        "agents",
-        "tools",
-        "permission",
-        "question",
-        "skills",
-        "mcp",
-        "lsp",
         "started",
         "health",
-        "runner",
     )
 
     def __init__(self) -> None:
-        self.bus = Bus()
+        super().__init__()
         self._bus_token: Token[Bus] | None = None
-        self.permission = Permission()
-        self.question = Question()
-        self.skills = Skill()
-        self.agents = Agent(self.skills)
-        self.tools = ToolRegistry()
-        self.mcp = MCP()
-        self.lsp = LSP()
         self._command_event_unsubscribe: Callable[[], None] | None = None
         self.started = False
         self.health = self._failed_health("runtime not started")
-        from .runner import SessionRuntime
-        self.runner = SessionRuntime(self.clear_session)
 
     async def startup(self) -> None:
         if self.started:
@@ -218,11 +194,9 @@ class AppContext:
             },
         }
 
-    async def clear_session(self, session_id: str) -> None:
-        await self.permission.clear_session(session_id)
-        await self.question.clear_session(session_id)
-
     async def shutdown(self) -> None:
+        from ..project import Instance
+
         await self.runner.shutdown()
         results = await asyncio.gather(
             self.mcp.shutdown(),
@@ -231,6 +205,7 @@ class AppContext:
             self.question.shutdown(),
             return_exceptions=True,
         )
+        await Instance.dispose_all()
         errors = [r for r in results if isinstance(r, BaseException)]
         if self._command_event_unsubscribe:
             self._command_event_unsubscribe()
