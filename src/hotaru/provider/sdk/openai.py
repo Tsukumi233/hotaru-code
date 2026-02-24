@@ -110,6 +110,49 @@ class OpenAISDK:
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _sanitize_text(value: Any) -> str:
+        text = str(value or "")
+        if not text:
+            return ""
+        clean = []
+        changed = False
+        for char in text:
+            code = ord(char)
+            is_surrogate = 0xD800 <= code <= 0xDFFF
+            is_unsupported_control = code < 0x20 and char not in {"\n", "\r", "\t"}
+            if is_surrogate or is_unsupported_control:
+                clean.append("\uFFFD")
+                changed = True
+                continue
+            clean.append(char)
+        if changed:
+            return "".join(clean)
+        return text
+
+    @classmethod
+    def _parse_tool_input(cls, raw: str) -> Dict[str, Any]:
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+            return {}
+        except json.JSONDecodeError:
+            pass
+
+        text = cls._sanitize_text(raw).strip()
+        if not text:
+            return {}
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(text)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+        return {}
+
     @classmethod
     def _extract_usage(cls, usage: Any) -> Dict[str, int]:
         result: Dict[str, int] = {}
@@ -222,7 +265,18 @@ class OpenAISDK:
 
         yield StreamChunk(type="message_start")
 
-        async for chunk in stream:
+        iterator = stream.__aiter__()
+        while True:
+            try:
+                chunk = await anext(iterator)
+            except StopAsyncIteration:
+                break
+            except UnicodeDecodeError as e:
+                log.warn("skipping undecodable stream chunk", {"error": str(e)})
+                continue
+            except json.JSONDecodeError as e:
+                log.warn("skipping malformed stream chunk", {"error": str(e)})
+                continue
             if not chunk.choices:
                 # Final chunk with usage
                 if chunk.usage:
@@ -240,9 +294,11 @@ class OpenAISDK:
 
             # Handle text content
             if delta.content:
-                yield StreamChunk(type="text", text=delta.content)
+                text = self._sanitize_text(delta.content)
+                if text:
+                    yield StreamChunk(type="text", text=text)
 
-            reasoning_delta = self._extract_reasoning_text(delta)
+            reasoning_delta = self._sanitize_text(self._extract_reasoning_text(delta))
             if reasoning_delta:
                 if not reasoning_active:
                     reasoning_active = True
@@ -286,11 +342,14 @@ class OpenAISDK:
 
                     # Accumulate arguments
                     if tc.function and tc.function.arguments:
-                        current["arguments"] += tc.function.arguments
+                        arguments_delta = self._sanitize_text(tc.function.arguments)
+                        if not arguments_delta:
+                            continue
+                        current["arguments"] += arguments_delta
                         yield StreamChunk(
                             type="tool_call_delta",
                             tool_call_id=current["id"] or f"tool_call_{idx}",
-                            tool_call_input_delta=tc.function.arguments,
+                            tool_call_input_delta=arguments_delta,
                         )
 
             # Handle finish reason
@@ -304,10 +363,7 @@ class OpenAISDK:
                 # Emit completed tool calls
                 for idx in sorted(tool_calls_in_progress.keys()):
                     tc_data = tool_calls_in_progress[idx]
-                    try:
-                        args = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
-                    except json.JSONDecodeError:
-                        args = {}
+                    args = self._parse_tool_input(str(tc_data.get("arguments") or ""))
 
                     yield StreamChunk(
                         type="tool_call_end",

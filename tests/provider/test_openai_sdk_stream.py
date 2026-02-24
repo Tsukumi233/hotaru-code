@@ -20,6 +20,24 @@ class _AsyncStream:
             raise StopAsyncIteration from exc
 
 
+class _FaultyAsyncStream:
+    def __init__(self, events):
+        self._events = events
+
+    def __aiter__(self):
+        self._iter = iter(self._events)
+        return self
+
+    async def __anext__(self):
+        try:
+            item = next(self._iter)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
 def _chunk(*, choices, usage=None):
     return SimpleNamespace(choices=choices, usage=usage)
 
@@ -197,3 +215,91 @@ async def test_openai_stream_maps_reasoning_and_cache_usage(monkeypatch: pytest.
         "reasoning_tokens": 7,
         "cache_read_tokens": 9,
     }
+
+
+@pytest.mark.anyio
+async def test_openai_stream_skips_bad_chunk_and_keeps_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    chunks = [
+        _chunk(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="hello\ud800", tool_calls=None),
+                    finish_reason=None,
+                )
+            ]
+        ),
+        UnicodeDecodeError("utf-8", b"\x80", 0, 1, "invalid start byte"),
+        _chunk(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="world", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ]
+        ),
+    ]
+
+    class _FakeCompletions:
+        async def create(self, **_kwargs):
+            return _FaultyAsyncStream(chunks)
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(completions=_FakeCompletions())
+
+    monkeypatch.setattr("hotaru.provider.sdk.openai.AsyncOpenAI", _FakeClient)
+
+    sdk = OpenAISDK(api_key="test-key")
+    seen = [chunk async for chunk in sdk.stream(model="gpt-5", messages=[{"role": "user", "content": "hi"}])]
+
+    text = "".join(c.text or "" for c in seen if c.type == "text")
+    assert text == "hello\ufffdworld"
+    assert any(c.type == "message_end" for c in seen)
+
+
+@pytest.mark.anyio
+async def test_openai_stream_keeps_tool_input_when_trailing_invalid_char(monkeypatch: pytest.MonkeyPatch) -> None:
+    chunks = [
+        _chunk(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                index=0,
+                                id="call_1",
+                                function=SimpleNamespace(name="read", arguments='{"path":"README.md"}\ud800'),
+                            )
+                        ],
+                    ),
+                    finish_reason=None,
+                )
+            ]
+        ),
+        _chunk(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=None, tool_calls=None),
+                    finish_reason="tool_calls",
+                )
+            ]
+        ),
+    ]
+
+    class _FakeCompletions:
+        async def create(self, **_kwargs):
+            return _AsyncStream(chunks)
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(completions=_FakeCompletions())
+
+    monkeypatch.setattr("hotaru.provider.sdk.openai.AsyncOpenAI", _FakeClient)
+
+    sdk = OpenAISDK(api_key="test-key")
+    seen = [chunk async for chunk in sdk.stream(model="gpt-5", messages=[{"role": "user", "content": "hi"}])]
+
+    ends = [c for c in seen if c.type == "tool_call_end"]
+    assert len(ends) == 1
+    assert ends[0].tool_call.input == {"path": "README.md"}
