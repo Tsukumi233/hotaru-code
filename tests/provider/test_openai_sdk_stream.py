@@ -303,3 +303,35 @@ async def test_openai_stream_keeps_tool_input_when_trailing_invalid_char(monkeyp
     ends = [c for c in seen if c.type == "tool_call_end"]
     assert len(ends) == 1
     assert ends[0].tool_call.input == {"path": "README.md"}
+
+
+@pytest.mark.anyio
+async def test_openai_stream_replaces_carriage_return_and_keeps_following_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunks = [
+        _chunk(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="健康状态管理 - 启动\r并发初始化", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ]
+        ),
+    ]
+
+    class _FakeCompletions:
+        async def create(self, **_kwargs):
+            return _AsyncStream(chunks)
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(completions=_FakeCompletions())
+
+    monkeypatch.setattr("hotaru.provider.sdk.openai.AsyncOpenAI", _FakeClient)
+
+    sdk = OpenAISDK(api_key="test-key")
+    seen = [chunk async for chunk in sdk.stream(model="gpt-5", messages=[{"role": "user", "content": "hi"}])]
+
+    text = "".join(c.text or "" for c in seen if c.type == "text")
+    assert text == "健康状态管理 - 启动\ufffd并发初始化"

@@ -33,6 +33,27 @@ class TurnRunner:
         self.recoverable_error = recoverable_error
         self.continue_loop_on_deny = continue_loop_on_deny
 
+    @staticmethod
+    def _sanitize_text(value: Any) -> str:
+        text = str(value or "")
+        if not text:
+            return ""
+        clean: List[str] = []
+        changed = False
+        for char in text:
+            code = ord(char)
+            is_surrogate = 0xD800 <= code <= 0xDFFF
+            is_c0_control = code < 0x20 and char not in {"\n", "\t"}
+            is_c1_control = 0x7F <= code <= 0x9F
+            if is_surrogate or is_c0_control or is_c1_control:
+                clean.append("\uFFFD")
+                changed = True
+                continue
+            clean.append(char)
+        if not changed:
+            return text
+        return "".join(clean)
+
     async def run(
         self,
         *,
@@ -54,9 +75,12 @@ class TurnRunner:
         try:
             async for chunk in LLM.stream(stream_input):
                 if chunk.type == "text" and chunk.text:
-                    result.text += chunk.text
+                    text = self._sanitize_text(chunk.text)
+                    if not text:
+                        continue
+                    result.text += text
                     if on_text:
-                        await self.call_callback(on_text, chunk.text)
+                        await self.call_callback(on_text, text)
 
                 elif chunk.type == "tool_call_start":
                     tc = ToolCallState(
@@ -72,7 +96,9 @@ class TurnRunner:
 
                 elif chunk.type == "tool_call_delta":
                     if chunk.tool_call_id and chunk.tool_call_id in current_tool_calls:
-                        current_tool_calls[chunk.tool_call_id].input_json += chunk.tool_call_input_delta or ""
+                        current_tool_calls[chunk.tool_call_id].input_json += self._sanitize_text(
+                            chunk.tool_call_input_delta or ""
+                        )
 
                 elif chunk.type == "tool_call_end" and chunk.tool_call:
                     tc_id = chunk.tool_call.id
@@ -136,7 +162,7 @@ class TurnRunner:
                         )
 
                 elif chunk.type == "reasoning_delta":
-                    piece = str(chunk.reasoning_text or "")
+                    piece = self._sanitize_text(chunk.reasoning_text or "")
                     if piece:
                         reasoning_fragments.append(piece)
                     if on_reasoning_delta:

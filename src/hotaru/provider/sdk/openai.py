@@ -120,8 +120,9 @@ class OpenAISDK:
         for char in text:
             code = ord(char)
             is_surrogate = 0xD800 <= code <= 0xDFFF
-            is_unsupported_control = code < 0x20 and char not in {"\n", "\r", "\t"}
-            if is_surrogate or is_unsupported_control:
+            is_c0_control = code < 0x20 and char not in {"\n", "\t"}
+            is_c1_control = 0x7F <= code <= 0x9F
+            if is_surrogate or is_c0_control or is_c1_control:
                 clean.append("\uFFFD")
                 changed = True
                 continue
@@ -271,7 +272,7 @@ class OpenAISDK:
                 chunk = await anext(iterator)
             except StopAsyncIteration:
                 break
-            except UnicodeDecodeError as e:
+            except UnicodeError as e:
                 log.warn("skipping undecodable stream chunk", {"error": str(e)})
                 continue
             except json.JSONDecodeError as e:

@@ -587,3 +587,34 @@ async def test_processor_marks_turn_timeout_as_recoverable_error(
 
     assert result.status == "error"
     assert result.error == "upstream timeout"
+
+
+@pytest.mark.anyio
+async def test_processor_sanitizes_control_chars_without_truncating_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_stream(cls, _stream_input):
+        yield StreamChunk(type="text", text="健康状态管理 - 启动\r")
+        yield StreamChunk(type="text", text="并发初始化")
+        yield StreamChunk(type="message_delta", stop_reason="stop")
+
+    async def fake_get_agent(name: str, **_kw):
+        return AgentInfo(name=name, mode=AgentMode.PRIMARY, permission=[], options={})
+
+    monkeypatch.setattr(LLM, "stream", classmethod(fake_stream))
+
+    processor = SessionProcessor(
+        app=fake_app(agents=fake_agents(get=fake_get_agent)),
+        session_id="ses_sanitize_text",
+        model_id="model",
+        provider_id="provider",
+        agent="build",
+        cwd="/tmp",
+        worktree="/tmp",
+    )
+
+    seen: list[str] = []
+    result = await processor.process_step(on_text=lambda text: seen.append(text))
+
+    assert result.text == "健康状态管理 - 启动\ufffd并发初始化"
+    assert "".join(seen) == "健康状态管理 - 启动\ufffd并发初始化"
