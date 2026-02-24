@@ -14,7 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.bus import Bus, BusEvent
 from ..core.id import Identifier
+from ..core.patterns import expand_home as _expand_pattern
+from ..storage import NotFoundError, Storage
+from ..storage.keys import StorageKey
 from .constants import permission_for_tool
+from .types import ProjectResolver, ScopeResolver
 from ..util.log import Log
 
 log = Log.create({"service": "permission"})
@@ -103,22 +107,6 @@ class DeniedError(Exception):
         )
 
 
-def _expand_pattern(pattern: str) -> str:
-    """Expand home directory patterns."""
-    home = str(Path.home())
-
-    if pattern.startswith("~/"):
-        return home + pattern[1:]
-    if pattern == "~":
-        return home
-    if pattern.startswith("$HOME/"):
-        return home + pattern[5:]
-    if pattern.startswith("$HOME"):
-        return home + pattern[5:]
-
-    return pattern
-
-
 def _wildcard_match(value: str, pattern: str) -> bool:
     """Match a value against a wildcard pattern.
 
@@ -147,7 +135,14 @@ class Permission:
         always: List[str]
         future: asyncio.Future[None]
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        project_resolver: Optional[ProjectResolver] = None,
+        scope_resolver: Optional[ScopeResolver] = None,
+    ) -> None:
+        self._project_resolver = project_resolver
+        self._scope_resolver = scope_resolver
         self._pending: Dict[str, Permission._Pending] = {}
         self._pending_guard = asyncio.Lock()
         self._approved_session: Dict[str, List[PermissionRule]] = {}
@@ -155,6 +150,12 @@ class Permission:
         self._persisted_loaded: set[str] = set()
 
     async def _resolve_scope(self) -> str:
+        if self._scope_resolver:
+            try:
+                return await self._scope_resolver()
+            except (OSError, ValueError) as e:
+                log.debug("failed to resolve permission memory scope", {"error": str(e)})
+                return "session"
         scope = "session"
         try:
             from ..core.config import ConfigManager
@@ -165,18 +166,24 @@ class Permission:
                 candidate = str(configured)
                 if candidate in {"turn", "session", "project", "persisted"}:
                     scope = candidate
-        except Exception as e:
+        except (OSError, ValueError) as e:
             log.debug("failed to resolve permission memory scope", {"error": str(e)})
         return scope
 
     async def _resolve_project_id(self, session_id: str) -> Optional[str]:
+        if self._project_resolver:
+            try:
+                return await self._project_resolver(session_id)
+            except (OSError, ValueError) as e:
+                log.debug("failed to resolve project id for permission scope", {"session_id": session_id, "error": str(e)})
+                return None
         try:
             from ..session.session import Session
 
             session = await Session.get(session_id)
             if session:
                 return session.project_id
-        except Exception as e:
+        except (OSError, ValueError) as e:
             log.debug("failed to resolve project id for permission scope", {"session_id": session_id, "error": str(e)})
         return None
 
@@ -184,14 +191,13 @@ class Permission:
         if not project_id or project_id in self._persisted_loaded:
             return
         self._persisted_loaded.add(project_id)
-        from ..storage import NotFoundError, Storage
 
         try:
-            data = await Storage.read(["permission_approval", project_id])
+            data = await Storage.read(StorageKey.permission_approval(project_id))
         except NotFoundError:
             self._approved_project[project_id] = []
             return
-        except Exception as e:
+        except OSError as e:
             log.warn("failed to load persisted permission approvals", {"project_id": project_id, "error": str(e)})
             self._approved_project[project_id] = []
             return
@@ -200,7 +206,7 @@ class Permission:
             try:
                 self._approved_project[project_id] = self.from_config_list(data)
                 return
-            except Exception as e:
+            except (ValueError, KeyError) as e:
                 log.warn("invalid persisted permission approvals", {"project_id": project_id, "error": str(e)})
         self._approved_project[project_id] = []
 
@@ -208,14 +214,12 @@ class Permission:
         if not project_id:
             return
         try:
-            from ..storage import Storage
-
             rules = self._approved_project.get(project_id, [])
             await Storage.write(
-                ["permission_approval", project_id],
+                StorageKey.permission_approval(project_id),
                 [rule.model_dump() for rule in rules],
             )
-        except Exception as e:
+        except OSError as e:
             log.warn("failed to persist permission approvals", {"project_id": project_id, "error": str(e)})
 
     def _approved_rules(

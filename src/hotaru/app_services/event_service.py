@@ -8,6 +8,33 @@ from typing import Any, AsyncIterator
 from ..core.bus import Bus
 
 
+def _extract_session_id(data: dict[str, Any]) -> str:
+    """Extract session_id from event data at any nesting level."""
+    direct = data.get("session_id")
+    if isinstance(direct, str) and direct:
+        return direct
+
+    info = data.get("info")
+    if isinstance(info, dict):
+        scoped = info.get("session_id")
+        if isinstance(scoped, str) and scoped:
+            return scoped
+
+    part = data.get("part")
+    if isinstance(part, dict):
+        scoped = part.get("session_id")
+        if isinstance(scoped, str) and scoped:
+            return scoped
+
+    session = data.get("session")
+    if isinstance(session, dict):
+        scoped = session.get("id")
+        if isinstance(scoped, str) and scoped:
+            return scoped
+
+    return ""
+
+
 class EventService:
     """Thin orchestration for bus event streaming."""
 
@@ -34,7 +61,11 @@ class EventService:
                 event_type = "server.event"
                 data = {}
 
-            queue.put_nowait({"type": event_type, "data": data})
+            envelope: dict[str, Any] = {"type": event_type, "data": data}
+            session_id = _extract_session_id(data)
+            if session_id:
+                envelope["session_id"] = session_id
+            queue.put_nowait(envelope)
 
         unsubscribe = bus._raw_subscribe("*", on_event)
 

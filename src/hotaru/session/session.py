@@ -10,11 +10,28 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..core.bus import Bus, BusEvent
+from ..core.bus import Bus
 from ..core.id import Identifier
 from ..core.global_paths import GlobalPath
 from ..storage import Storage, NotFoundError
+from ..storage.keys import StorageKey
 from ..util.log import Log
+from .events import (
+    MessagePartDelta,
+    MessagePartDeltaProperties,
+    MessagePartUpdated,
+    MessagePartUpdatedProperties,
+    MessageUpdated,
+    MessageUpdatedProperties,
+    SessionCreated,
+    SessionCreatedProperties,
+    SessionDeleted,
+    SessionDeletedProperties,
+    SessionStatus,
+    SessionStatusProperties,
+    SessionUpdated,
+    SessionUpdatedProperties,
+)
 from .message_store import MessageInfo as StoredMessageInfo
 from .message_store import Part as StoredMessagePart
 from .message_store import WithParts as StoredMessageWithParts
@@ -61,87 +78,6 @@ class SessionInfo(BaseModel):
         return "New Session"
 
 
-# Session events
-class SessionCreatedProperties(BaseModel):
-    """Properties for session created event."""
-    session: SessionInfo
-
-
-class SessionUpdatedProperties(BaseModel):
-    """Properties for session updated event."""
-    session: SessionInfo
-
-
-class SessionDeletedProperties(BaseModel):
-    """Properties for session deleted event."""
-    session_id: str
-
-
-class MessageUpdatedProperties(BaseModel):
-    """Properties for message.updated event."""
-
-    info: Dict[str, Any]
-
-
-class MessagePartUpdatedProperties(BaseModel):
-    """Properties for message.part.updated event."""
-
-    part: Dict[str, Any]
-
-
-class MessagePartDeltaProperties(BaseModel):
-    """Properties for message.part.delta event."""
-
-    session_id: str
-    message_id: str
-    part_id: str
-    field: str
-    delta: str
-
-
-class SessionStatusProperties(BaseModel):
-    """Properties for session.status event."""
-
-    session_id: str
-    status: Dict[str, Any]
-
-
-SessionCreated = BusEvent(
-    event_type="session.created",
-    properties_type=SessionCreatedProperties
-)
-
-SessionUpdated = BusEvent(
-    event_type="session.updated",
-    properties_type=SessionUpdatedProperties
-)
-
-SessionDeleted = BusEvent(
-    event_type="session.deleted",
-    properties_type=SessionDeletedProperties
-)
-
-MessageUpdated = BusEvent(
-    event_type="message.updated",
-    properties_type=MessageUpdatedProperties,
-)
-
-MessagePartUpdated = BusEvent(
-    event_type="message.part.updated",
-    properties_type=MessagePartUpdatedProperties,
-)
-
-MessagePartDelta = BusEvent(
-    event_type="message.part.delta",
-    properties_type=MessagePartDeltaProperties,
-)
-
-SessionStatus = BusEvent(
-    event_type="session.status",
-    properties_type=SessionStatusProperties,
-)
-
-
 class Session:
     """Session management.
 
@@ -149,22 +85,11 @@ class Session:
     users and AI agents.  Data is stored on disk via ``Storage``.
     """
 
-    # Storage key helpers
-    @staticmethod
-    def _session_key(project_id: str, session_id: str) -> List[str]:
-        return ["session", project_id, session_id]
-
-    @staticmethod
-    def _session_index_key(session_id: str) -> List[str]:
-        return ["session_index", session_id]
-
-    @staticmethod
-    def _message_store_key(session_id: str, message_id: str) -> List[str]:
-        return ["message_store", session_id, message_id]
-
-    @staticmethod
-    def _part_key(session_id: str, part_id: str) -> List[str]:
-        return ["part", session_id, part_id]
+    # Storage key helpers — delegate to StorageKey
+    _session_key = staticmethod(StorageKey.session)
+    _session_index_key = staticmethod(StorageKey.session_index)
+    _message_store_key = staticmethod(StorageKey.message)
+    _part_key = staticmethod(StorageKey.part)
 
     @classmethod
     async def _touch_session(cls, session_id: str) -> None:
@@ -225,12 +150,13 @@ class Session:
             [
                 Storage.put(cls._session_key(project_id, session_id), session.model_dump()),
                 Storage.put(cls._session_index_key(session_id), {"project_id": project_id}),
-            ]
+            ],
+            effects=[
+                lambda: Bus.publish(SessionCreated, SessionCreatedProperties(session=session)),
+            ],
         )
 
         log.info("created session", {"session_id": session_id, "project_id": project_id})
-
-        await Bus.publish(SessionCreated, SessionCreatedProperties(session=session))
 
         return session
 
@@ -324,7 +250,7 @@ class Session:
         Returns:
             List of sessions, newest first
         """
-        keys = await Storage.list(["session", project_id])
+        keys = await Storage.list(StorageKey.session_prefix(project_id))
         sessions: List[SessionInfo] = []
         for key in keys:
             try:
@@ -408,16 +334,20 @@ class Session:
                 await cls.delete(s.id, project_id=session.project_id)
 
         # Delete all messages for this session
-        stored_msg_keys = await Storage.list(["message_store", session_id])
-        part_keys = await Storage.list(["part", session_id])
+        stored_msg_keys = await Storage.list(StorageKey.message_prefix(session_id))
+        part_keys = await Storage.list(StorageKey.part_prefix(session_id))
         ops = [Storage.delete(key) for key in stored_msg_keys]
         ops.extend(Storage.delete(key) for key in part_keys)
         ops.append(Storage.delete(cls._session_key(session.project_id, session_id)))
         ops.append(Storage.delete(cls._session_index_key(session_id)))
-        await Storage.transaction(ops)
+        await Storage.transaction(
+            ops,
+            effects=[
+                lambda: Bus.publish(SessionDeleted, SessionDeletedProperties(session_id=session_id)),
+            ],
+        )
 
         log.info("deleted session", {"session_id": session_id})
-        await Bus.publish(SessionDeleted, SessionDeletedProperties(session_id=session_id))
         return True
 
     @classmethod
@@ -502,7 +432,7 @@ class Session:
     @classmethod
     async def parts(cls, session_id: str, message_id: str) -> List[StoredMessagePart]:
         """List structured message parts for a message, ordered by part id."""
-        keys = await Storage.list(["part", session_id])
+        keys = await Storage.list(StorageKey.part_prefix(session_id))
         result: List[StoredMessagePart] = []
         for key in keys:
             try:
@@ -518,7 +448,7 @@ class Session:
     @classmethod
     async def messages(cls, *, session_id: str) -> List[StoredMessageWithParts]:
         """List structured messages with all their parts."""
-        message_keys = await Storage.list(["message_store", session_id])
+        message_keys = await Storage.list(StorageKey.message_prefix(session_id))
         infos: List[StoredMessageInfo] = []
         for key in message_keys:
             try:
@@ -529,7 +459,7 @@ class Session:
             infos.append(info)
         infos.sort(key=lambda i: i.id)
 
-        part_keys = await Storage.list(["part", session_id])
+        part_keys = await Storage.list(StorageKey.part_prefix(session_id))
         by_message: Dict[str, List[StoredMessagePart]] = {}
         for key in part_keys:
             try:
@@ -572,7 +502,7 @@ class Session:
             return 0
 
         ops = [Storage.delete(cls._message_store_key(session_id, message_id)) for message_id in message_ids]
-        part_keys = await Storage.list(["part", session_id])
+        part_keys = await Storage.list(StorageKey.part_prefix(session_id))
         for key in part_keys:
             try:
                 part_data = await Storage.read(key)
@@ -584,9 +514,13 @@ class Session:
         session_data["time"]["updated"] = int(time.time() * 1000)
         ops.append(Storage.put(session_key, session_data))
 
-        await Storage.transaction(ops)
         updated_session = SessionInfo.model_validate(session_data)
-        await Bus.publish(SessionUpdated, SessionUpdatedProperties(session=updated_session))
+        await Storage.transaction(
+            ops,
+            effects=[
+                lambda: Bus.publish(SessionUpdated, SessionUpdatedProperties(session=updated_session)),
+            ],
+        )
 
         return len(message_ids)
 

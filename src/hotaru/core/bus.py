@@ -153,9 +153,11 @@ class Bus:
                 if hasattr(result, '__await__'):
                     await result
             except Exception as e:
+                import traceback
                 _get_log().error("subscription callback failed", {
                     "error": str(e),
-                    "type": event.type
+                    "type": event.type,
+                    "traceback": traceback.format_exc(),
                 })
 
     @classmethod

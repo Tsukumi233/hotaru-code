@@ -22,24 +22,37 @@ class PlanParams(BaseModel):
     pass
 
 
-async def plan_enter_execute(_params: PlanParams, ctx: ToolContext) -> ToolResult:
+def _plan_context(ctx: ToolContext) -> tuple[str, str, str]:
+    """Return (plan_path, display_path, worktree) from context."""
+    session_id = ctx.session_id
+    worktree = ctx.worktree
+    return worktree, worktree, session_id
+
+
+async def _plan_info(ctx: ToolContext) -> tuple[str, str]:
+    """Return (plan_path, display_path) for the current session."""
     session = await Session.get(ctx.session_id)
     if not session:
         raise ValueError(f"Session not found: {ctx.session_id}")
 
-    is_git = bool(ctx.extra.get("worktree")) and str(ctx.extra.get("worktree")) != "/"
+    worktree = ctx.worktree
+    is_git = bool(worktree) and worktree != "/"
     plan_path = Session.plan_path_for(
         session,
-        worktree=str(ctx.extra.get("worktree") or ""),
+        worktree=worktree,
         is_git=is_git,
     )
     display = plan_path
-    worktree = str(ctx.extra.get("worktree") or "")
     if worktree and worktree != "/":
         try:
             display = str(Path(plan_path).resolve().relative_to(Path(worktree).resolve()))
         except ValueError:
             pass
+    return plan_path, display
+
+
+async def plan_enter_execute(_params: PlanParams, ctx: ToolContext) -> ToolResult:
+    plan_path, display = await _plan_info(ctx)
 
     answers = await ctx.app.question.ask(
         session_id=ctx.session_id,
@@ -86,23 +99,7 @@ async def plan_enter_execute(_params: PlanParams, ctx: ToolContext) -> ToolResul
 
 
 async def plan_exit_execute(_params: PlanParams, ctx: ToolContext) -> ToolResult:
-    session = await Session.get(ctx.session_id)
-    if not session:
-        raise ValueError(f"Session not found: {ctx.session_id}")
-
-    is_git = bool(ctx.extra.get("worktree")) and str(ctx.extra.get("worktree")) != "/"
-    plan_path = Session.plan_path_for(
-        session,
-        worktree=str(ctx.extra.get("worktree") or ""),
-        is_git=is_git,
-    )
-    display = plan_path
-    worktree = str(ctx.extra.get("worktree") or "")
-    if worktree and worktree != "/":
-        try:
-            display = str(Path(plan_path).resolve().relative_to(Path(worktree).resolve()))
-        except ValueError:
-            pass
+    plan_path, display = await _plan_info(ctx)
 
     answers = await ctx.app.question.ask(
         session_id=ctx.session_id,

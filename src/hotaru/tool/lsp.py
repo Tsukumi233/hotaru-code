@@ -57,11 +57,8 @@ def _json_default(value: object) -> object:
 
 
 def _resolve_file_path(args: LspParams, ctx: ToolContext) -> Path:
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-    file_path = Path(args.filePath)
-    if not file_path.is_absolute():
-        file_path = cwd / file_path
-    return file_path.resolve()
+    from .paths import resolve
+    return resolve(args.filePath, ctx).resolve()
 
 
 async def lsp_permissions(args: LspParams, ctx: ToolContext) -> list[PermissionSpec]:
@@ -79,8 +76,8 @@ async def lsp_permissions(args: LspParams, ctx: ToolContext) -> list[PermissionS
 
 
 async def lsp_execute(args: LspParams, ctx: ToolContext) -> ToolResult:
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-    worktree = Path(str(ctx.extra.get("worktree") or cwd))
+    cwd = Path(ctx.cwd or str(Path.cwd()))
+    worktree = Path(ctx.worktree or str(cwd))
     file_path = _resolve_file_path(args, ctx)
 
     if not file_path.exists() or file_path.is_dir():

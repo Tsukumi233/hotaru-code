@@ -12,7 +12,7 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional, TypeVar
+from typing import Any, Awaitable, Callable, Literal, Optional, Sequence, TypeVar
 
 from ..core.global_paths import GlobalPath
 from ..util.log import Log
@@ -298,8 +298,19 @@ class Storage:
                 cls._fsync_dir(Path(target).parent)
 
     @classmethod
-    async def transaction(cls, ops: list[TxOp]) -> None:
-        """Atomically apply multiple storage operations."""
+    async def transaction(
+        cls,
+        ops: list[TxOp],
+        effects: Optional[Sequence[Callable[[], Awaitable[None]]]] = None,
+    ) -> None:
+        """Atomically apply multiple storage operations.
+
+        Args:
+            ops: Operations to apply atomically.
+            effects: Optional callbacks invoked after successful commit.
+                     Exceptions in effects are logged but do not roll back
+                     the transaction.
+        """
         if not ops:
             return
 
@@ -327,6 +338,13 @@ class Storage:
             record["state"] = "applied"
             cls._tx_write(root, record)
             cls._cleanup_tx(root, txid)
+
+        if effects:
+            for effect in effects:
+                try:
+                    await effect()
+                except Exception as exc:
+                    log.warn("transaction effect failed", {"error": str(exc)})
 
     @classmethod
     async def list(cls, prefix: list[str]) -> list[list[str]]:

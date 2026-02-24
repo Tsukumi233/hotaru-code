@@ -10,7 +10,6 @@ from ..tool.resolver import ToolResolver
 from ..util.log import Log
 from .agent_flow import AgentFlow
 from .doom_loop import DoomLoopDetector
-from .history_loader import HistoryLoader
 from .llm import StreamInput
 from .processor_types import ProcessorResult, ToolCallState
 from .retry import SessionRetry
@@ -87,7 +86,6 @@ class SessionProcessor:
         worktree: Optional[str] = None,
         max_turns: int = 100,
         sync_agent_from_session: bool = True,
-        history: Optional[HistoryLoader] = None,
         agentflow: Optional[AgentFlow] = None,
         turnprep: Optional[TurnPreparer] = None,
         turnrun: Optional[TurnRunner] = None,
@@ -113,7 +111,6 @@ class SessionProcessor:
         self._allowed_tools: Optional[Set[str]] = None
         self._continue_loop_on_deny = False
 
-        self.history = history or HistoryLoader()
         self.agentflow = agentflow or AgentFlow()
         self.resolver = ToolResolver(app=self.app)
         self.turnprep = turnprep or TurnPreparer(resolver=self.resolver)
@@ -132,23 +129,33 @@ class SessionProcessor:
             cwd=self.cwd,
             worktree=self.worktree,
             doom=self.doom,
-            emit_tool_update=self._emit_tool_update,
+            emit_tool_update=self.emit_tool_update,
             execute_mcp=lambda **kwargs: self._execute_mcp_tool(**kwargs),
         )
-        self.turnrun = turnrun or TurnRunner(
-            call_callback=self._call_callback,
-            emit_tool_update=self._emit_tool_update,
-            execute_tool=self._execute_tool_via_executor,
-            apply_mode_switch_metadata=self._apply_mode_switch_metadata,
-            recoverable_error=self._recoverable_turn_error,
-            continue_loop_on_deny=lambda: self._continue_loop_on_deny,
-        )
+        self.turnrun = turnrun or TurnRunner(host=self)
 
     async def load_history(self) -> None:
-        messages, last_assistant = await self.history.load(session_id=self.session_id)
-        self.messages = messages
-        if last_assistant:
-            self._last_assistant_agent = last_assistant
+        from .message_store import filter_compacted, to_model_messages
+        from .session import Session
+
+        stored = await Session.messages(session_id=self.session_id)
+        filtered = filter_compacted(stored)
+        self.messages = to_model_messages(filtered)
+
+        for msg in reversed(filtered):
+            if msg.info.role != "assistant":
+                continue
+            if msg.info.agent:
+                self._last_assistant_agent = msg.info.agent
+            break
+
+        log.info(
+            "loaded history",
+            {
+                "session_id": self.session_id,
+                "message_count": len(self.messages),
+            },
+        )
 
     async def process(
         self,
@@ -350,13 +357,6 @@ class SessionProcessor:
     def _build_plan_mode_reminder(self, *, plan_path: str, exists: bool) -> str:
         return self.agentflow.build_plan_mode_reminder(plan_path=plan_path, exists=exists)
 
-    def _apply_mode_switch_metadata(self, metadata: Dict[str, Any]) -> None:
-        self.agent = self.agentflow.apply_mode_switch_metadata(
-            metadata=metadata,
-            current_agent=self.agent,
-            pending_synthetic_users=self._pending_synthetic_users,
-        )
-
     async def _flush_synthetic_users(self) -> None:
         await self.agentflow.flush_synthetic_users(
             pending_synthetic_users=self._pending_synthetic_users,
@@ -400,11 +400,6 @@ class SessionProcessor:
             "end_time": tc.end_time,
         }
 
-    async def _emit_tool_update(self, callback: Optional[callable], tc: ToolCallState) -> None:
-        if not callback:
-            return
-        await self._call_callback(callback, self._tool_update_payload(tc))
-
     async def _process_turn(
         self,
         stream_input: StreamInput,
@@ -428,15 +423,6 @@ class SessionProcessor:
             on_reasoning_end=on_reasoning_end,
             assistant_message_id=assistant_message_id,
         )
-
-    @staticmethod
-    def _recoverable_turn_error(error: Exception) -> bool:
-        if isinstance(error, _RECOVERABLE_TURN_ERRORS):
-            return True
-        return SessionRetry.retryable(error)
-
-    async def _execute_tool_via_executor(self, **kwargs: Any) -> Dict[str, Any]:
-        return await self._execute_tool(**kwargs)
 
     async def _execute_tool(
         self,
@@ -483,11 +469,51 @@ class SessionProcessor:
             ruleset=agent_ruleset,
         )
 
-    async def _call_callback(self, callback: callable, *args: Any) -> None:
+    # -- TurnHost protocol implementation --
+
+    async def call_callback(self, callback: callable, *args: Any) -> None:
         if asyncio.iscoroutinefunction(callback):
             await callback(*args)
         else:
             callback(*args)
+
+    async def emit_tool_update(self, callback: Optional[callable], tc: ToolCallState) -> None:
+        if not callback:
+            return
+        await self.call_callback(callback, self._tool_update_payload(tc))
+
+    async def execute_tool(
+        self,
+        *,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+        tc: Optional[ToolCallState] = None,
+        on_tool_update: Optional[callable] = None,
+        assistant_message_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self._execute_tool(
+            tool_name=tool_name,
+            tool_input=tool_input,
+            tc=tc,
+            on_tool_update=on_tool_update,
+            assistant_message_id=assistant_message_id,
+        )
+
+    def apply_mode_switch_metadata(self, metadata: Dict[str, Any]) -> None:
+        self.agent = self.agentflow.apply_mode_switch_metadata(
+            metadata=metadata,
+            current_agent=self.agent,
+            pending_synthetic_users=self._pending_synthetic_users,
+        )
+
+    @staticmethod
+    def recoverable_error(error: Exception) -> bool:
+        if isinstance(error, _RECOVERABLE_TURN_ERRORS):
+            return True
+        return SessionRetry.retryable(error)
+
+    def continue_loop_on_deny(self) -> bool:
+        return self._continue_loop_on_deny
 
     async def _execute_mcp_tool(
         self,

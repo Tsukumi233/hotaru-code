@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from .agent_flow import AgentFlow
-from .history_loader import HistoryLoader
 from .processor import SessionProcessor
 
 if TYPE_CHECKING:
@@ -39,7 +38,6 @@ class SessionProcessorFactory:
             worktree=worktree,
             max_turns=max_turns,
             sync_agent_from_session=sync_agent_from_session,
-            history=HistoryLoader(),
             agentflow=AgentFlow(),
             turnprep=None,
             turnrun=None,

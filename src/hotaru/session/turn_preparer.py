@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Callable, Awaitable, Dict, List, Optional, Set, Union
 
 from ..tool.resolver import ToolResolver
 from .llm import StreamInput
@@ -25,10 +25,21 @@ class PreparedTurn:
 class TurnPreparer:
     """Resolve turn config and build stream input."""
 
-    def __init__(self, *, resolver: ToolResolver) -> None:
+    def __init__(
+        self,
+        *,
+        resolver: ToolResolver,
+        continue_loop_on_deny_fn: Optional[Callable[[], Awaitable[bool]]] = None,
+    ) -> None:
         self.resolver = resolver
+        self._continue_loop_on_deny_fn = continue_loop_on_deny_fn
 
     async def load_continue_loop_on_deny(self) -> bool:
+        if self._continue_loop_on_deny_fn:
+            try:
+                return await self._continue_loop_on_deny_fn()
+            except Exception:
+                return False
         try:
             from ..core.config import ConfigManager
 

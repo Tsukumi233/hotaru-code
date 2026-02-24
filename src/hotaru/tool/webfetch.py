@@ -153,7 +153,7 @@ async def webfetch_execute(params: WebFetchParams, ctx: ToolContext) -> ToolResu
     return ToolResult(title=title, output=output, metadata={})
 
 
-def webfetch_permissions(params: WebFetchParams, _ctx: ToolContext) -> list[PermissionSpec]:
+async def webfetch_permissions(params: WebFetchParams, _ctx: ToolContext) -> list[PermissionSpec]:
     return [
         PermissionSpec(
             permission="webfetch",

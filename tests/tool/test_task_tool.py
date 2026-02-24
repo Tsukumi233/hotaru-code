@@ -137,7 +137,9 @@ async def test_task_tool_reuses_existing_task_session(
             message_id="message_parent",
             agent="build",
             call_id="call_1",
-            extra={"cwd": str(tmp_path), "worktree": str(tmp_path), "bypass_agent_check": True},
+            extra={"bypass_agent_check": True},
+            cwd=str(tmp_path),
+            worktree=str(tmp_path),
         ),
     )
 

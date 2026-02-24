@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import traceback
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from ..util.log import Log
 from .llm import LLM, StreamInput
@@ -13,25 +13,36 @@ from .processor_types import ProcessorResult, ToolCallState
 log = Log.create({"service": "session.turn_runner"})
 
 
+@runtime_checkable
+class TurnHost(Protocol):
+    """Protocol that the owner of a TurnRunner must implement."""
+
+    async def call_callback(self, callback: Callable[..., Any], *args: Any) -> None: ...
+
+    async def emit_tool_update(self, callback: Optional[Callable[..., Any]], tc: ToolCallState) -> None: ...
+
+    async def execute_tool(
+        self,
+        *,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+        tc: Optional[ToolCallState] = None,
+        on_tool_update: Optional[Callable[..., Any]] = None,
+        assistant_message_id: Optional[str] = None,
+    ) -> Dict[str, Any]: ...
+
+    def apply_mode_switch_metadata(self, metadata: Dict[str, Any]) -> None: ...
+
+    def recoverable_error(self, error: Exception) -> bool: ...
+
+    def continue_loop_on_deny(self) -> bool: ...
+
+
 class TurnRunner:
     """Consume model stream and coordinate per-chunk callbacks."""
 
-    def __init__(
-        self,
-        *,
-        call_callback: Callable[..., Awaitable[None]],
-        emit_tool_update: Callable[[Optional[callable], ToolCallState], Awaitable[None]],
-        execute_tool: Callable[..., Awaitable[Dict[str, Any]]],
-        apply_mode_switch_metadata: Callable[[Dict[str, Any]], None],
-        recoverable_error: Callable[[Exception], bool],
-        continue_loop_on_deny: Callable[[], bool],
-    ) -> None:
-        self.call_callback = call_callback
-        self.emit_tool_update = emit_tool_update
-        self.execute_tool = execute_tool
-        self.apply_mode_switch_metadata = apply_mode_switch_metadata
-        self.recoverable_error = recoverable_error
-        self.continue_loop_on_deny = continue_loop_on_deny
+    def __init__(self, *, host: TurnHost) -> None:
+        self.host = host
 
     @staticmethod
     def _sanitize_text(value: Any) -> str:
@@ -80,7 +91,7 @@ class TurnRunner:
                         continue
                     result.text += text
                     if on_text:
-                        await self.call_callback(on_text, text)
+                        await self.host.call_callback(on_text, text)
 
                 elif chunk.type == "tool_call_start":
                     tc = ToolCallState(
@@ -91,8 +102,8 @@ class TurnRunner:
                     )
                     current_tool_calls[tc.id] = tc
                     if on_tool_start:
-                        await self.call_callback(on_tool_start, tc.name, tc.id, {})
-                    await self.emit_tool_update(on_tool_update, tc)
+                        await self.host.call_callback(on_tool_start, tc.name, tc.id, {})
+                    await self.host.emit_tool_update(on_tool_update, tc)
 
                 elif chunk.type == "tool_call_delta":
                     if chunk.tool_call_id and chunk.tool_call_id in current_tool_calls:
@@ -108,10 +119,10 @@ class TurnRunner:
                         tc.status = "running"
 
                         if on_tool_start:
-                            await self.call_callback(on_tool_start, tc.name, tc.id, tc.input)
-                        await self.emit_tool_update(on_tool_update, tc)
+                            await self.host.call_callback(on_tool_start, tc.name, tc.id, tc.input)
+                        await self.host.emit_tool_update(on_tool_update, tc)
 
-                        tool_result = await self.execute_tool(
+                        tool_result = await self.host.execute_tool(
                             tool_name=tc.name,
                             tool_input=tc.input,
                             tc=tc,
@@ -123,7 +134,7 @@ class TurnRunner:
                         if tool_result.get("error"):
                             tc.status = "error"
                             tc.error = tool_result["error"]
-                            if tool_result.get("blocked") and not self.continue_loop_on_deny():
+                            if tool_result.get("blocked") and not self.host.continue_loop_on_deny():
                                 blocked = True
                         else:
                             tc.status = "completed"
@@ -131,16 +142,16 @@ class TurnRunner:
                             tc.title = str(tool_result.get("title") or "") or None
                             tc.attachments = tool_result.get("attachments", [])
                             tc.metadata = dict(tool_result.get("metadata", {}) or {})
-                            self.apply_mode_switch_metadata(tc.metadata)
+                            self.host.apply_mode_switch_metadata(tc.metadata)
 
-                        await self.emit_tool_update(on_tool_update, tc)
+                        await self.host.emit_tool_update(on_tool_update, tc)
 
                         result.tool_calls.append(tc)
                         if on_tool_end:
                             callback_metadata = dict(tool_result.get("metadata", {}))
                             if tc.attachments:
                                 callback_metadata["attachments"] = tc.attachments
-                            await self.call_callback(
+                            await self.host.call_callback(
                                 on_tool_end,
                                 tc.name,
                                 tc.id,
@@ -155,7 +166,7 @@ class TurnRunner:
 
                 elif chunk.type == "reasoning_start":
                     if on_reasoning_start:
-                        await self.call_callback(
+                        await self.host.call_callback(
                             on_reasoning_start,
                             chunk.reasoning_id,
                             dict(chunk.provider_metadata or {}),
@@ -166,7 +177,7 @@ class TurnRunner:
                     if piece:
                         reasoning_fragments.append(piece)
                     if on_reasoning_delta:
-                        await self.call_callback(
+                        await self.host.call_callback(
                             on_reasoning_delta,
                             chunk.reasoning_id,
                             piece,
@@ -175,7 +186,7 @@ class TurnRunner:
 
                 elif chunk.type == "reasoning_end":
                     if on_reasoning_end:
-                        await self.call_callback(
+                        await self.host.call_callback(
                             on_reasoning_end,
                             chunk.reasoning_id,
                             dict(chunk.provider_metadata or {}),
@@ -194,7 +205,7 @@ class TurnRunner:
                     break
 
         except Exception as e:
-            if self.recoverable_error(e):
+            if self.host.recoverable_error(e):
                 log.warn(
                     "recoverable turn processing error",
                     {

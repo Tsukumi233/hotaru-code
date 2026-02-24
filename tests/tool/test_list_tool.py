@@ -20,7 +20,8 @@ async def test_list_tool_requests_list_permission_and_ignores_common_dirs(tmp_pa
         session_id="session_test",
         message_id="message_test",
         agent="build",
-        extra={"cwd": str(tmp_path), "worktree": str(tmp_path)},
+        cwd=str(tmp_path),
+        worktree=str(tmp_path),
     )
     specs = await LsTool.permissions(ListParams(path=str(tmp_path)), ctx)
 

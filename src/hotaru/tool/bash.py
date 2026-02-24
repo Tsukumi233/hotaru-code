@@ -189,22 +189,19 @@ def _parse_tokens(segment: str) -> list[str]:
 
 
 def _resolve_cwd(params: BashParams, ctx: ToolContext) -> Path:
-    base = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-    path = Path(params.workdir) if params.workdir else base
-    if not path.is_absolute():
-        path = base / path
-    return path.resolve()
+    from .paths import resolve_or_cwd
+    return resolve_or_cwd(params.workdir, ctx).resolve()
 
 
 async def bash_permissions(params: BashParams, ctx: ToolContext) -> list[PermissionSpec]:
-    base = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    base = Path(ctx.cwd or str(Path.cwd()))
     cwd = _resolve_cwd(params, ctx)
     specs = await assert_external_directory(ctx, cwd, kind="directory")
 
     command_patterns: list[str] = []
     always_patterns: list[str] = []
     external_globs: Set[str] = set()
-    worktree_value = str(ctx.extra.get("worktree") or "")
+    worktree_value = ctx.worktree
     worktree_path = Path(worktree_value).resolve() if worktree_value else None
 
     if _requires_conservative_approval(params.command):

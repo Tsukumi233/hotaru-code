@@ -18,29 +18,10 @@ router = APIRouter(prefix="/v1/events", tags=["events"])
 
 
 def _event_session_id(event: dict[str, object]) -> str:
+    """Read session_id promoted to envelope top level by EventService."""
     session_id = event.get("session_id")
-    if isinstance(session_id, str) and session_id:
+    if isinstance(session_id, str):
         return session_id
-
-    data = event.get("data")
-    if not isinstance(data, dict):
-        return ""
-
-    direct = data.get("session_id")
-    if isinstance(direct, str) and direct:
-        return direct
-
-    info = data.get("info")
-    if isinstance(info, dict):
-        scoped = info.get("session_id")
-        if isinstance(scoped, str) and scoped:
-            return scoped
-
-    part = data.get("part")
-    if isinstance(part, dict):
-        scoped = part.get("session_id")
-        if isinstance(scoped, str) and scoped:
-            return scoped
     return ""
 
 

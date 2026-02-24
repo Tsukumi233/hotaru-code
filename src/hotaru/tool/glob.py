@@ -102,7 +102,7 @@ def _match_glob(root: Path, pattern: str, limit: int = 100) -> List[Tuple[Path, 
 
 async def glob_execute(params: GlobParams, ctx: ToolContext) -> ToolResult:
     """Execute the glob tool."""
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    cwd = Path(ctx.cwd or str(Path.cwd()))
     search_path = _resolve_search_path(params, ctx)
 
     if not search_path.exists():
@@ -148,11 +148,8 @@ async def glob_execute(params: GlobParams, ctx: ToolContext) -> ToolResult:
 
 
 def _resolve_search_path(params: GlobParams, ctx: ToolContext) -> Path:
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-    search_path = Path(params.path) if params.path else cwd
-    if not search_path.is_absolute():
-        search_path = cwd / search_path
-    return search_path
+    from .paths import resolve_or_cwd
+    return resolve_or_cwd(params.path, ctx)
 
 
 async def glob_permissions(params: GlobParams, ctx: ToolContext) -> list[PermissionSpec]:

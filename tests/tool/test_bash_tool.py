@@ -26,10 +26,8 @@ async def test_bash_tool_exposes_permissions_from_permission_hook(tmp_path: Path
         message_id="msg",
         call_id="call",
         agent="build",
-        extra={
-            "cwd": str(tmp_path),
-            "worktree": str(tmp_path),
-        },
+        cwd=str(tmp_path),
+        worktree=str(tmp_path),
     )
 
     params = BashParams(command="git status", description="Check git status")

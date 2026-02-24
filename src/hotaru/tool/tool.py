@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-import inspect
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Generic, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -29,6 +28,10 @@ class ToolContext:
     session_id: str
     message_id: str
     agent: str
+    cwd: str = ""
+    worktree: str = ""
+    provider_id: str = ""
+    model_id: str = ""
     call_id: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
     messages: List[Dict[str, Any]] = field(default_factory=list)
@@ -163,6 +166,53 @@ class ToolInfo(ABC, Generic[T]):
         raise NotImplementedError
 
 
+class _FunctionalTool(ToolInfo[T]):
+    """Concrete ToolInfo created by Tool.define()."""
+
+    def __init__(
+        self,
+        tool_id: str,
+        description: str,
+        parameters_type: Type[T],
+        execute_fn: Callable[[T, ToolContext], ToolResult],
+        permission_fn: Optional[Callable[[T, ToolContext], Awaitable[List[PermissionSpec]]]] = None,
+        auto_truncate: bool = True,
+    ) -> None:
+        self.id = tool_id
+        self.description = description
+        self.parameters_type = parameters_type
+        self._execute_fn = execute_fn
+        self._permission_fn = permission_fn
+        self._auto_truncate = auto_truncate
+
+    async def permissions(self, args: T, ctx: ToolContext) -> List[PermissionSpec]:
+        if self._permission_fn is None:
+            return []
+        result = await self._permission_fn(args, ctx)
+        return list(result) if result else []
+
+    async def execute(self, args: T, ctx: ToolContext) -> ToolResult:
+        try:
+            if not isinstance(args, self.parameters_type):
+                args = self.parameters_type.model_validate(args)
+        except ValidationError as e:
+            raise ValueError(
+                f"The {self.id} tool was called with invalid arguments: {e}.\n"
+                "Please rewrite the input so it satisfies the expected schema."
+            ) from e
+
+        result = await self._execute_fn(args, ctx)
+
+        if self._auto_truncate and result.metadata.get("truncated") is None:
+            truncated = await Truncate.output(result.output)
+            result.output = truncated["content"]
+            result.metadata["truncated"] = truncated["truncated"]
+            if truncated["truncated"] and truncated.get("output_path"):
+                result.metadata["output_path"] = truncated["output_path"]
+
+        return result
+
+
 class Tool:
     """Tool factory and registry.
 
@@ -193,7 +243,7 @@ class Tool:
         description: str,
         parameters_type: Type[T],
         execute_fn: Callable[[T, ToolContext], ToolResult],
-        permission_fn: Optional[Callable[[T, ToolContext], Awaitable[List[PermissionSpec]] | List[PermissionSpec]]] = None,
+        permission_fn: Optional[Callable[[T, ToolContext], Awaitable[List[PermissionSpec]]]] = None,
         auto_truncate: bool = True
     ) -> ToolInfo[T]:
         """Define a new tool using a function.
@@ -203,58 +253,19 @@ class Tool:
             description: Tool description for the AI
             parameters_type: Pydantic model for parameters
             execute_fn: Async function to execute the tool
+            permission_fn: Optional async permission function
             auto_truncate: Whether to auto-truncate output
 
         Returns:
             ToolInfo instance
         """
-        # Capture values to avoid scoping issues in class body
-        _tool_id = tool_id
-        _description = description
-        _parameters_type = parameters_type
-        _execute_fn = execute_fn
-        _permission_fn = permission_fn
-        _auto_truncate = auto_truncate
-
-        class FunctionalTool(ToolInfo[T]):
-            id = _tool_id
-            description = _description
-            parameters_type = _parameters_type
-
-            async def permissions(self, args: T, ctx: ToolContext) -> List[PermissionSpec]:
-                if _permission_fn is None:
-                    return []
-                permissions = _permission_fn(args, ctx)
-                if inspect.isawaitable(permissions):
-                    permissions = await permissions
-                if not permissions:
-                    return []
-                return list(permissions)
-
-            async def execute(self, args: T, ctx: ToolContext) -> ToolResult:
-                # Validate parameters
-                try:
-                    if not isinstance(args, _parameters_type):
-                        args = _parameters_type.model_validate(args)
-                except ValidationError as e:
-                    raise ValueError(
-                        f"The {_tool_id} tool was called with invalid arguments: {e}.\n"
-                        "Please rewrite the input so it satisfies the expected schema."
-                    ) from e
-
-                # Execute
-                result = await _execute_fn(args, ctx)
-
-                # Auto-truncate if needed
-                if _auto_truncate and result.metadata.get("truncated") is None:
-                    truncated = await Truncate.output(result.output)
-                    result.output = truncated["content"]
-                    result.metadata["truncated"] = truncated["truncated"]
-                    if truncated["truncated"] and truncated.get("output_path"):
-                        result.metadata["output_path"] = truncated["output_path"]
-
-                return result
-
-        tool = FunctionalTool()
+        tool = _FunctionalTool(
+            tool_id=tool_id,
+            description=description,
+            parameters_type=parameters_type,
+            execute_fn=execute_fn,
+            permission_fn=permission_fn,
+            auto_truncate=auto_truncate,
+        )
         cls.register(tool)
         return tool

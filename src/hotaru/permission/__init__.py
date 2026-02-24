@@ -13,6 +13,7 @@ from .permission import (
     CorrectedError,
     DeniedError,
 )
+from .types import ProjectResolver, ScopeResolver
 
 __all__ = [
     "Permission",
@@ -26,4 +27,6 @@ __all__ = [
     "RejectedError",
     "CorrectedError",
     "DeniedError",
+    "ProjectResolver",
+    "ScopeResolver",
 ]

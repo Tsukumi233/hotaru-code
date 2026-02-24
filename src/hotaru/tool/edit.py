@@ -294,7 +294,7 @@ async def edit_execute(params: EditParams, ctx: ToolContext) -> ToolResult:
         raise ValueError("old_string and new_string must be different")
 
     filepath = Path(params.file_path)
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    cwd = Path(ctx.cwd or str(Path.cwd()))
     if not filepath.is_absolute():
         filepath = cwd / filepath
 
@@ -367,7 +367,7 @@ async def edit_permissions(params: EditParams, ctx: ToolContext) -> list[Permiss
         raise ValueError("old_string and new_string must be different")
 
     filepath = Path(params.file_path)
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    cwd = Path(ctx.cwd or str(Path.cwd()))
     if not filepath.is_absolute():
         filepath = cwd / filepath
 

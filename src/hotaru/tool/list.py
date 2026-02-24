@@ -117,11 +117,8 @@ def _render_tree(root: Path, files: List[str]) -> str:
 
 
 def _resolve_search_path(params: ListParams, ctx: ToolContext) -> Path:
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-    search_path = Path(params.path) if params.path else cwd
-    if not search_path.is_absolute():
-        search_path = cwd / search_path
-    return search_path.resolve()
+    from .paths import resolve_or_cwd
+    return resolve_or_cwd(params.path, ctx).resolve()
 
 
 async def list_permissions(params: ListParams, ctx: ToolContext) -> list[PermissionSpec]:
@@ -141,7 +138,7 @@ async def list_permissions(params: ListParams, ctx: ToolContext) -> list[Permiss
 async def list_execute(params: ListParams, ctx: ToolContext) -> ToolResult:
     """Execute the list tool."""
 
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    cwd = Path(ctx.cwd or str(Path.cwd()))
     search_path = _resolve_search_path(params, ctx)
 
     if not search_path.exists():

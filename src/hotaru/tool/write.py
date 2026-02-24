@@ -76,7 +76,7 @@ async def write_execute(params: WriteParams, ctx: ToolContext) -> ToolResult:
 
 
 async def _prepare_write(params: WriteParams, ctx: ToolContext) -> tuple[Path, bool, str, str]:
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    cwd = Path(ctx.cwd or str(Path.cwd()))
     filepath = Path(params.file_path)
 
     # Make path absolute if relative

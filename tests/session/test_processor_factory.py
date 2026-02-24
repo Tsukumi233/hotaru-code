@@ -16,7 +16,6 @@ def test_processor_factory_builds_processor_with_collaborators() -> None:
     )
 
     assert isinstance(proc, SessionProcessor)
-    assert proc.history is not None
     assert proc.agentflow is not None
     assert proc.turnprep is not None
     assert proc.turnrun is not None

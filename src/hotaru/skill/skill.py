@@ -55,27 +55,22 @@ class SkillNotFoundError(Exception):
         super().__init__(msg)
 
 
+def _rglob_skills(base: Path, label: str = "skills") -> List[str]:
+    """Recursively find SKILL.md files under *base*, handling permission errors."""
+    if not base.is_dir():
+        return []
+    try:
+        return [str(f.resolve()) for f in base.rglob(SKILL_FILENAME) if f.is_file()]
+    except PermissionError:
+        log.warn("permission denied scanning skills", {"directory": str(base)})
+    except Exception as e:
+        log.error(f"error scanning {label}", {"directory": str(base), "error": str(e)})
+    return []
+
+
 def _find_external_skill_files(root: str) -> List[str]:
     """Find ``skills/**/SKILL.md`` under an external directory root."""
-    root_path = Path(root)
-    if not root_path.is_dir():
-        return []
-
-    results: List[str] = []
-    base = root_path / "skills"
-    if not base.is_dir():
-        return results
-
-    try:
-        for skill_file in base.rglob(SKILL_FILENAME):
-            if skill_file.is_file():
-                results.append(str(skill_file.resolve()))
-    except PermissionError:
-        log.warn("permission denied scanning skills", {"directory": root})
-    except Exception as e:
-        log.error("error scanning external skills", {"directory": root, "error": str(e)})
-
-    return results
+    return _rglob_skills(Path(root) / "skills", "external skills")
 
 
 def _find_opencode_skill_files(root: str) -> List[str]:
@@ -83,41 +78,15 @@ def _find_opencode_skill_files(root: str) -> List[str]:
     root_path = Path(root)
     if not root_path.is_dir():
         return []
-
     results: List[str] = []
     for dirname in ("skill", "skills"):
-        base = root_path / dirname
-        if not base.is_dir():
-            continue
-        try:
-            for skill_file in base.rglob(SKILL_FILENAME):
-                if skill_file.is_file():
-                    results.append(str(skill_file.resolve()))
-        except PermissionError:
-            log.warn("permission denied scanning skills", {"directory": str(base)})
-        except Exception as e:
-            log.error("error scanning opencode skills", {"directory": str(base), "error": str(e)})
-
+        results.extend(_rglob_skills(root_path / dirname, "opencode skills"))
     return results
 
 
 def _find_all_skill_files(root: str) -> List[str]:
     """Find ``**/SKILL.md`` under a custom or downloaded root."""
-    root_path = Path(root)
-    if not root_path.is_dir():
-        return []
-
-    results: List[str] = []
-    try:
-        for skill_file in root_path.rglob(SKILL_FILENAME):
-            if skill_file.is_file():
-                results.append(str(skill_file.resolve()))
-    except PermissionError:
-        log.warn("permission denied scanning skills", {"directory": root})
-    except Exception as e:
-        log.error("error scanning skills", {"directory": root, "error": str(e)})
-
-    return results
+    return _rglob_skills(Path(root))
 
 
 def _load_skill(filepath: str) -> Optional[SkillInfo]:

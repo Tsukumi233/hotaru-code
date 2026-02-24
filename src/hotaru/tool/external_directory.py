@@ -24,8 +24,8 @@ async def assert_external_directory(
     if target is None or bypass:
         return []
 
-    cwd_value = str(ctx.extra.get("cwd") or Path.cwd())
-    worktree_value = str(ctx.extra.get("worktree") or "")
+    cwd_value = ctx.cwd or str(Path.cwd())
+    worktree_value = ctx.worktree
 
     cwd = Path(cwd_value).resolve()
     target_path = target if target.is_absolute() else (cwd / target)

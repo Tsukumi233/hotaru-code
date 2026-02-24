@@ -79,7 +79,7 @@ async def grep_execute(params: GrepParams, ctx: ToolContext) -> ToolResult:
     if not params.pattern:
         raise ValueError("pattern is required")
 
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    cwd = Path(ctx.cwd or str(Path.cwd()))
 
     search_path = _resolve_search_path(params, ctx)
 
@@ -175,11 +175,8 @@ async def grep_execute(params: GrepParams, ctx: ToolContext) -> ToolResult:
 
 
 def _resolve_search_path(params: GrepParams, ctx: ToolContext) -> Path:
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-    search_path = Path(params.path) if params.path else cwd
-    if not search_path.is_absolute():
-        search_path = cwd / search_path
-    return search_path
+    from .paths import resolve_or_cwd
+    return resolve_or_cwd(params.path, ctx)
 
 
 async def grep_permissions(params: GrepParams, ctx: ToolContext) -> list[PermissionSpec]:

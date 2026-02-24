@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.config import ConfigManager
 from ..core.global_paths import GlobalPath
+from ..core.patterns import expand_home
 from ..permission.constants import permission_for_tool
 from ..util.log import Log
 
@@ -61,7 +62,7 @@ _PROMPT_DIR = Path(__file__).parent / "prompt"
 def _read_prompt(filename: str, fallback: str) -> str:
     try:
         return (_PROMPT_DIR / filename).read_text(encoding="utf-8").strip()
-    except Exception:
+    except OSError:
         return fallback
 
 
@@ -105,18 +106,6 @@ class Agent:
             if not permission_config:
                 return rules
 
-            def expand_pattern(pattern: str) -> str:
-                home = str(Path.home())
-                if pattern.startswith("~/"):
-                    return home + pattern[1:]
-                if pattern == "~":
-                    return home
-                if pattern.startswith("$HOME/"):
-                    return home + pattern[5:]
-                if pattern.startswith("$HOME"):
-                    return home + pattern[5:]
-                return pattern
-
             if isinstance(permission_config, str):
                 return [{"permission": "*", "pattern": "*", "action": permission_config}]
 
@@ -133,7 +122,7 @@ class Agent:
                     for pattern, action in value.items():
                         rules.append({
                             "permission": key,
-                            "pattern": expand_pattern(pattern),
+                            "pattern": expand_home(pattern),
                             "action": action,
                         })
 
@@ -156,7 +145,7 @@ class Agent:
         strict_permissions = bool(config.strict_permissions)
         try:
             skill_globs = [str(Path(directory) / "*") for directory in await self._skills.directories()]
-        except Exception:
+        except (OSError, PermissionError):
             skill_globs = []
 
         # Default permission rules

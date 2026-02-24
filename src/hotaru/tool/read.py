@@ -82,11 +82,8 @@ async def _warm_lsp(lsp: LSP, file_path: str) -> None:
 
 
 def _resolve_file_path(params: ReadParams, ctx: ToolContext) -> Path:
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
-    file_path = Path(params.file_path)
-    if not file_path.is_absolute():
-        file_path = cwd / file_path
-    return file_path
+    from .paths import resolve
+    return resolve(params.file_path, ctx)
 
 
 async def read_permissions(params: ReadParams, ctx: ToolContext) -> list[PermissionSpec]:
@@ -104,10 +101,10 @@ async def read_permissions(params: ReadParams, ctx: ToolContext) -> list[Permiss
 
 async def read_execute(params: ReadParams, ctx: ToolContext) -> ToolResult:
     """Execute the read tool."""
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    cwd = Path(ctx.cwd or str(Path.cwd()))
     filepath = _resolve_file_path(params, ctx)
 
-    worktree = Path(str(ctx.extra.get("worktree") or cwd))
+    worktree = Path(ctx.worktree or str(cwd))
     try:
         title = str(filepath.relative_to(worktree))
     except ValueError:

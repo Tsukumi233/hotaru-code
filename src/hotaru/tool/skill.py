@@ -225,7 +225,7 @@ async def skill_execute(params: SkillParams, ctx: ToolContext) -> ToolResult:
     )
 
 
-def skill_permissions(params: SkillParams, _ctx: ToolContext) -> list[PermissionSpec]:
+async def skill_permissions(params: SkillParams, _ctx: ToolContext) -> list[PermissionSpec]:
     return [
         PermissionSpec(
             permission="skill",

@@ -5,6 +5,7 @@ IDs are monotonically increasing (or decreasing) and embed timestamp information
 """
 
 import secrets
+import threading
 import time
 from typing import Literal
 
@@ -28,6 +29,7 @@ LENGTH = 26
 # State for monotonic ID generation
 _last_timestamp = 0
 _counter = 0
+_lock = threading.Lock()
 
 
 def _random_base62(length: int) -> str:
@@ -51,14 +53,16 @@ def _create(prefix: IDPrefix, descending: bool, timestamp: float | None = None) 
 
     current_timestamp = timestamp if timestamp is not None else int(time.time() * 1000)
 
-    # Monotonic counter: increment if same millisecond
-    if current_timestamp != _last_timestamp:
-        _last_timestamp = current_timestamp
-        _counter = 0
-    _counter += 1
+    with _lock:
+        # Monotonic counter: increment if same millisecond
+        if current_timestamp != _last_timestamp:
+            _last_timestamp = current_timestamp
+            _counter = 0
+        _counter += 1
+        counter = _counter
 
     # Encode timestamp + counter into 48 bits
-    now = (current_timestamp * 0x1000) + _counter
+    now = (current_timestamp * 0x1000) + counter
 
     # Invert bits for descending order
     if descending:

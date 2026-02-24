@@ -23,7 +23,8 @@ def _ctx(tmp_path: Path) -> ToolContext:
         session_id="session_test",
         message_id="message_test",
         agent="build",
-        extra={"cwd": str(tmp_path), "worktree": str(tmp_path)},
+        cwd=str(tmp_path),
+        worktree=str(tmp_path),
     )
 
     async def fake_ask(*, permission, patterns, always=None, metadata=None) -> None:

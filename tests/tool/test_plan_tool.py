@@ -46,7 +46,7 @@ async def test_plan_enter_switches_to_plan_and_returns_mode_switch_metadata(
             message_id="msg_1",
             agent="build",
             call_id="call_1",
-            extra={"worktree": "/tmp/project"},
+            worktree="/tmp/project",
             app=app,
         ),
     )
@@ -64,9 +64,7 @@ async def test_plan_exit_switches_to_build_and_returns_mode_switch_metadata(
     updates: list[str] = []
 
     async def fake_get(cls, session_id: str, project_id=None):  # type: ignore[no-untyped-def]
-        info = _session_info()
-        info.agent = "plan"
-        return info
+        return _session_info()
 
     async def fake_update(cls, session_id: str, project_id=None, **kwargs):  # type: ignore[no-untyped-def]
         updates.append(kwargs.get("agent"))
@@ -88,7 +86,7 @@ async def test_plan_exit_switches_to_build_and_returns_mode_switch_metadata(
             message_id="msg_1",
             agent="plan",
             call_id="call_1",
-            extra={"worktree": "/tmp/project"},
+            worktree="/tmp/project",
             app=app,
         ),
     )
@@ -118,7 +116,7 @@ async def test_plan_enter_rejects_when_user_declines(monkeypatch: pytest.MonkeyP
                 message_id="msg_1",
                 agent="build",
                 call_id="call_1",
-                extra={"worktree": "/tmp/project"},
+                worktree="/tmp/project",
                 app=app,
             ),
         )

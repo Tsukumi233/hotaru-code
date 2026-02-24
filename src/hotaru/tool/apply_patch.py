@@ -52,7 +52,7 @@ def _line_stats(old: str, new: str) -> tuple[int, int]:
 
 
 async def _build_changes(params: ApplyPatchParams, ctx: ToolContext) -> List[_FileChange]:
-    cwd = Path(str(ctx.extra.get("cwd") or Path.cwd()))
+    cwd = Path(ctx.cwd or str(Path.cwd()))
     hunks = parse_patch(params.patch_text)
     if not hunks:
         raise PatchParseError("apply_patch verification failed: no hunks found")

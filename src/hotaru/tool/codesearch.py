@@ -76,7 +76,7 @@ async def codesearch_execute(params: CodeSearchParams, ctx: ToolContext) -> Tool
     )
 
 
-def codesearch_permissions(params: CodeSearchParams, _ctx: ToolContext) -> list[PermissionSpec]:
+async def codesearch_permissions(params: CodeSearchParams, _ctx: ToolContext) -> list[PermissionSpec]:
     return [
         PermissionSpec(
             permission="codesearch",

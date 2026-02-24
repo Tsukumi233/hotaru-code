@@ -82,7 +82,7 @@ async def websearch_execute(params: WebSearchParams, ctx: ToolContext) -> ToolRe
     )
 
 
-def websearch_permissions(params: WebSearchParams, _ctx: ToolContext) -> list[PermissionSpec]:
+async def websearch_permissions(params: WebSearchParams, _ctx: ToolContext) -> list[PermissionSpec]:
     return [
         PermissionSpec(
             permission="websearch",

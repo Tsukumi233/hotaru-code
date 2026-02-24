@@ -50,11 +50,11 @@ _TODOWRITE_DESC = (Path(__file__).parent / "todowrite.txt").read_text(encoding="
 _TODOREAD_DESC = (Path(__file__).parent / "todoread.txt").read_text(encoding="utf-8")
 
 
-def _todo_write_permissions(_params: TodoWriteParams, _ctx: ToolContext) -> list[PermissionSpec]:
+async def _todo_write_permissions(_params: TodoWriteParams, _ctx: ToolContext) -> list[PermissionSpec]:
     return [PermissionSpec(permission="todowrite", patterns=["*"], always=["*"], metadata={})]
 
 
-def _todo_read_permissions(_params: TodoReadParams, _ctx: ToolContext) -> list[PermissionSpec]:
+async def _todo_read_permissions(_params: TodoReadParams, _ctx: ToolContext) -> list[PermissionSpec]:
     return [PermissionSpec(permission="todoread", patterns=["*"], always=["*"], metadata={})]
 
 TodoWriteTool = Tool.define(

@@ -110,8 +110,8 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
     if not parent_session:
         raise ValueError(f"Parent session not found: {ctx.session_id}")
 
-    cwd = str(ctx.extra.get("cwd") or Path.cwd())
-    worktree = str(ctx.extra.get("worktree") or cwd)
+    cwd = ctx.cwd or str(Path.cwd())
+    worktree = ctx.worktree or cwd
     provider_id, model_id = await _resolve_task_model(agent_name=agent.name, parent_session=parent_session, context=ctx)
     model_info = await Provider.get_model(provider_id, model_id)
 
@@ -178,7 +178,7 @@ async def _run_subagent_task(params: TaskParams, ctx: ToolContext) -> ToolResult
     )
 
 
-def task_permissions(params: TaskParams, ctx: ToolContext) -> list[PermissionSpec]:
+async def task_permissions(params: TaskParams, ctx: ToolContext) -> list[PermissionSpec]:
     if bool(ctx.extra.get("bypass_agent_check")):
         return []
     return [

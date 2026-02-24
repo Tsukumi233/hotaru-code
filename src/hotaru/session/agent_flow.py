@@ -193,7 +193,7 @@ class AgentFlow:
         try:
             from ..agent import Agent, AgentMode
             from ..tool.task import TaskParams, extract_subagent_mention, short_description
-        except Exception:
+        except ImportError:
             return None
 
         parsed = extract_subagent_mention(user_message)

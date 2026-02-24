@@ -19,7 +19,7 @@ async def test_registry_execute_checks_permissions_before_tool_execution() -> No
         events.append(f"execute:{args.value}")
         return ToolResult(title="ok", output=args.value)
 
-    def perm(args: _PermParams, _ctx: ToolContext) -> list[PermissionSpec]:
+    async def perm(args: _PermParams, _ctx: ToolContext) -> list[PermissionSpec]:
         events.append(f"permission:{args.value}")
         return [
             PermissionSpec(
