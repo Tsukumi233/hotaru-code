@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 
 from rich.console import Console
 
+from ...runtime.logging import bootstrap_logging
 from ...server.server import Server
 from ...util.log import Log
 
@@ -24,11 +25,12 @@ async def serve_web(
     host: str,
     port: int,
     open_browser: bool,
+    access_log: bool = True,
     wait: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
-    info = await Server.start(host=host, port=port)
+    info = await Server.start(host=host, port=port, access_log=access_log)
     console.print(f"[green]Hotaru WebUI[/green] running at {info.url}")
-    log.info("web server started", {"host": host, "port": port})
+    log.info("web server started", {"host": host, "port": port, "access_log": access_log})
 
     if open_browser:
         webbrowser.open(info.url)
@@ -41,8 +43,29 @@ async def serve_web(
         log.info("web server stopped", {"host": host, "port": port})
 
 
-def web_command(*, host: str, port: int, open_browser: bool) -> None:
+def web_command(
+    *,
+    host: str,
+    port: int,
+    open_browser: bool,
+    log_level: str | None = None,
+    log_format: str | None = None,
+    access_log: bool = True,
+) -> None:
+    settings = bootstrap_logging(
+        mode="web",
+        level=log_level,
+        format=log_format,
+        access_log=access_log,
+    )
     try:
-        asyncio.run(serve_web(host=host, port=port, open_browser=open_browser))
+        asyncio.run(
+            serve_web(
+                host=host,
+                port=port,
+                open_browser=open_browser,
+                access_log=settings.access_log,
+            )
+        )
     except KeyboardInterrupt:
         console.print("\nStopping Hotaru WebUI...")

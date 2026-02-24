@@ -43,9 +43,10 @@ class Server:
         ctx: AppContext,
         *,
         manage_lifecycle: bool = False,
+        access_log: bool = True,
     ) -> FastAPI:
         """Build a FastAPI app with an explicit application context."""
-        return create_app(ctx, manage_lifecycle=manage_lifecycle)
+        return create_app(ctx, manage_lifecycle=manage_lifecycle, access_log=access_log)
 
     @classmethod
     def _web_dist_candidates(cls) -> list[Path]:
@@ -56,12 +57,13 @@ class Server:
         cls,
         host: str = "127.0.0.1",
         port: int = DEFAULT_PORT,
+        access_log: bool = True,
     ) -> ServerInfo:
         import uvicorn
 
         await Storage.initialize()
         cls._ctx = AppContext()
-        cls._app = cls._create_app(cls._ctx, manage_lifecycle=True)
+        cls._app = cls._create_app(cls._ctx, manage_lifecycle=True, access_log=access_log)
 
         config = uvicorn.Config(
             cls._app,
@@ -73,7 +75,7 @@ class Server:
         cls._server = uvicorn.Server(config)
         cls._info = ServerInfo(host=host, port=port)
 
-        log.info("starting server", {"host": host, "port": port})
+        log.info("starting server", {"host": host, "port": port, "access_log": access_log})
         cls._task = asyncio.create_task(cls._server.serve())
 
         while not cls._server.started and not cls._task.done():

@@ -183,6 +183,19 @@ class TuiConfig(BaseModel):
     diff_style: Optional[Literal["auto", "stacked"]] = None
 
 
+class LoggingConfig(BaseModel):
+    """Logging configuration."""
+
+    level: Optional[str] = None
+    format: Optional[Literal["kv", "json", "pretty"]] = None
+    console: Optional[bool] = None
+    file: Optional[bool] = None
+    access_log: Optional[bool] = Field(None, alias="accessLog")
+    dev_file: Optional[bool] = Field(None, alias="devFile")
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
 class ExperimentalConfig(BaseModel):
     """Experimental feature toggles."""
 
@@ -200,6 +213,7 @@ class Config(BaseModel):
     schema_: Optional[str] = Field(None, alias="$schema")
     theme: Optional[str] = None
     log_level: Optional[str] = Field(None, alias="logLevel")
+    logging: Optional[LoggingConfig] = None
 
     # Model settings
     model: Optional[str] = None

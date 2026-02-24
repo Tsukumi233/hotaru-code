@@ -29,3 +29,13 @@ def test_key_error_is_not_mapped_to_not_found(monkeypatch, app_ctx) -> None:  # 
 
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "internal_error"
+    assert response.headers.get("x-request-id")
+
+
+def test_health_response_includes_request_id(app_ctx) -> None:  # type: ignore[no-untyped-def]
+    app = Server._create_app(app_ctx, access_log=False)
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.headers.get("x-request-id")

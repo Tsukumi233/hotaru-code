@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 
 from .. import __version__
+from ..runtime.logging import bootstrap_logging
 from .cmd.agent import app as agent_app
 from .cmd.debug import app as debug_app
 
@@ -118,6 +119,9 @@ def main(
 
     Running without a subcommand launches the interactive TUI.
     """
+    if ctx.invoked_subcommand and ctx.invoked_subcommand not in {"run", "tui", "web"}:
+        bootstrap_logging(mode="cli")
+
     # If a subcommand was invoked, don't run TUI
     if ctx.invoked_subcommand is not None:
         return
@@ -125,6 +129,7 @@ def main(
     # Launch TUI as default behavior
     from .cmd.tui import tui_command
 
+    bootstrap_logging(mode="tui")
     tui_command(
         model=model,
         agent=agent,
@@ -190,6 +195,8 @@ def run(
     """Run hotaru with a message."""
     from .cmd.run import run_command
 
+    bootstrap_logging(mode="run")
+
     # Combine message parts
     text = " ".join(message) if message else ""
 
@@ -234,6 +241,21 @@ def web(
         "--open",
         help="Open the browser after server startup",
     ),
+    log_level: Optional[str] = typer.Option(
+        None,
+        "--log-level",
+        help="Log level: debug, info, warn, error",
+    ),
+    log_format: Optional[str] = typer.Option(
+        None,
+        "--log-format",
+        help="Log format: kv, json, pretty",
+    ),
+    access_log: bool = typer.Option(
+        True,
+        "--access-log/--no-access-log",
+        help="Enable HTTP access logs",
+    ),
 ):
     """Start Hotaru WebUI server."""
     from .cmd.web import web_command
@@ -242,6 +264,9 @@ def web(
         host=host,
         port=port,
         open_browser=open_browser,
+        log_level=log_level,
+        log_format=log_format,
+        access_log=access_log,
     )
 
 
@@ -433,6 +458,7 @@ def tui(
     """
     from .cmd.tui import tui_command
 
+    bootstrap_logging(mode="tui")
     tui_command(
         model=model,
         agent=agent,
