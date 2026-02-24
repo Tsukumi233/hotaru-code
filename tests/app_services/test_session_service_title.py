@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from hotaru.app_services.session_service import SessionService
-from hotaru.core.bus import Bus
 from hotaru.core.global_paths import GlobalPath
 from hotaru.session import Session
 from hotaru.storage import Storage
@@ -15,7 +14,6 @@ def _setup_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(GlobalPath, "data", classmethod(lambda cls: str(data)))
     Storage.reset()
-    Bus.provide(Bus())
 
 
 @pytest.mark.anyio

@@ -22,7 +22,6 @@ def _setup_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(GlobalPath, "data", classmethod(lambda cls: str(data_dir)))
     Storage.reset()
-    Bus.provide(Bus())
 
 
 @pytest.mark.anyio
