@@ -111,6 +111,33 @@ def test_message_sets_empty_interleaved_field_for_assistant_tool_calls() -> None
     assert transformed[0]["reasoning_content"] == ""
 
 
+def test_message_uses_kimi_fallback_interleaved_field_for_tool_calls() -> None:
+    model_id = "custom-sf/Pro/moonshotai/Kimi-K2.5"
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "glob", "arguments": "{}"},
+                }
+            ],
+        }
+    ]
+
+    transformed = ProviderTransform.message(
+        messages,
+        model=_model(provider_id="cf", model_id=model_id, interleaved_field=None),
+        provider_id="cf",
+        model_id=model_id,
+        api_type="openai",
+    )
+
+    assert transformed[0]["reasoning_content"] == ""
+
+
 def test_resolve_variant_reads_model_variants() -> None:
     model = _model(
         provider_id="demo",

@@ -5,9 +5,10 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from ..core.bus import Bus
 from ..runtime import AppContext
 from .errors import register_error_handlers
 from .routes import agents, events, permissions, preferences, providers, ptys, questions, sessions, system
@@ -46,6 +47,14 @@ def create_app(
         },
     )
     app.state.ctx = ctx
+
+    @app.middleware("http")
+    async def _bind_bus_for_request(request: Request, call_next):
+        token = Bus.provide(ctx.bus)
+        try:
+            return await call_next(request)
+        finally:
+            Bus.restore(token)
 
     app.add_middleware(
         CORSMiddleware,

@@ -100,6 +100,8 @@ def fake_app(**overrides: Any) -> AppContext:
 def create_test_app_context() -> Iterator[AppContext]:
     """Create a test AppContext with explicit lifecycle phases."""
     ctx = AppContext()
+    if ctx._bus_token is None:
+        ctx._bus_token = Bus.provide(ctx.bus)
     ctx.started = True
     ctx.health = {
         "status": "ready",
@@ -123,4 +125,6 @@ def create_test_app_context() -> Iterator[AppContext]:
             },
         }
         ctx.bus.clear()
-        Bus.restore(ctx._bus_token)
+        if ctx._bus_token is not None:
+            Bus.restore(ctx._bus_token)
+            ctx._bus_token = None

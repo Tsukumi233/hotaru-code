@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextvars import Token
 from typing import Literal, TypedDict
 
 from ..agent.agent import Agent
@@ -61,7 +62,7 @@ class AppContext:
 
     def __init__(self) -> None:
         self.bus = Bus()
-        self._bus_token = Bus.provide(self.bus)
+        self._bus_token: Token[Bus] | None = None
         self.permission = Permission()
         self.question = Question()
         self.skills = Skill()
@@ -78,6 +79,9 @@ class AppContext:
     async def startup(self) -> None:
         if self.started:
             return
+
+        if self._bus_token is None:
+            self._bus_token = Bus.provide(self.bus)
 
         results = await asyncio.gather(
             self._start_node("mcp", self.mcp.init, critical=True),
@@ -235,7 +239,9 @@ class AppContext:
         self.agents.reset()
         self.tools.reset()
         self.bus.clear()
-        Bus.restore(self._bus_token)
+        if self._bus_token is not None:
+            Bus.restore(self._bus_token)
+            self._bus_token = None
         self.started = False
         self.health = self._failed_health("runtime stopped")
         if errors:

@@ -59,6 +59,14 @@ class ProviderTransform:
         return None
 
     @staticmethod
+    def fallback_interleaved_field(*, provider_id: str, model_id: str) -> Optional[str]:
+        provider = str(provider_id or "").lower()
+        model = str(model_id or "").lower()
+        if "moonshot" in provider or "moonshot" in model or "kimi" in model:
+            return "reasoning_content"
+        return None
+
+    @staticmethod
     def _parse_json(input_value: Any) -> Dict[str, Any]:
         if isinstance(input_value, dict):
             return input_value
@@ -393,6 +401,11 @@ class ProviderTransform:
         out: List[Dict[str, Any]] = []
         source = [copy.deepcopy(msg) for msg in messages if isinstance(msg, dict)]
         interleaved_field = cls.interleaved_field(model)
+        if not interleaved_field:
+            interleaved_field = cls.fallback_interleaved_field(
+                provider_id=provider_id,
+                model_id=model_id,
+            )
 
         for idx, msg in enumerate(source):
             role = msg.get("role")
