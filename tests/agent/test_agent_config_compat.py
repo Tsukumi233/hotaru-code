@@ -20,7 +20,7 @@ def _agents() -> Agent:
 
 
 @pytest.mark.anyio
-async def test_agent_tools_and_legacy_maxsteps_are_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_agent_tools_and_steps_are_applied(monkeypatch: pytest.MonkeyPatch) -> None:
     agents = _agents()
     _patch_config(
         monkeypatch,
@@ -33,7 +33,7 @@ async def test_agent_tools_and_legacy_maxsteps_are_applied(monkeypatch: pytest.M
                         "bash": False,
                         "write": False,
                     },
-                    "maxSteps": 4,
+                    "steps": 4,
                     "reasoningEffort": "high",
                 }
             }

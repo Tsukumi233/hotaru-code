@@ -38,7 +38,6 @@ from .widgets import (
     DiffDisplay,
     Toast,
     Spinner,
-    StatusBar,
     SlashCommandItem,
     SlashPopover,
 )
@@ -96,7 +95,6 @@ __all__ = [
     "DiffDisplay",
     "Toast",
     "Spinner",
-    "StatusBar",
     "SlashCommandItem",
     "SlashPopover",
     # Dialogs

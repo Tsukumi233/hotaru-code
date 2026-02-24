@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .global_paths import GlobalPath
 from .config_markdown import parse_markdown_config
@@ -71,7 +71,6 @@ class AgentConfig(BaseModel):
     mode: Optional[Literal["subagent", "primary", "all"]] = None
     hidden: Optional[bool] = None
     steps: Optional[int] = None
-    max_steps: Optional[int] = Field(None, alias="maxSteps")
     color: Optional[str] = None
     tools: Optional[Dict[str, bool]] = None
     permission: Optional[Union[str, Dict[str, Any]]] = None
@@ -79,10 +78,14 @@ class AgentConfig(BaseModel):
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-    @property
-    def effective_steps(self) -> Optional[int]:
-        """Return steps, supporting legacy ``maxSteps``."""
-        return self.steps if self.steps is not None else self.max_steps
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_steps(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        if "maxSteps" in value or "max_steps" in value:
+            raise ValueError("Legacy field 'maxSteps' is not supported. Use 'steps' instead.")
+        return value
 
 
 class CommandConfig(BaseModel):
@@ -140,11 +143,16 @@ class ProviderConfig(BaseModel):
     # Provider options (includes baseURL, apiKey, headers)
     options: Optional[Dict[str, Any]] = None
 
-    # Legacy fields for backwards compatibility
-    whitelist: Optional[List[str]] = None
-    blacklist: Optional[List[str]] = None
-
     model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_model_filters(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        if "whitelist" in value or "blacklist" in value:
+            raise ValueError("Legacy fields 'whitelist/blacklist' are not supported.")
+        return value
 
 
 class ServerConfig(BaseModel):

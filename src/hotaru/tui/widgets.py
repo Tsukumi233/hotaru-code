@@ -1075,35 +1075,6 @@ class Spinner(Static):
         return Text(f"{frame} {self.text}", style=theme.accent)
 
 
-class StatusBar(Static):
-    """Legacy status bar widget (kept for compatibility)."""
-
-    def __init__(
-        self,
-        model: Optional[str] = None,
-        agent: Optional[str] = None,
-        session_id: Optional[str] = None,
-        **kwargs
-    ) -> None:
-        super().__init__(**kwargs)
-        self.model = model
-        self.agent = agent
-        self.session_id = session_id
-
-    def render(self) -> Text:
-        theme = ThemeManager.get_theme()
-        text = Text()
-        if self.agent:
-            text.append(f"▣ {self.agent}", style=f"bold {theme.primary}")
-            text.append(" · ", style=theme.text_muted)
-        if self.model:
-            text.append(self.model, style=theme.text_muted)
-        if self.session_id:
-            text.append(" · ", style=theme.text_muted)
-            text.append(self.session_id[:8], style=theme.text_muted)
-        return text
-
-
 class AppFooter(Static):
     """Footer bar matching OpenCode layout.
 

@@ -339,8 +339,8 @@ class Agent:
                     agent.color = agent_config.color
                 if agent_config.hidden is not None:
                     agent.hidden = agent_config.hidden
-                if agent_config.effective_steps is not None:
-                    agent.steps = agent_config.effective_steps
+                if agent_config.steps is not None:
+                    agent.steps = agent_config.steps
                 if agent_config.options:
                     agent.options.update(agent_config.options)
                 if agent_config.model_extra:
@@ -358,8 +358,6 @@ class Agent:
                             "mode",
                             "hidden",
                             "steps",
-                            "maxSteps",
-                            "max_steps",
                             "color",
                             "tools",
                             "permission",

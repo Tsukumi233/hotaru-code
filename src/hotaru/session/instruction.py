@@ -19,7 +19,7 @@ from ..util.log import Log
 log = Log.create({"service": "session.instruction"})
 
 # Rule file precedence for local traversal: first matching type wins.
-_RULE_FILES = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]  # CONTEXT.md is deprecated compatibility.
+_RULE_FILES = ["AGENTS.md", "CLAUDE.md"]
 
 
 def _truthy(name: str) -> bool:

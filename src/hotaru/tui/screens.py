@@ -29,7 +29,6 @@ from .widgets import (
     SessionHeaderBar,
     SlashCommandItem,
     Spinner,
-    StatusBar,
     ToolDisplay,
 )
 

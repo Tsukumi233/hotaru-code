@@ -20,7 +20,7 @@ async def test_load_markdown_agent_from_project_opencode_dir(
                 "---",
                 "description: Reviews code quality",
                 "mode: subagent",
-                "maxSteps: 5",
+                "steps: 5",
                 "tools:",
                 "  bash: false",
                 "reasoningEffort: high",
@@ -50,7 +50,7 @@ async def test_load_markdown_agent_from_project_opencode_dir(
     review = config.agent["review"]
     assert review.prompt == "You are a strict code reviewer."
     assert review.mode == "subagent"
-    assert review.max_steps == 5
+    assert review.steps == 5
     assert review.tools == {"bash": False}
     assert review.model_extra is not None
     assert review.model_extra.get("reasoningEffort") == "high"

@@ -24,3 +24,31 @@ def test_config_forbids_unknown_fields() -> None:
 
     with pytest.raises(ValidationError):
         Config.model_validate({"experimental": {"unknown": True}})
+
+
+def test_config_rejects_legacy_agent_max_steps_field() -> None:
+    with pytest.raises(ValidationError, match="maxSteps"):
+        Config.model_validate(
+            {
+                "agent": {
+                    "review": {
+                        "steps": 3,
+                        "maxSteps": 5,
+                    }
+                }
+            }
+        )
+
+
+def test_config_rejects_legacy_provider_model_filters() -> None:
+    with pytest.raises(ValidationError, match="whitelist/blacklist"):
+        Config.model_validate(
+            {
+                "provider": {
+                    "demo": {
+                        "type": "openai",
+                        "whitelist": ["model-a"],
+                    }
+                }
+            }
+        )

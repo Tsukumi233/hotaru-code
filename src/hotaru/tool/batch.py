@@ -12,7 +12,7 @@ from ..core.id import Identifier
 from .tool import Tool, ToolContext, ToolResult
 
 DISALLOWED = {"batch"}
-FILTERED_FROM_SUGGESTIONS = {"invalid", "patch", *DISALLOWED}
+FILTERED_FROM_SUGGESTIONS = set(DISALLOWED)
 MAX_CALLS = 25
 
 

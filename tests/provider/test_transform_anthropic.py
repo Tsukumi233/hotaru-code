@@ -1,9 +1,8 @@
-from hotaru.provider.transform import (
-    anthropic_messages,
-    anthropic_tools,
-    normalize_messages,
-    normalize_tool_call_id,
-)
+from hotaru.provider.transform import ProviderTransform
+
+
+class _Model:
+    capabilities = type("Capabilities", (), {"interleaved": False})
 
 
 def test_anthropic_tools_conversion() -> None:
@@ -17,7 +16,7 @@ def test_anthropic_tools_conversion() -> None:
             },
         }
     ]
-    converted = anthropic_tools(tools)
+    converted = ProviderTransform.anthropic_tools(tools)
     assert converted is not None
     assert converted[0]["name"] == "read"
     assert converted[0]["input_schema"]["type"] == "object"
@@ -40,7 +39,7 @@ def test_anthropic_messages_conversion_with_tool_roundtrip() -> None:
         {"role": "tool", "tool_call_id": "call_1", "content": "file contents"},
     ]
 
-    converted = anthropic_messages(messages)
+    converted = ProviderTransform.anthropic_messages(messages)
     assert len(converted) == 3
     assert converted[0]["role"] == "user"
     assert converted[1]["role"] == "assistant"
@@ -53,7 +52,11 @@ def test_anthropic_messages_conversion_with_tool_roundtrip() -> None:
 
 
 def test_normalize_tool_call_id_for_claude() -> None:
-    normalized = normalize_tool_call_id("call:1/alpha", provider_id="anthropic", model_id="claude-sonnet")
+    normalized = ProviderTransform.normalize_tool_call_id(
+        "call:1/alpha",
+        provider_id="anthropic",
+        model_id="claude-sonnet",
+    )
     assert normalized == "call_1_alpha"
 
 
@@ -62,8 +65,9 @@ def test_normalize_messages_filters_empty_anthropic_messages() -> None:
         {"role": "assistant", "content": ""},
         {"role": "assistant", "content": "hello"},
     ]
-    normalized = normalize_messages(
+    normalized = ProviderTransform.message(
         messages,
+        model=_Model(),
         provider_id="anthropic",
         model_id="claude-sonnet",
         api_type="anthropic",
@@ -78,8 +82,9 @@ def test_normalize_messages_inserts_assistant_between_tool_and_user_for_mistral(
         {"role": "tool", "tool_call_id": "call!1", "content": "ok"},
         {"role": "user", "content": "next"},
     ]
-    normalized = normalize_messages(
+    normalized = ProviderTransform.message(
         messages,
+        model=_Model(),
         provider_id="mistral",
         model_id="mistral-large",
         api_type="openai",

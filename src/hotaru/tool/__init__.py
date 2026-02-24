@@ -27,7 +27,6 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "ApplyPatchTool": (".apply_patch", "ApplyPatchTool"),
     "MultiEditTool": (".multiedit", "MultiEditTool"),
     "BatchTool": (".batch", "BatchTool"),
-    "InvalidTool": (".invalid", "InvalidTool"),
     "PlanEnterTool": (".plan", "PlanEnterTool"),
     "PlanExitTool": (".plan", "PlanExitTool"),
     "LspTool": (".lsp", "LspTool"),
