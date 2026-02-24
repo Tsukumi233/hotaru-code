@@ -7,12 +7,13 @@ using the JSON-RPC protocol over stdio.
 import asyncio
 import os
 import subprocess
+from contextvars import Context, copy_context
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 from pydantic import BaseModel
 from pylsp_jsonrpc.streams import JsonRpcStreamReader, JsonRpcStreamWriter
 
-from ..core.bus import Bus, BusEvent
 from ..project.instance import Instance
 from ..util.log import Log
 from .language import LANGUAGE_EXTENSIONS
@@ -24,14 +25,10 @@ log = Log.create({"service": "lsp.client"})
 DIAGNOSTICS_DEBOUNCE_MS = 150
 
 
-class DiagnosticsEventProps(BaseModel):
-    """Properties for diagnostics event."""
-    server_id: str
-    path: str
-
-
-# Event for diagnostics updates
-DiagnosticsEvent = BusEvent.define("lsp.client.diagnostics", DiagnosticsEventProps)
+@dataclass(slots=True)
+class _DiagWaiter:
+    event: asyncio.Event
+    task: asyncio.Task[None] | None = None
 
 
 class LSPDiagnostic(BaseModel):
@@ -83,6 +80,8 @@ class LSPClient:
         self._stream_reader: Optional[JsonRpcStreamReader] = None
         self._stream_writer: Optional[JsonRpcStreamWriter] = None
         self._initialized = False
+        self._diag_waiters: Dict[str, List[_DiagWaiter]] = {}
+        self._loop_context: Context | None = None
 
     async def initialize(self) -> bool:
         """Initialize the LSP connection.
@@ -94,6 +93,7 @@ class LSPClient:
             return True
 
         self._loop = asyncio.get_running_loop()
+        self._loop_context = copy_context()
 
         stdout = self.server.process.stdout
         stdin = self.server.process.stdin
@@ -179,21 +179,28 @@ class LSPClient:
         if not self._loop or self._loop.is_closed():
             return
 
-        future = asyncio.run_coroutine_threadsafe(
-            self._handle_message(message),
-            self._loop,
-        )
+        if self._loop_context:
+            self._loop.call_soon_threadsafe(
+                self._schedule_message,
+                message,
+                context=self._loop_context,
+            )
+            return
 
-        def on_done(done_future) -> None:
-            try:
-                done_future.result()
-            except Exception as e:
-                log.error("Error handling LSP message", {
-                    "server_id": self.server_id,
-                    "error": str(e),
-                })
+        self._loop.call_soon_threadsafe(self._schedule_message, message)
 
-        future.add_done_callback(on_done)
+    def _schedule_message(self, message: Dict[str, Any]) -> None:
+        task = asyncio.create_task(self._handle_message(message))
+        task.add_done_callback(self._on_message_done)
+
+    def _on_message_done(self, task: asyncio.Task[None]) -> None:
+        try:
+            task.result()
+        except Exception as e:
+            log.error("Error handling LSP message", {
+                "server_id": self.server_id,
+                "error": str(e),
+            })
 
     async def _handle_message(self, message: Dict[str, Any]) -> None:
         """Handle an incoming message from the server.
@@ -266,12 +273,21 @@ class LSPClient:
         })
 
         self._diagnostics[file_path] = diagnostics
+        self._notify_waiters(file_path)
 
-        # Publish event
-        await Bus.publish(DiagnosticsEvent, DiagnosticsEventProps(
-            server_id=self.server_id,
-            path=file_path
-        ))
+    def _notify_waiters(self, path: str) -> None:
+        waiters = self._diag_waiters.get(path)
+        if not waiters:
+            return
+
+        for waiter in waiters:
+            if waiter.task:
+                waiter.task.cancel()
+            waiter.task = asyncio.create_task(self._debounce_waiter(waiter))
+
+    async def _debounce_waiter(self, waiter: _DiagWaiter) -> None:
+        await asyncio.sleep(DIAGNOSTICS_DEBOUNCE_MS / 1000)
+        waiter.event.set()
 
     async def _send_request(
         self,
@@ -458,34 +474,28 @@ class LSPClient:
         path = os.path.normpath(path)
         log.info("waiting for diagnostics", {"path": path})
 
-        event = asyncio.Event()
-        debounce_task: Optional[asyncio.Task] = None
-
-        def on_diagnostics(payload):
-            nonlocal debounce_task
-            if (payload.properties.get("path") == path and
-                payload.properties.get("server_id") == self.server_id):
-                # Debounce to allow follow-up diagnostics
-                if debounce_task:
-                    debounce_task.cancel()
-
-                async def set_event():
-                    await asyncio.sleep(DIAGNOSTICS_DEBOUNCE_MS / 1000)
-                    event.set()
-
-                debounce_task = asyncio.create_task(set_event())
-
-        unsubscribe = Bus.subscribe(DiagnosticsEvent, on_diagnostics)
+        waiter = _DiagWaiter(event=asyncio.Event())
+        self._diag_waiters.setdefault(path, []).append(waiter)
 
         try:
-            await asyncio.wait_for(event.wait(), timeout=timeout)
+            await asyncio.wait_for(waiter.event.wait(), timeout=timeout)
             log.info("got diagnostics", {"path": path})
         except asyncio.TimeoutError:
             pass
         finally:
-            if debounce_task:
-                debounce_task.cancel()
-            unsubscribe()
+            if waiter.task:
+                waiter.task.cancel()
+
+            waiters = self._diag_waiters.get(path)
+            if not waiters:
+                return
+
+            if waiter in waiters:
+                waiters.remove(waiter)
+            if waiters:
+                return
+
+            self._diag_waiters.pop(path, None)
 
     @property
     def diagnostics(self) -> Dict[str, List[LSPDiagnostic]]:
@@ -528,5 +538,10 @@ class LSPClient:
             if not future.done():
                 future.cancel()
         self._pending_requests.clear()
+        for waiters in self._diag_waiters.values():
+            for waiter in waiters:
+                if waiter.task:
+                    waiter.task.cancel()
+        self._diag_waiters.clear()
 
         log.info("shutdown complete", {"server_id": self.server_id})
