@@ -1,5 +1,5 @@
-"""Hierarchical JSON file storage."""
+"""SQLite-backed storage."""
 
-from .storage import Storage, NotFoundError, TxOp
+from .sqlite import Storage, NotFoundError, TxOp
 
 __all__ = ["Storage", "NotFoundError", "TxOp"]
