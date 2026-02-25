@@ -22,7 +22,6 @@ from pydantic import BaseModel
 
 from ..core.bus import Bus, BusEvent
 from ..core.config import ConfigManager
-from ..project.instance import Instance
 from ..util.log import Log
 from .auth import McpAuth
 
@@ -604,8 +603,8 @@ class MCP:
         timeout = config.get("timeout", DEFAULT_TIMEOUT)
 
         try:
-            # Get working directory
-            cwd = Instance.directory()
+            # Use process cwd — MCP servers are app-level, not instance-scoped
+            cwd = os.getcwd()
 
             # Prepare environment
             env = os.environ.copy()
