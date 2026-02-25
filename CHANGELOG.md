@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0](https://github.com/Tsukumi233/hotaru-code/compare/v1.0.0...v1.1.0) (2026-02-25)
+
+
+### Features
+
+* Add reasoning_text handling in ProviderTransform and update related processing logic ([e57650b](https://github.com/Tsukumi233/hotaru-code/commit/e57650b1155a58561799c43609c4c596d9efbcd3))
+* **cli:** extend web command with logging options for level, format, and access log ([2b8b6fa](https://github.com/Tsukumi233/hotaru-code/commit/2b8b6fab1ad894715edd029d19936ce11b710228))
+* **diagnostics:** refactor diagnostics handling and add debounce logic ([272254b](https://github.com/Tsukumi233/hotaru-code/commit/272254bfcbdc2b2e781a574bb24c4586b021c051))
+* Enhance model state management with persistence option ([a9f53dc](https://github.com/Tsukumi233/hotaru-code/commit/a9f53dcb583dbc0fcab81c1240b40116498dd8d8))
+* Enhance provider and session handling with strict schema validation ([7cb7717](https://github.com/Tsukumi233/hotaru-code/commit/7cb7717f29c4965e147db4ecab18e320881fb3b7))
+* Enhance schema normalization by removing titles and flattening nullable types ([aae28ed](https://github.com/Tsukumi233/hotaru-code/commit/aae28ed24d51ceaccb463c15e47d23c55304a521))
+* Introduce ToolResolver for effective tool resolution and refactor session processing ([f046434](https://github.com/Tsukumi233/hotaru-code/commit/f046434ef20fbf8e662176dff1e7ff158021c81b))
+* **logging:** implement runtime logging configuration and bootstrap logic ([2b8b6fa](https://github.com/Tsukumi233/hotaru-code/commit/2b8b6fab1ad894715edd029d19936ce11b710228))
+* **openai:** add text sanitization and error handling in streaming process ([4a8fece](https://github.com/Tsukumi233/hotaru-code/commit/4a8fece7b0ac9552a68dc7c04dfbdd937ef59ca4))
+* **provider:** add fallback logic for interleaved field in message transformation and enhance related tests ([a3fbd1b](https://github.com/Tsukumi233/hotaru-code/commit/a3fbd1bb7251130e0dab1d393c648df3bdaa5e83))
+* **provider:** add provider configuration application and related tests ([106aaf8](https://github.com/Tsukumi233/hotaru-code/commit/106aaf864a9d10ffe7abc505c5852b831da0f3fb))
+* **provider:** refactor provider connection payload structure and update related tests ([c04bf10](https://github.com/Tsukumi233/hotaru-code/commit/c04bf105e4ca3a2b6b57edb0a786014b65e00e9a))
+* **runtime:** implement instance context management and runtime binding helpers ([929a1c0](https://github.com/Tsukumi233/hotaru-code/commit/929a1c01c9f62dc07a61194a97dc8114fd092f79))
+* **sanitization:** add text sanitization for control characters in OpenAI SDK and session processor ([3da06be](https://github.com/Tsukumi233/hotaru-code/commit/3da06be36153c40dc6401722ef5987455d98b128))
+* **server:** add access logging middleware and enhance server startup logging ([2b8b6fa](https://github.com/Tsukumi233/hotaru-code/commit/2b8b6fab1ad894715edd029d19936ce11b710228))
+* **session:** add session index management and related tests ([b0205e3](https://github.com/Tsukumi233/hotaru-code/commit/b0205e331299088321981ef5da5e67b277554832))
+* update agent and config to remove legacy fields, refactor related tests ([57e74f4](https://github.com/Tsukumi233/hotaru-code/commit/57e74f4c1d4c98f9ceae592b201472e079cf480c))
+* Update max_tokens to use ProviderTransform constant and enhance prompt verbosity examples ([23a8b10](https://github.com/Tsukumi233/hotaru-code/commit/23a8b10999e20a0b3aeedfafb7557d61bcbdadf3))
+
+
+### Bug Fixes
+
+* enhance timeout configuration for AsyncClient ([7c3870c](https://github.com/Tsukumi233/hotaru-code/commit/7c3870c183c9594f1170483977a1081b303fe9ab))
+* **permission:** guard pending queue against concurrent replies ([7322c18](https://github.com/Tsukumi233/hotaru-code/commit/7322c185d471949b07642776ad53ec9e71971354))
+* **server:** replace KeyError 404 mapping with explicit NotFoundError ([96d8804](https://github.com/Tsukumi233/hotaru-code/commit/96d8804756de328c4b7a87bf3348b7b56b45f611))
+* **session:** re-raise unexpected turn errors ([77240c1](https://github.com/Tsukumi233/hotaru-code/commit/77240c1b0aa0a5abc28489777654a824f94b63dd))
+* **tui:** move API server lifecycle management to CLI ([9cd526b](https://github.com/Tsukumi233/hotaru-code/commit/9cd526b76b1c53243957941b02e365825942a8cc))
+
 ## [1.0.0](https://github.com/Tsukumi233/hotaru-code/compare/v0.2.1...v1.0.0) (2026-02-22)
 
 
