@@ -45,6 +45,10 @@ class ToolRegistry:
         self._tools: Optional[Dict[str, ToolInfo]] = None
         self._initialized: bool = False
 
+    async def init(self) -> None:
+        """Eagerly initialize the tool registry during startup."""
+        self._initialize()
+
     @staticmethod
     def _load_custom_tools() -> Dict[str, ToolInfo]:
         custom: Dict[str, ToolInfo] = {}

@@ -8,6 +8,7 @@ from contextvars import Token
 from typing import Literal, TypedDict
 
 from ..core.bus import Bus, EventPayload
+from ..core.config import ConfigManager
 from ..util.log import Log
 from .app_runtime import AppRuntime
 
@@ -40,6 +41,7 @@ class AppContext(AppRuntime):
 
     __slots__ = (
         "_bus_token",
+        "_config_token",
         "_command_event_unsubscribe",
         "started",
         "health",
@@ -48,6 +50,7 @@ class AppContext(AppRuntime):
     def __init__(self) -> None:
         super().__init__()
         self._bus_token: Token[Bus] | None = None
+        self._config_token: Token[ConfigManager] | None = None
         self._command_event_unsubscribe: Callable[[], None] | None = None
         self.started = False
         self.health = self._failed_health("runtime not started")
@@ -56,9 +59,21 @@ class AppContext(AppRuntime):
         if self.started:
             return
 
+        # Phase A: Bind context vars
         if self._bus_token is None:
             self._bus_token = Bus.provide(self.bus)
+        if self._config_token is None:
+            self._config_token = ConfigManager.provide(self.config)
 
+        # Phase B: Config + Storage
+        await self.config.load()
+        from ..storage import Storage
+        await Storage.initialize()
+
+        # Phase C: Permission + Tools (sync, fast)
+        await self.tools.init()
+
+        # Phase D: MCP + LSP (parallel, with health tracking)
         results = await asyncio.gather(
             self._start_node("mcp", self.mcp.init, critical=True),
             self._start_node("lsp", self.lsp.init, critical=False),
@@ -83,6 +98,12 @@ class AppContext(AppRuntime):
             raise RuntimeError(f"critical startup dependency failed: {detail}")
         if self.health["status"] == "degraded":
             log.warn("runtime started in degraded mode", {"subsystems": subsystems})
+
+        # Phase E: Skills + Agents (parallel)
+        await asyncio.gather(
+            self.skills.init(),
+            self.agents.init(),
+        )
 
         from ..command import CommandEvent
         from ..project import Project
@@ -196,6 +217,7 @@ class AppContext(AppRuntime):
 
     async def shutdown(self) -> None:
         from ..project import Instance
+        from ..storage import Storage
 
         await self.runner.shutdown()
         results = await asyncio.gather(
@@ -206,6 +228,7 @@ class AppContext(AppRuntime):
             return_exceptions=True,
         )
         await Instance.dispose_all()
+        Storage.close()
         errors = [r for r in results if isinstance(r, BaseException)]
         if self._command_event_unsubscribe:
             self._command_event_unsubscribe()
@@ -217,6 +240,9 @@ class AppContext(AppRuntime):
         if self._bus_token is not None:
             Bus.restore(self._bus_token)
             self._bus_token = None
+        if self._config_token is not None:
+            ConfigManager.restore(self._config_token)
+            self._config_token = None
         self.started = False
         self.health = self._failed_health("runtime stopped")
         if errors:

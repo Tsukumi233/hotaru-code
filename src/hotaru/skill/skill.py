@@ -137,6 +137,10 @@ class Skill:
         self._cache: Optional[Dict[str, SkillInfo]] = None
         self._directories: Optional[Set[str]] = None
 
+    async def init(self) -> None:
+        """Eagerly initialize skills during startup."""
+        await self._initialize()
+
     async def _initialize(self) -> tuple[Dict[str, SkillInfo], Set[str]]:
         if self._cache is not None and self._directories is not None:
             return self._cache, self._directories

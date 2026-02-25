@@ -94,6 +94,10 @@ class Agent:
         self._skills = skills
         self._agents: Optional[Dict[str, AgentInfo]] = None
 
+    async def init(self) -> None:
+        """Eagerly initialize agents during startup."""
+        await self._initialize()
+
     async def _initialize(self) -> Dict[str, AgentInfo]:
         if self._agents is not None:
             return self._agents

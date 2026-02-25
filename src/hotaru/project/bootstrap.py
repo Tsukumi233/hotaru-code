@@ -1,4 +1,7 @@
-"""Project-instance bootstrap hooks."""
+"""Project-instance bootstrap hooks.
+
+Runs per-instance subsystem initialization after the runtime is bound.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +14,5 @@ if TYPE_CHECKING:
 
 
 async def instance_bootstrap(*, app: AppContext) -> None:
-    """Initialize per-instance runtime bindings."""
+    """Initialize per-instance runtime bindings and subsystems."""
     bind_runtime(app)
-
