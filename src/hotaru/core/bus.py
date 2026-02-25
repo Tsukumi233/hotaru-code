@@ -191,18 +191,18 @@ class Bus:
     ) -> Callable[[], None]:
         return cls._current()._raw_subscribe("*", callback)
 
-    @classmethod
-    def once(
-        cls,
-        event: BusEvent[T],
-        callback: Callable[[EventPayload], Union[None, Awaitable[None], bool]]
-    ) -> None:
-        def wrapper(payload: EventPayload):
-            result = callback(payload)
-            if result == "done" or result is True:
-                unsubscribe()
+    # @classmethod
+    # def once(
+    #     cls,
+    #     event: BusEvent[T],
+    #     callback: Callable[[EventPayload], Union[None, Awaitable[None], bool]]
+    # ) -> None:
+    #     def wrapper(payload: EventPayload):
+    #         result = callback(payload)
+    #         if result == "done" or result is True:
+    #             unsubscribe()
 
-        unsubscribe = cls.subscribe(event, wrapper)
+    #     unsubscribe = cls.subscribe(event, wrapper)
 
     def _raw_subscribe(
         self,
