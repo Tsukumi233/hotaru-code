@@ -16,3 +16,6 @@ wheels/
 session-ses*
 .worktrees/
 docs/plans/
+
+AGENTS.md
+CLAUDE.md

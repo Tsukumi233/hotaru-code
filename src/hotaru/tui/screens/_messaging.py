@@ -292,7 +292,7 @@ class MessagingMixin:
                     self.app.notify(f"Error: {error_msg}", severity="error")
                     await self._remove_spinner()
 
-            # OpenCode-like behavior: message request completion is authoritative.
+            # message request completion is authoritative.
             # If idle event was missed in transit, force a final sync after stream loop exits.
             if self.session_id and not finalized:
                 await sync.sync_session(self.session_id, sdk, force=True)

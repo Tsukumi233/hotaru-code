@@ -11,7 +11,7 @@ from ..state.runtime_status import RuntimeStatusSnapshot
 
 
 class AppFooter(Static):
-    """Footer bar matching OpenCode layout.
+    """Footer bar
 
     Shows directory path on the left, MCP/LSP status indicators and
     version on the right.
@@ -111,7 +111,7 @@ class AppFooter(Static):
 
 
 class SessionHeaderBar(Static):
-    """Session header bar matching OpenCode layout.
+    """Session header bar
 
     Shows session title on the left, token count + cost on the right.
     """

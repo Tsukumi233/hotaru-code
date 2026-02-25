@@ -1,7 +1,6 @@
 """MCP OAuth provider implementation.
 
-Translates oauth-provider.ts from OpenCode. Provides TokenStorage and
-OAuth helper functions for authenticating with remote MCP servers.
+Provides TokenStorage and OAuth helper functions for authenticating with remote MCP servers.
 
 The Python MCP SDK uses a different OAuth API than the TypeScript SDK:
 - TokenStorage protocol for persisting tokens and client info

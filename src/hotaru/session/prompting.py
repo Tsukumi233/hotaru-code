@@ -110,7 +110,7 @@ def _usage_cost(*, tokens: TokenUsage, model: Optional[ProcessedModelInfo]) -> f
     output_cost = float(tokens.output or 0) * float(pricing.output or 0) / 1_000_000
     cache_read_cost = float(tokens.cache_read or 0) * float(pricing.cache_read or 0) / 1_000_000
     cache_write_cost = float(tokens.cache_write or 0) * float(pricing.cache_write or 0) / 1_000_000
-    # Follow existing OpenCode behavior: reasoning billed with output rate.
+    # reasoning billed with output rate.
     reasoning_cost = float(tokens.reasoning or 0) * float(pricing.output or 0) / 1_000_000
     return max(input_cost + output_cost + cache_read_cost + cache_write_cost + reasoning_cost, 0.0)
 

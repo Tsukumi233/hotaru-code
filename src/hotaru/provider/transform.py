@@ -571,7 +571,7 @@ class ProviderTransform:
         api_type = str(getattr(model, "api_type", "openai") or "openai").lower()
 
         if provider_id == "openai" and api_type == "openai":
-            # Follow OpenCode behavior: avoid server-side storage unless explicitly requested.
+            # avoid server-side storage unless explicitly requested.
             base["store"] = False
 
         if provider_options and provider_options.get("litellmProxy") is True:

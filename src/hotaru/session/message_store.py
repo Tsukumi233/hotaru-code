@@ -1,6 +1,5 @@
 """Structured message schema.
 
-This module is a Python translation of OpenCode's structured message concept:
 - Message "info" is stored separately from "parts".
 - Parts are individually addressable (id) to support incremental updates.
 

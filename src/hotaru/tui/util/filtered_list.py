@@ -1,7 +1,6 @@
 """Filtered list utility for autocomplete.
 
-Provides fuzzy filtering and keyboard navigation for list selection,
-similar to opencode's useFilteredList hook.
+Provides fuzzy filtering and keyboard navigation for list selection
 """
 
 from dataclasses import dataclass, field

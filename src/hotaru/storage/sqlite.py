@@ -2,7 +2,7 @@
 
 Replaces the hierarchical JSON file storage with a single SQLite database.
 Uses synchronous sqlite3 — local-disk I/O is sub-millisecond and does not
-justify an extra background thread (mirrors opencode's approach).
+justify an extra background thread.
 """
 
 import asyncio

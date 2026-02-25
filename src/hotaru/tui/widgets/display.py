@@ -13,7 +13,6 @@ class ToolDisplay(Static):
     """Widget for displaying tool execution inline.
 
     Renders tool-specific icons, descriptions, and status indicators
-    following the OpenCode InlineTool/BlockTool pattern.
     """
 
     MAX_OUTPUT_LINES = 10

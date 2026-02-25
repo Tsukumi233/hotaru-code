@@ -70,5 +70,5 @@ def test_doc_extensions_for_selected_servers() -> None:
     ],
 )
 def test_disable_lsp_download_truthy(monkeypatch: pytest.MonkeyPatch, value: str, expected: bool) -> None:
-    monkeypatch.setenv("OPENCODE_DISABLE_LSP_DOWNLOAD", value)
+    monkeypatch.setenv("HOTARU_DISABLE_LSP_DOWNLOAD", value)
     assert lsp_download_disabled() is expected

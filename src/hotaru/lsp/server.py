@@ -102,10 +102,8 @@ def _truthy_env(key: str) -> bool:
 
 def lsp_download_disabled() -> bool:
     """Return whether automatic LSP downloads are disabled.
-
-    Compatible with OpenCode docs/environment variable naming.
     """
-    return _truthy_env("OPENCODE_DISABLE_LSP_DOWNLOAD")
+    return _truthy_env("HOTARU_DISABLE_LSP_DOWNLOAD")
 
 
 def _which(cmd: str) -> Optional[str]:

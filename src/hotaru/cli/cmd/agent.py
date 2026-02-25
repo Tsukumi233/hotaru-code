@@ -98,9 +98,9 @@ def create_agent(
     else:
         project, _ = asyncio.run(Project.from_directory(cwd))
         if project.vcs == "git":
-            use_project = typer.confirm("Save agent in current project (.opencode/agents)?", default=True)
+            use_project = typer.confirm("Save agent in current project (.hotaru/agents)?", default=True)
             if use_project:
-                target_dir = Path(project.worktree).resolve() / ".opencode" / "agents"
+                target_dir = Path(project.worktree).resolve() / ".hotaru" / "agents"
             else:
                 target_dir = Path(GlobalPath.config()).resolve() / "agents"
         else:

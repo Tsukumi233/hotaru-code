@@ -1,4 +1,4 @@
-"""Session compaction helpers (incremental port from OpenCode)."""
+"""Session compaction helpers."""
 
 from __future__ import annotations
 
@@ -91,8 +91,7 @@ class SessionCompaction:
     @classmethod
     async def prune(cls, *, session_id: str) -> None:
         """Mark stale historical tool outputs as compacted.
-
-        This keeps behavior close to OpenCode while remaining conservative:
+        
         only very old tool outputs are compacted, and recent context is kept.
         """
         cfg = await ConfigManager.get()

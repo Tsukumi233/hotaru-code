@@ -130,12 +130,12 @@ class Project:
             sandbox = str(Path(git_dir).parent)
 
             # Try to read cached project ID
-            opencode_file = Path(git_dir) / "opencode"
+            hotaru_file = Path(git_dir) / "hotaru"
             project_id: Optional[str] = None
 
-            if opencode_file.exists():
+            if hotaru_file.exists():
                 try:
-                    project_id = opencode_file.read_text().strip()
+                    project_id = hotaru_file.read_text().strip()
                 except Exception:
                     pass
 
@@ -152,7 +152,7 @@ class Project:
                         project_id = roots[0]
                         # Cache the ID
                         try:
-                            opencode_file.write_text(project_id)
+                            hotaru_file.write_text(project_id)
                         except Exception:
                             pass
 

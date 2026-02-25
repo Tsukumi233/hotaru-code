@@ -1,7 +1,7 @@
 """PTY pseudo-terminal session management.
 
 Provides interactive terminal sessions via PTY with WebSocket streaming,
-buffer management, and resize support. Port of opencode's bun-pty module.
+buffer management, and resize support. 
 """
 
 import asyncio

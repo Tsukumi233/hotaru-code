@@ -1,6 +1,4 @@
 """Built-in command templates.
-
-This module ports OpenCode's built-in ``/init`` command behavior.
 """
 
 from pathlib import Path

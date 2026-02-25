@@ -177,8 +177,8 @@ class ToolRegistry:
         experimental = config.experimental
 
         if tool_id in {"codesearch", "websearch"}:
-            if provider_id == "opencode":
-                return True
+            # if provider_id == "opencode":
+            #     return True
             return experimental.enable_exa
 
         if tool_id == "batch":

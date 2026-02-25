@@ -98,7 +98,7 @@ async def webfetch_execute(params: WebFetchParams, ctx: ToolContext) -> ToolResu
     async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
         response = await client.get(params.url, headers=headers)
         if response.status_code == 403 and response.headers.get("cf-mitigated") == "challenge":
-            headers["User-Agent"] = "opencode"
+            headers["User-Agent"] = "hotaru"
             response = await client.get(params.url, headers=headers)
 
     if response.status_code >= 400:

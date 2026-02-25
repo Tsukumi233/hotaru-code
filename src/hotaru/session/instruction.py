@@ -28,15 +28,15 @@ def _truthy(name: str) -> bool:
 
 
 def _disable_claude_code() -> bool:
-    return _truthy("OPENCODE_DISABLE_CLAUDE_CODE")
+    return _truthy("HOTARU_DISABLE_CLAUDE_CODE")
 
 
 def _disable_claude_prompt() -> bool:
-    return _disable_claude_code() or _truthy("OPENCODE_DISABLE_CLAUDE_CODE_PROMPT")
+    return _disable_claude_code() or _truthy("HOTARU_DISABLE_CLAUDE_CODE_PROMPT")
 
 
 def _disable_project_config() -> bool:
-    return _truthy("OPENCODE_DISABLE_PROJECT_CONFIG")
+    return _truthy("HOTARU_DISABLE_PROJECT_CONFIG")
 
 
 def _append_unique(items: List[str], value: str) -> None:
@@ -102,10 +102,10 @@ def _resolve_relative_instruction(instruction: str, directory: str, worktree: Op
     if not _disable_project_config():
         return _glob_up(instruction, directory, worktree)
 
-    config_dir = os.environ.get("OPENCODE_CONFIG_DIR")
+    config_dir = os.environ.get("HOTARU_CONFIG_DIR")
     if not config_dir:
         log.warn(
-            "skipping relative instruction because OPENCODE_CONFIG_DIR is not set while project config is disabled",
+            "skipping relative instruction because HOTARU_CONFIG_DIR is not set while project config is disabled",
             {"instruction": instruction},
         )
         return []
@@ -140,7 +140,7 @@ class InstructionPrompt:
 
         # 2) Global fallback rules.
         global_candidates: List[Path] = []
-        profile_dir = os.environ.get("OPENCODE_CONFIG_DIR")
+        profile_dir = os.environ.get("HOTARU_CONFIG_DIR")
         if profile_dir:
             global_candidates.append(Path(profile_dir) / "AGENTS.md")
         global_candidates.append(Path(GlobalPath.config()) / "AGENTS.md")

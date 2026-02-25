@@ -31,10 +31,10 @@ def _patch_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path,
     monkeypatch.setenv("HOME", str(home_dir))
 
     for key in [
-        "OPENCODE_CONFIG_DIR",
-        "OPENCODE_DISABLE_CLAUDE_CODE",
-        "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT",
-        "OPENCODE_DISABLE_PROJECT_CONFIG",
+        "HOTARU_CONFIG_DIR",
+        "HOTARU_DISABLE_CLAUDE_CODE",
+        "HOTARU_DISABLE_CLAUDE_CODE_PROMPT",
+        "HOTARU_DISABLE_PROJECT_CONFIG",
     ]:
         monkeypatch.delenv(key, raising=False)
 
@@ -90,7 +90,7 @@ async def test_disable_claude_code_skips_local_claude_rules(
 ) -> None:
     _patch_config(monkeypatch, {})
     _patch_paths(monkeypatch, tmp_path)
-    monkeypatch.setenv("OPENCODE_DISABLE_CLAUDE_CODE", "1")
+    monkeypatch.setenv("HOTARU_DISABLE_CLAUDE_CODE", "1")
 
     project_dir = tmp_path / "project"
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -121,7 +121,7 @@ async def test_global_rule_precedence_prefers_config_dir_then_global_then_claude
     global_agents.write_text("# global", encoding="utf-8")
     home_claude.write_text("# home claude", encoding="utf-8")
 
-    monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(profile_dir))
+    monkeypatch.setenv("HOTARU_CONFIG_DIR", str(profile_dir))
     paths = await InstructionPrompt.system_paths(str(project_dir), str(project_dir))
 
     assert str(profile_agents.resolve()) in paths

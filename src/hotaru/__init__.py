@@ -1,6 +1,6 @@
 """Hotaru Code - AI-powered coding assistant.
 
-A Python translation of OpenCode, providing AI agent capabilities
+Providing AI agent capabilities
 for software development tasks.
 """
 

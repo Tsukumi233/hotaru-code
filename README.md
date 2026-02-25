@@ -440,7 +440,7 @@ Hotaru 会合并多来源配置（后者覆盖前者）：
 }
 ```
 
-### Markdown Agent 示例（`.opencode/agents/reviewer.md`）
+### Markdown Agent 示例（`.hotaru/agents/reviewer.md`）
 
 ```markdown
 ---
