@@ -19,7 +19,6 @@ dependencies = [
     "pathspec>=0.12",
     "pyyaml>=6.0",
     "fastapi>=0.110",
-    "starlette>=0.35",
     "uvicorn>=0.27",
     "textual>=0.50",
     "mcp>=1.0",

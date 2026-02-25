@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import quote
 
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
 from hotaru.project import Instance
 from hotaru.server.server import Server
@@ -158,7 +158,7 @@ def test_instance_bootstrap_runs_once_per_directory(monkeypatch, app_ctx) -> Non
         directory = Instance.directory()
         calls[directory] = calls.get(directory, 0) + 1
 
-    monkeypatch.setattr("hotaru.server.app.instance_bootstrap", fake_bootstrap)
+    monkeypatch.setattr("hotaru.server.middleware.instance_bootstrap", fake_bootstrap)
 
     app = Server._create_app(app_ctx)
     with TestClient(app) as client:

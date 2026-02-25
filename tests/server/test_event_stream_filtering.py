@@ -1,7 +1,7 @@
 import json
 from typing import Any, AsyncIterator
 
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
 from hotaru.server.server import Server
 

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Literal
 
 from pydantic import BaseModel
-from starlette.websockets import WebSocket
+from fastapi.websockets import WebSocket
 
 from ..core.bus import Bus, BusEvent
 from ..core.id import Identifier

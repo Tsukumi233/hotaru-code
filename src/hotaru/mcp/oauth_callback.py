@@ -11,10 +11,8 @@ import asyncio
 from typing import Callable, Dict, Optional
 import socket
 
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import HTMLResponse, Response
-from starlette.routing import Route
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, Response
 
 from ..util.log import Log
 
@@ -101,7 +99,7 @@ class McpOAuthCallback:
     """
 
     _server: Optional[asyncio.Server] = None
-    _app: Optional[Starlette] = None
+    _app: Optional[FastAPI] = None
     _pending_auths: Dict[str, PendingAuth] = {}  # keyed by OAuth state
     _mcp_to_state: Dict[str, str] = {}  # mcp_name -> OAuth state (reverse mapping)
 
@@ -175,12 +173,11 @@ class McpOAuthCallback:
         return Response("Not found", status_code=404)
 
     @classmethod
-    def _create_app(cls) -> Starlette:
-        """Create the Starlette application."""
-        routes = [
-            Route(OAUTH_CALLBACK_PATH, cls._handle_callback, methods=["GET"]),
-        ]
-        return Starlette(routes=routes)
+    def _create_app(cls) -> FastAPI:
+        """Create the FastAPI application."""
+        app = FastAPI()
+        app.add_api_route(OAUTH_CALLBACK_PATH, cls._handle_callback, methods=["GET"])
+        return app
 
     @classmethod
     async def is_port_in_use(cls) -> bool:

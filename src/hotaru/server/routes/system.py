@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from starlette.responses import Response
-from starlette.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from ...app_services.errors import NotFoundError
 from ...core.global_paths import GlobalPath

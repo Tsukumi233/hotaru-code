@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from starlette.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 
 def web_dist_candidates() -> list[Path]:

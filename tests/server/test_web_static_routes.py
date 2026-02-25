@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
 from hotaru.server.server import Server
 

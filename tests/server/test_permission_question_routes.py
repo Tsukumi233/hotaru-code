@@ -1,4 +1,4 @@
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
 from hotaru.permission.permission import PermissionRequest
 from hotaru.question.question import QuestionInfo, QuestionOption, QuestionRequest
