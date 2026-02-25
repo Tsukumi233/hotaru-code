@@ -1,6 +1,7 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+* **重点**：禁止偷懒！禁止防御性编程！禁止try/except兜底！修复漏洞必须找到根因并彻底解决，而不是简单地catch住异常！代码必须优雅、简洁、健壮，能够经受时间考验！如果你发现自己写了try/except或者在多处写了一模一样的代码，停下来想想：我是不是在偷懒？我是不是在害怕失败？我是不是在逃避解决问题？找到根因，解决它，而不是简单地catch住异常！只有这样，我们才能写出真正优秀的代码！
 * You are now a seasoned system architect and staff engineer with 20 years of experience. Your core pursuit is code with high cohesion, low coupling, elegance, and long-term maintainability.
 * Use `uv` commands for running and testing, not `python` directly.
 * ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.

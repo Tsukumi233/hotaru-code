@@ -168,6 +168,20 @@ def _needs_registration(error_code: str) -> bool:
     return error_code.lower() in REGISTRATION_ERROR_CODES
 
 
+async def _safe_aclose(stack: "AsyncExitStack") -> None:
+    """Close an AsyncExitStack, suppressing cleanup errors from MCP transports.
+
+    The MCP SDK's streamable_http_client uses anyio task groups internally.
+    When a connection fails, closing the async context can raise
+    BaseExceptionGroup or RuntimeError from cancel scope mismatches.
+    These are harmless cleanup artifacts that must not mask the real error.
+    """
+    try:
+        await stack.aclose()
+    except BaseException:
+        pass
+
+
 class MCPToolDefinition(BaseModel):
     """MCP tool definition from server."""
     name: str
@@ -251,12 +265,12 @@ class MCPClient:
             self._cm_stack = stack
             return
         except httpx.HTTPStatusError as e:
-            await stack.aclose()
+            await _safe_aclose(stack)
             auth_error = _auth_http_error(e)
             if auth_error:
                 raise auth_error from e
         except Exception:
-            await stack.aclose()
+            await _safe_aclose(stack)
 
         # Fallback to SSE
         from mcp.client.sse import sse_client
@@ -271,13 +285,13 @@ class MCPClient:
             self._session = session
             self._cm_stack = stack
         except httpx.HTTPStatusError as e:
-            await stack.aclose()
+            await _safe_aclose(stack)
             auth_error = _auth_http_error(e)
             if auth_error:
                 raise auth_error from e
             raise
         except Exception:
-            await stack.aclose()
+            await _safe_aclose(stack)
             raise
 
     @property
