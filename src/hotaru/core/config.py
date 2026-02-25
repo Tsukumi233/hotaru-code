@@ -5,6 +5,7 @@ Loads and merges configuration from multiple sources with proper precedence.
 
 import json
 import os
+from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -115,8 +116,14 @@ class ConfigError(Exception):
         super().__init__(f"Config error in {path}: {message}")
 
 
+_config_var: ContextVar['ConfigManager'] = ContextVar('_config_var')
+
+
 class ConfigManager:
     """Configuration management.
+
+    Instance-based with ContextVar for scoping. Class methods delegate
+    to the current instance so existing callers work unchanged.
 
     Loads configuration from multiple sources with proper precedence:
     1. Global config (~/.config/hotaru/hotaru.json)
@@ -126,27 +133,63 @@ class ConfigManager:
     5. Managed config (enterprise, highest priority)
     """
 
-    _cache: Optional[Config] = None
-    _directories: List[str] = []
+    def __init__(self) -> None:
+        self._cache: Optional[Config] = None
+        self._directories: List[str] = []
+
+    # -- ContextVar plumbing --
+
+    @classmethod
+    def current(cls) -> 'ConfigManager':
+        try:
+            return _config_var.get()
+        except LookupError:
+            # Fallback: create a default instance for backward compat
+            instance = cls()
+            _config_var.set(instance)
+            return instance
+
+    @classmethod
+    def provide(cls, instance: 'ConfigManager') -> Token['ConfigManager']:
+        return _config_var.set(instance)
+
+    @classmethod
+    def restore(cls, token: Token['ConfigManager']) -> None:
+        _config_var.reset(token)
+
+    # -- Public API (class methods delegate to current instance) --
 
     @classmethod
     def reset(cls) -> None:
         """Reset cached configuration."""
-        cls._cache = None
-        cls._directories = []
+        inst = cls.current()
+        inst._cache = None
+        inst._directories = []
 
     @classmethod
     async def load(cls, directory: str = ".") -> Config:
-        """Load configuration for a directory.
+        return await cls.current()._load(directory)
 
-        Args:
-            directory: Working directory
+    @classmethod
+    async def get(cls) -> Config:
+        inst = cls.current()
+        if inst._cache is None:
+            return await inst._load()
+        return inst._cache
 
-        Returns:
-            Merged configuration
-        """
-        if cls._cache is not None:
-            return cls._cache
+    @classmethod
+    def directories(cls) -> List[str]:
+        return cls.current()._directories.copy()
+
+    @classmethod
+    async def update_global(cls, updates: Dict[str, Any]) -> Config:
+        return await cls.current()._update_global(updates)
+
+    # -- Instance methods --
+
+    async def _load(self, directory: str = ".") -> Config:
+        if self._cache is not None:
+            return self._cache
 
         result: Dict[str, Any] = {}
         directories: List[str] = []
@@ -285,38 +328,16 @@ class ConfigManager:
         result.setdefault("command", {})
         result.setdefault("plugin", [])
 
-        cls._directories = directories
-        cls._cache = Config.model_validate(result)
-        return cls._cache
+        self._directories = directories
+        self._cache = Config.model_validate(result)
+        return self._cache
 
-    @classmethod
-    async def get(cls) -> Config:
-        """Get cached configuration."""
-        if cls._cache is None:
-            return await cls.load()
-        return cls._cache
-
-    @classmethod
-    def directories(cls) -> List[str]:
-        """Get configuration directories."""
-        return cls._directories.copy()
-
-    @classmethod
-    async def update_global(cls, updates: Dict[str, Any]) -> Config:
-        """Update global configuration.
-
-        Args:
-            updates: Configuration updates to apply
-
-        Returns:
-            Updated configuration
-        """
+    async def _update_global(self, updates: Dict[str, Any]) -> Config:
         filepath = os.path.join(GlobalPath.config(), "hotaru.json")
 
         existing = load_json_file(filepath)
         merged = deep_merge(existing, updates)
 
-        # Ensure directory exists
         Path(filepath).parent.mkdir(parents=True, exist_ok=True)
 
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -324,7 +345,7 @@ class ConfigManager:
 
         log.info("updated global config", {"path": filepath})
 
-        # Reset cache
-        cls.reset()
+        self._cache = None
+        self._directories = []
 
-        return await cls.load()
+        return await self._load()

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from hotaru.core.bus import Bus
+from hotaru.core.config import ConfigManager
 from hotaru.project import Instance, State
 from hotaru.runtime import AppContext
 from hotaru.runtime.runner import SessionRuntime
@@ -50,6 +51,7 @@ def _tools_stub() -> SimpleNamespace:
         execute=_noop_defs,
         get_tool_definitions=_noop_defs,
         reset=lambda: None,
+        init=_noop_defs,
     )
 
 
@@ -64,6 +66,8 @@ def fake_app(**overrides: Any) -> AppContext:
     bus = overrides.pop("bus", Bus())
     app.bus = bus
     app._bus_token = Bus.provide(bus)
+    app.config = overrides.pop("config", ConfigManager())
+    app._config_token = overrides.pop("config_token", None)
     app.permission = overrides.pop("permission", _stub())
     app.question = overrides.pop("question", _stub())
     app.skills = overrides.pop("skills", _stub())

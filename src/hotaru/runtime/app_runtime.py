@@ -6,6 +6,7 @@ from typing import Optional
 
 from ..agent.agent import Agent
 from ..core.bus import Bus
+from ..core.config import ConfigManager
 from ..lsp import LSP
 from ..mcp import MCP
 from ..permission import Permission
@@ -41,6 +42,7 @@ class AppRuntime:
 
     __slots__ = (
         "bus",
+        "config",
         "agents",
         "tools",
         "permission",
@@ -53,6 +55,7 @@ class AppRuntime:
 
     def __init__(self) -> None:
         self.bus = Bus()
+        self.config = ConfigManager()
         self.permission = Permission(
             project_resolver=_resolve_project,
             scope_resolver=_resolve_scope,
