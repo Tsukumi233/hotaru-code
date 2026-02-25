@@ -18,6 +18,7 @@ _EVENT_STREAM_BASE_DELAY = 0.25
 _EVENT_STREAM_MAX_DELAY = 30.0
 _EVENT_STREAM_BACKOFF = 2.0
 _EVENT_STREAM_MAX_RETRIES = 50
+_SEND_MESSAGE_IDLE_TIMEOUT = 60.0
 
 
 def _event_stream_delay(attempt: int) -> float:
@@ -274,11 +275,13 @@ class SDKContext:
                         if exc:
                             yield {"type": "error", "data": {"error": str(exc)}}
                             break
+                        if idle_reached.is_set() and queue.empty():
+                            break
                         if queue.empty():
                             loop = asyncio.get_running_loop()
                             now = loop.time()
                             if idle_grace_deadline is None:
-                                idle_grace_deadline = now + 0.5
+                                idle_grace_deadline = now + _SEND_MESSAGE_IDLE_TIMEOUT
                                 continue
                             if now >= idle_grace_deadline:
                                 break

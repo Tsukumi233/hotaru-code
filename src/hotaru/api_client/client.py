@@ -56,7 +56,7 @@ class HotaruAPIClient:
         self._client = client or httpx.AsyncClient(
             base_url=base_url,
             transport=transport,
-            timeout=timeout,
+            timeout=httpx.Timeout(connect=timeout, read=max(timeout, 90.0), write=timeout, pool=timeout),
             headers=request_headers or None,
         )
 

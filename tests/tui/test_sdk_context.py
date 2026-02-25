@@ -184,7 +184,11 @@ async def test_event_stream_lifecycle_starts_and_stops_with_context(tmp_path) ->
 
 
 @pytest.mark.anyio
-async def test_send_message_finishes_without_idle_when_status_event_missing(tmp_path) -> None:
+async def test_send_message_finishes_without_idle_when_status_event_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr("hotaru.tui.context.sdk._SEND_MESSAGE_IDLE_TIMEOUT", 0.3)
     sdk = SDKContext(cwd=str(tmp_path), api_client=_ApiMissingIdleStub())
     events = [event async for event in sdk.send_message(session_id="session_1", content="hello")]
     await sdk.aclose()
