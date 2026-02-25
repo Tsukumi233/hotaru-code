@@ -46,6 +46,7 @@ from .processor_types import ProcessorResult, ToolCallState
 from .session import Session
 from .summary import SessionSummary
 from .system import SystemPrompt
+from .turn_runner import CallbackObserver, StreamObserver
 
 log = Log.create({"service": "session.prompt"})
 
@@ -300,6 +301,7 @@ class SessionPrompt:
         cwd: str,
         worktree: str,
         system_prompt: Optional[str] = None,
+        observer: Optional[StreamObserver] = None,
         on_text: Optional[Callable[..., Any]] = None,
         on_tool_start: Optional[Callable[..., Any]] = None,
         on_tool_end: Optional[Callable[..., Any]] = None,
@@ -360,6 +362,7 @@ class SessionPrompt:
                 cwd=cwd,
                 worktree=worktree,
                 system_prompt=system_prompt,
+                observer=observer,
                 on_text=on_text,
                 on_tool_start=on_tool_start,
                 on_tool_end=on_tool_end,
@@ -393,6 +396,7 @@ class SessionPrompt:
         worktree: str,
         output_format: Optional[Dict[str, Any]] = None,
         system_prompt: Optional[str] = None,
+        observer: Optional[StreamObserver] = None,
         on_text: Optional[Callable[..., Any]] = None,
         on_tool_start: Optional[Callable[..., Any]] = None,
         on_tool_end: Optional[Callable[..., Any]] = None,
@@ -536,6 +540,7 @@ class SessionPrompt:
                 cwd=cwd,
                 worktree=worktree,
                 system_prompt=system_prompt,
+                observer=observer,
                 on_text=on_text,
                 on_tool_start=on_tool_start,
                 on_tool_end=on_tool_end,
@@ -669,6 +674,7 @@ class SessionPrompt:
         cwd: str,
         worktree: str,
         system_prompt: Optional[str],
+        observer: Optional[StreamObserver],
         on_text: Optional[Callable[..., Any]],
         on_tool_start: Optional[Callable[..., Any]],
         on_tool_end: Optional[Callable[..., Any]],
@@ -972,6 +978,7 @@ class SessionPrompt:
         try:
             step = await processor.process_step(
                 system_prompt=system_prompt,
+                observer=observer,
                 on_text=_on_text,
                 on_tool_start=on_tool_start,
                 on_tool_end=on_tool_end,
@@ -1197,6 +1204,7 @@ class SessionPrompt:
             cwd=cwd,
             worktree=worktree,
             system_prompt=compact_system_prompt,
+            observer=None,
             on_text=None,
             on_tool_start=None,
             on_tool_end=None,

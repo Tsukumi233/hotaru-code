@@ -14,12 +14,121 @@ log = Log.create({"service": "session.turn_runner"})
 
 
 @runtime_checkable
+class StreamObserver(Protocol):
+    """Observer for streaming LLM events.
+
+    Consolidates the 7 individual callbacks into a single protocol.
+    All methods have default no-op semantics — implementors override
+    only the events they care about.
+    """
+
+    async def on_text(self, text: str) -> None: ...
+    async def on_tool_start(self, name: str, id: str, input: Dict[str, Any]) -> None: ...
+    async def on_tool_end(
+        self, name: str, id: str, output: str, error: Optional[str], title: str, metadata: Dict[str, Any],
+    ) -> None: ...
+    async def on_tool_update(self, state: Dict[str, Any]) -> None: ...
+    async def on_reasoning_start(self, id: Optional[str], metadata: Dict[str, Any]) -> None: ...
+    async def on_reasoning_delta(self, id: Optional[str], delta: str, metadata: Dict[str, Any]) -> None: ...
+    async def on_reasoning_end(self, id: Optional[str], metadata: Dict[str, Any]) -> None: ...
+
+
+class NullObserver:
+    """No-op observer for when no streaming callbacks are needed."""
+
+    async def on_text(self, text: str) -> None:
+        pass
+
+    async def on_tool_start(self, name: str, id: str, input: Dict[str, Any]) -> None:
+        pass
+
+    async def on_tool_end(
+        self, name: str, id: str, output: str, error: Optional[str], title: str, metadata: Dict[str, Any],
+    ) -> None:
+        pass
+
+    async def on_tool_update(self, state: Dict[str, Any]) -> None:
+        pass
+
+    async def on_reasoning_start(self, id: Optional[str], metadata: Dict[str, Any]) -> None:
+        pass
+
+    async def on_reasoning_delta(self, id: Optional[str], delta: str, metadata: Dict[str, Any]) -> None:
+        pass
+
+    async def on_reasoning_end(self, id: Optional[str], metadata: Dict[str, Any]) -> None:
+        pass
+
+
+_NULL = NullObserver()
+
+
+class CallbackObserver:
+    """Adapts individual callback functions into a StreamObserver."""
+
+    __slots__ = (
+        "_on_text", "_on_tool_start", "_on_tool_end", "_on_tool_update",
+        "_on_reasoning_start", "_on_reasoning_delta", "_on_reasoning_end",
+        "_call",
+    )
+
+    def __init__(
+        self,
+        *,
+        call: Callable[..., Any],
+        on_text: Optional[Callable[..., Any]] = None,
+        on_tool_start: Optional[Callable[..., Any]] = None,
+        on_tool_end: Optional[Callable[..., Any]] = None,
+        on_tool_update: Optional[Callable[..., Any]] = None,
+        on_reasoning_start: Optional[Callable[..., Any]] = None,
+        on_reasoning_delta: Optional[Callable[..., Any]] = None,
+        on_reasoning_end: Optional[Callable[..., Any]] = None,
+    ) -> None:
+        self._call = call
+        self._on_text = on_text
+        self._on_tool_start = on_tool_start
+        self._on_tool_end = on_tool_end
+        self._on_tool_update = on_tool_update
+        self._on_reasoning_start = on_reasoning_start
+        self._on_reasoning_delta = on_reasoning_delta
+        self._on_reasoning_end = on_reasoning_end
+
+    async def on_text(self, text: str) -> None:
+        if self._on_text:
+            await self._call(self._on_text, text)
+
+    async def on_tool_start(self, name: str, id: str, input: Dict[str, Any]) -> None:
+        if self._on_tool_start:
+            await self._call(self._on_tool_start, name, id, input)
+
+    async def on_tool_end(
+        self, name: str, id: str, output: str, error: Optional[str], title: str, metadata: Dict[str, Any],
+    ) -> None:
+        if self._on_tool_end:
+            await self._call(self._on_tool_end, name, id, output, error, title, metadata)
+
+    async def on_tool_update(self, state: Dict[str, Any]) -> None:
+        if self._on_tool_update:
+            await self._call(self._on_tool_update, state)
+
+    async def on_reasoning_start(self, id: Optional[str], metadata: Dict[str, Any]) -> None:
+        if self._on_reasoning_start:
+            await self._call(self._on_reasoning_start, id, metadata)
+
+    async def on_reasoning_delta(self, id: Optional[str], delta: str, metadata: Dict[str, Any]) -> None:
+        if self._on_reasoning_delta:
+            await self._call(self._on_reasoning_delta, id, delta, metadata)
+
+    async def on_reasoning_end(self, id: Optional[str], metadata: Dict[str, Any]) -> None:
+        if self._on_reasoning_end:
+            await self._call(self._on_reasoning_end, id, metadata)
+
+
+@runtime_checkable
 class TurnHost(Protocol):
     """Protocol that the owner of a TurnRunner must implement."""
 
-    async def call_callback(self, callback: Callable[..., Any], *args: Any) -> None: ...
-
-    async def emit_tool_update(self, callback: Optional[Callable[..., Any]], tc: ToolCallState) -> None: ...
+    async def emit_tool_update(self, observer: StreamObserver, tc: ToolCallState) -> None: ...
 
     async def execute_tool(
         self,
@@ -27,7 +136,7 @@ class TurnHost(Protocol):
         tool_name: str,
         tool_input: Dict[str, Any],
         tc: Optional[ToolCallState] = None,
-        on_tool_update: Optional[Callable[..., Any]] = None,
+        observer: Optional[StreamObserver] = None,
         assistant_message_id: Optional[str] = None,
     ) -> Dict[str, Any]: ...
 
@@ -69,15 +178,10 @@ class TurnRunner:
         self,
         *,
         stream_input: StreamInput,
-        on_text: Optional[callable] = None,
-        on_tool_start: Optional[callable] = None,
-        on_tool_end: Optional[callable] = None,
-        on_tool_update: Optional[callable] = None,
-        on_reasoning_start: Optional[callable] = None,
-        on_reasoning_delta: Optional[callable] = None,
-        on_reasoning_end: Optional[callable] = None,
+        observer: Optional[StreamObserver] = None,
         assistant_message_id: Optional[str] = None,
     ) -> ProcessorResult:
+        obs = observer or _NULL
         result = ProcessorResult(status="continue")
         current_tool_calls: Dict[str, ToolCallState] = {}
         blocked = False
@@ -90,8 +194,7 @@ class TurnRunner:
                     if not text:
                         continue
                     result.text += text
-                    if on_text:
-                        await self.host.call_callback(on_text, text)
+                    await obs.on_text(text)
 
                 elif chunk.type == "tool_call_start":
                     tc = ToolCallState(
@@ -101,9 +204,8 @@ class TurnRunner:
                         start_time=int(time.time() * 1000),
                     )
                     current_tool_calls[tc.id] = tc
-                    if on_tool_start:
-                        await self.host.call_callback(on_tool_start, tc.name, tc.id, {})
-                    await self.host.emit_tool_update(on_tool_update, tc)
+                    await obs.on_tool_start(tc.name, tc.id, {})
+                    await self.host.emit_tool_update(obs, tc)
 
                 elif chunk.type == "tool_call_delta":
                     if chunk.tool_call_id and chunk.tool_call_id in current_tool_calls:
@@ -118,15 +220,14 @@ class TurnRunner:
                         tc.input = chunk.tool_call.input
                         tc.status = "running"
 
-                        if on_tool_start:
-                            await self.host.call_callback(on_tool_start, tc.name, tc.id, tc.input)
-                        await self.host.emit_tool_update(on_tool_update, tc)
+                        await obs.on_tool_start(tc.name, tc.id, tc.input)
+                        await self.host.emit_tool_update(obs, tc)
 
                         tool_result = await self.host.execute_tool(
                             tool_name=tc.name,
                             tool_input=tc.input,
                             tc=tc,
-                            on_tool_update=on_tool_update,
+                            observer=obs,
                             assistant_message_id=assistant_message_id,
                         )
                         tc.end_time = int(time.time() * 1000)
@@ -144,53 +245,45 @@ class TurnRunner:
                             tc.metadata = dict(tool_result.get("metadata", {}) or {})
                             self.host.apply_mode_switch_metadata(tc.metadata)
 
-                        await self.host.emit_tool_update(on_tool_update, tc)
+                        await self.host.emit_tool_update(obs, tc)
 
                         result.tool_calls.append(tc)
-                        if on_tool_end:
-                            callback_metadata = dict(tool_result.get("metadata", {}))
-                            if tc.attachments:
-                                callback_metadata["attachments"] = tc.attachments
-                            await self.host.call_callback(
-                                on_tool_end,
-                                tc.name,
-                                tc.id,
-                                tc.output,
-                                tc.error,
-                                tool_result.get("title", ""),
-                                callback_metadata,
-                            )
+                        callback_metadata = dict(tool_result.get("metadata", {}))
+                        if tc.attachments:
+                            callback_metadata["attachments"] = tc.attachments
+                        await obs.on_tool_end(
+                            tc.name,
+                            tc.id,
+                            tc.output,
+                            tc.error,
+                            tool_result.get("title", ""),
+                            callback_metadata,
+                        )
                         if blocked:
                             result.status = "stop"
                             break
 
                 elif chunk.type == "reasoning_start":
-                    if on_reasoning_start:
-                        await self.host.call_callback(
-                            on_reasoning_start,
-                            chunk.reasoning_id,
-                            dict(chunk.provider_metadata or {}),
-                        )
+                    await obs.on_reasoning_start(
+                        chunk.reasoning_id,
+                        dict(chunk.provider_metadata or {}),
+                    )
 
                 elif chunk.type == "reasoning_delta":
                     piece = self._sanitize_text(chunk.reasoning_text or "")
                     if piece:
                         reasoning_fragments.append(piece)
-                    if on_reasoning_delta:
-                        await self.host.call_callback(
-                            on_reasoning_delta,
-                            chunk.reasoning_id,
-                            piece,
-                            dict(chunk.provider_metadata or {}),
-                        )
+                    await obs.on_reasoning_delta(
+                        chunk.reasoning_id,
+                        piece,
+                        dict(chunk.provider_metadata or {}),
+                    )
 
                 elif chunk.type == "reasoning_end":
-                    if on_reasoning_end:
-                        await self.host.call_callback(
-                            on_reasoning_end,
-                            chunk.reasoning_id,
-                            dict(chunk.provider_metadata or {}),
-                        )
+                    await obs.on_reasoning_end(
+                        chunk.reasoning_id,
+                        dict(chunk.provider_metadata or {}),
+                    )
 
                 elif chunk.type == "message_delta" and chunk.usage:
                     result.usage.update(chunk.usage)

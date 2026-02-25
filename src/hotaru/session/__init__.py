@@ -42,6 +42,9 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "PromptResult": (".prompting", "PromptResult"),
     "SessionCompaction": (".compaction", "SessionCompaction"),
     "SessionSummary": (".summary", "SessionSummary"),
+    "StreamObserver": (".turn_runner", "StreamObserver"),
+    "CallbackObserver": (".turn_runner", "CallbackObserver"),
+    "NullObserver": (".turn_runner", "NullObserver"),
 }
 
 

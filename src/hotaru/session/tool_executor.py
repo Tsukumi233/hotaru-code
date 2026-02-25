@@ -16,6 +16,7 @@ from .processor_types import ToolCallState
 
 if TYPE_CHECKING:
     from ..runtime import AppContext
+    from .turn_runner import StreamObserver
 
 log = Log.create({"service": "session.tool_executor"})
 
@@ -35,7 +36,7 @@ class ToolExecutor:
         cwd: str,
         worktree: str,
         doom: DoomLoopDetector,
-        emit_tool_update: Callable[[Optional[callable], ToolCallState], Awaitable[None]],
+        emit_tool_update: Callable[[StreamObserver, ToolCallState], Awaitable[None]],
         execute_mcp: Optional[Callable[..., Awaitable[Dict[str, Any]]]] = None,
     ) -> None:
         self.app = app
@@ -68,7 +69,7 @@ class ToolExecutor:
         messages: List[Dict[str, Any]],
         agent: str,
         tc: Optional[ToolCallState] = None,
-        on_tool_update: Optional[callable] = None,
+        observer: Optional[StreamObserver] = None,
         assistant_message_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if allowed_tools is not None and tool_name not in allowed_tools:
@@ -111,8 +112,8 @@ class ToolExecutor:
             title = snapshot.get("title")
             tc.title = str(title) if isinstance(title, str) and title else tc.title
             tc.metadata = {key: value for key, value in snapshot.items() if key != "title"}
-            if on_tool_update:
-                pending_tasks.append(asyncio.create_task(self.emit_tool_update(on_tool_update, tc)))
+            if observer:
+                pending_tasks.append(asyncio.create_task(self.emit_tool_update(observer, tc)))
 
         try:
             await self.doom.check(tool_name=tool_name, tool_input=tool_input, ruleset=merged_ruleset)
