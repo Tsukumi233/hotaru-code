@@ -269,6 +269,8 @@ class MCPClient:
             auth_error = _auth_http_error(e)
             if auth_error:
                 raise auth_error from e
+        except BaseExceptionGroup:
+            await _safe_aclose(stack)
         except Exception:
             await _safe_aclose(stack)
 
@@ -290,6 +292,9 @@ class MCPClient:
             if auth_error:
                 raise auth_error from e
             raise
+        except BaseExceptionGroup as eg:
+            await _safe_aclose(stack)
+            raise ConnectionError(f"MCP transport failed: {eg}") from eg
         except Exception:
             await _safe_aclose(stack)
             raise
