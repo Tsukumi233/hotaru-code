@@ -128,7 +128,7 @@ class Bus:
         _bus_var.reset(token)
 
     @classmethod
-    async def publish(cls, event: BusEvent[T], properties: T) -> None:
+    async def publish(cls, event: BusEvent[T], properties: T, *, propagate: bool = False) -> None:
         if not isinstance(properties, event.properties_type):
             if isinstance(properties, dict):
                 properties = event.properties_type(**properties)
@@ -147,18 +147,34 @@ class Bus:
         for key in [event.type, "*"]:
             callbacks.extend(bus._subscriptions.get(key, []))
 
+        errors: list[Exception] = []
         for callback in callbacks:
             try:
                 result = callback(payload)
                 if hasattr(result, '__await__'):
                     await result
             except Exception as e:
-                import traceback
+                import traceback as tb
+                trace = tb.format_exc()
                 _get_log().error("subscription callback failed", {
                     "error": str(e),
                     "type": event.type,
-                    "traceback": traceback.format_exc(),
+                    "traceback": trace,
                 })
+                if propagate:
+                    errors.append(e)
+                elif event.type != "bus.error":
+                    try:
+                        await cls.publish(BusError, BusErrorProps(
+                            source_event=event.type,
+                            error=str(e),
+                            traceback=trace,
+                        ))
+                    except Exception:
+                        _get_log().error("BusError handler failed, suppressing to avoid recursion")
+
+        if propagate and errors:
+            raise ExceptionGroup(f"Bus.publish({event.type})", errors)
 
     @classmethod
     def subscribe(
@@ -217,6 +233,22 @@ class Bus:
 
 
 # Standard events
+
+class BusErrorProps(BaseModel):
+    """Properties for bus.error event.
+
+    Attributes:
+        source_event: The event type whose subscriber failed
+        error: String representation of the exception
+        traceback: Full traceback string
+    """
+    source_event: str
+    error: str
+    traceback: str
+
+
+BusError = BusEvent.define("bus.error", BusErrorProps)
+
 
 class InstanceDisposedProps(BaseModel):
     """Properties for instance.disposed event.
