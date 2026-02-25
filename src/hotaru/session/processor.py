@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
+from ..provider.errors import recoverable as _recoverable_error
 from ..provider.transform import ProviderTransform
 from ..tool.resolver import ToolResolver
 from ..util.log import Log
@@ -12,63 +13,17 @@ from .agent_flow import AgentFlow
 from .doom_loop import DoomLoopDetector
 from .llm import StreamInput
 from .processor_types import ProcessorResult, ToolCallState
-from .retry import SessionRetry
 from .tool_executor import ToolExecutor
 from .turn_preparer import TurnPreparer
-from .turn_runner import TurnRunner
+from .turn_runner import CallbackObserver, StreamObserver, TurnRunner
 
 if TYPE_CHECKING:
     from ..runtime import AppContext
-
-try:
-    from openai import APIConnectionError as OpenAIAPIConnectionError
-    from openai import APIError as OpenAIAPIError
-    from openai import APIStatusError as OpenAIAPIStatusError
-    from openai import APITimeoutError as OpenAIAPITimeoutError
-    from openai import RateLimitError as OpenAIRateLimitError
-except ImportError:
-    OpenAIAPIConnectionError = None
-    OpenAIAPIError = None
-    OpenAIAPIStatusError = None
-    OpenAIAPITimeoutError = None
-    OpenAIRateLimitError = None
-
-try:
-    from anthropic import APIConnectionError as AnthropicAPIConnectionError
-    from anthropic import APIError as AnthropicAPIError
-    from anthropic import APIStatusError as AnthropicAPIStatusError
-    from anthropic import APITimeoutError as AnthropicAPITimeoutError
-    from anthropic import RateLimitError as AnthropicRateLimitError
-except ImportError:
-    AnthropicAPIConnectionError = None
-    AnthropicAPIError = None
-    AnthropicAPIStatusError = None
-    AnthropicAPITimeoutError = None
-    AnthropicRateLimitError = None
 
 log = Log.create({"service": "session.processor"})
 
 DOOM_LOOP_THRESHOLD = 3
 _STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
-
-_RECOVERABLE_TURN_ERRORS = tuple(
-    value
-    for value in (
-        TimeoutError,
-        asyncio.TimeoutError,
-        OpenAIAPIError,
-        OpenAIAPIConnectionError,
-        OpenAIAPIStatusError,
-        OpenAIAPITimeoutError,
-        OpenAIRateLimitError,
-        AnthropicAPIError,
-        AnthropicAPIConnectionError,
-        AnthropicAPIStatusError,
-        AnthropicAPITimeoutError,
-        AnthropicRateLimitError,
-    )
-    if isinstance(value, type)
-)
 
 
 class SessionProcessor:
@@ -161,6 +116,7 @@ class SessionProcessor:
         self,
         user_message: str,
         system_prompt: Optional[str] = None,
+        observer: Optional[StreamObserver] = None,
         on_text: Optional[callable] = None,
         on_tool_start: Optional[callable] = None,
         on_tool_end: Optional[callable] = None,
@@ -170,6 +126,12 @@ class SessionProcessor:
         on_reasoning_end: Optional[callable] = None,
     ) -> ProcessorResult:
         from ..project import run_in_instance
+
+        obs = observer or self._build_observer(
+            on_text=on_text, on_tool_start=on_tool_start, on_tool_end=on_tool_end,
+            on_tool_update=on_tool_update, on_reasoning_start=on_reasoning_start,
+            on_reasoning_delta=on_reasoning_delta, on_reasoning_end=on_reasoning_end,
+        )
 
         async def _run() -> ProcessorResult:
             self.add_user_message(user_message)
@@ -184,13 +146,7 @@ class SessionProcessor:
             while result.status == "continue":
                 turn_result = await self.process_step(
                     system_prompt=system_prompt,
-                    on_text=on_text,
-                    on_tool_start=on_tool_start,
-                    on_tool_end=on_tool_end,
-                    on_tool_update=on_tool_update,
-                    on_reasoning_start=on_reasoning_start,
-                    on_reasoning_delta=on_reasoning_delta,
-                    on_reasoning_end=on_reasoning_end,
+                    observer=obs,
                 )
                 result.text += turn_result.text
                 result.tool_calls.extend(turn_result.tool_calls)
@@ -219,6 +175,7 @@ class SessionProcessor:
         self,
         *,
         system_prompt: Optional[Union[str, List[str]]] = None,
+        observer: Optional[StreamObserver] = None,
         on_text: Optional[callable] = None,
         on_tool_start: Optional[callable] = None,
         on_tool_end: Optional[callable] = None,
@@ -272,15 +229,15 @@ class SessionProcessor:
         self._allowed_tools = prepared.allowed_tools
         self.tools.reset_turn(ruleset=prepared.ruleset)
 
+        obs = observer or self._build_observer(
+            on_text=on_text, on_tool_start=on_tool_start, on_tool_end=on_tool_end,
+            on_tool_update=on_tool_update, on_reasoning_start=on_reasoning_start,
+            on_reasoning_delta=on_reasoning_delta, on_reasoning_end=on_reasoning_end,
+        )
+
         turn_result = await self._process_turn(
             prepared.stream_input,
-            on_text=on_text,
-            on_tool_start=on_tool_start,
-            on_tool_end=on_tool_end,
-            on_tool_update=on_tool_update,
-            on_reasoning_start=on_reasoning_start,
-            on_reasoning_delta=on_reasoning_delta,
-            on_reasoning_end=on_reasoning_end,
+            observer=obs,
             assistant_message_id=assistant_message_id,
         )
         if turn_result.error:
@@ -403,24 +360,12 @@ class SessionProcessor:
     async def _process_turn(
         self,
         stream_input: StreamInput,
-        on_text: Optional[callable] = None,
-        on_tool_start: Optional[callable] = None,
-        on_tool_end: Optional[callable] = None,
-        on_tool_update: Optional[callable] = None,
-        on_reasoning_start: Optional[callable] = None,
-        on_reasoning_delta: Optional[callable] = None,
-        on_reasoning_end: Optional[callable] = None,
+        observer: Optional[StreamObserver] = None,
         assistant_message_id: Optional[str] = None,
     ) -> ProcessorResult:
         return await self.turnrun.run(
             stream_input=stream_input,
-            on_text=on_text,
-            on_tool_start=on_tool_start,
-            on_tool_end=on_tool_end,
-            on_tool_update=on_tool_update,
-            on_reasoning_start=on_reasoning_start,
-            on_reasoning_delta=on_reasoning_delta,
-            on_reasoning_end=on_reasoning_end,
+            observer=observer,
             assistant_message_id=assistant_message_id,
         )
 
@@ -430,7 +375,7 @@ class SessionProcessor:
         tool_input: Dict[str, Any],
         *,
         tc: Optional[ToolCallState] = None,
-        on_tool_update: Optional[callable] = None,
+        observer: Optional[StreamObserver] = None,
         assistant_message_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if self._allowed_tools is not None and tool_name not in self._allowed_tools:
@@ -453,7 +398,7 @@ class SessionProcessor:
             messages=self.messages,
             agent=self.agent,
             tc=tc,
-            on_tool_update=on_tool_update,
+            observer=observer,
             assistant_message_id=assistant_message_id,
         )
 
@@ -471,16 +416,8 @@ class SessionProcessor:
 
     # -- TurnHost protocol implementation --
 
-    async def call_callback(self, callback: callable, *args: Any) -> None:
-        if asyncio.iscoroutinefunction(callback):
-            await callback(*args)
-        else:
-            callback(*args)
-
-    async def emit_tool_update(self, callback: Optional[callable], tc: ToolCallState) -> None:
-        if not callback:
-            return
-        await self.call_callback(callback, self._tool_update_payload(tc))
+    async def emit_tool_update(self, observer: StreamObserver, tc: ToolCallState) -> None:
+        await observer.on_tool_update(self._tool_update_payload(tc))
 
     async def execute_tool(
         self,
@@ -488,14 +425,14 @@ class SessionProcessor:
         tool_name: str,
         tool_input: Dict[str, Any],
         tc: Optional[ToolCallState] = None,
-        on_tool_update: Optional[callable] = None,
+        observer: Optional[StreamObserver] = None,
         assistant_message_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         return await self._execute_tool(
             tool_name=tool_name,
             tool_input=tool_input,
             tc=tc,
-            on_tool_update=on_tool_update,
+            observer=observer,
             assistant_message_id=assistant_message_id,
         )
 
@@ -508,9 +445,7 @@ class SessionProcessor:
 
     @staticmethod
     def recoverable_error(error: Exception) -> bool:
-        if isinstance(error, _RECOVERABLE_TURN_ERRORS):
-            return True
-        return SessionRetry.retryable(error)
+        return _recoverable_error(error)
 
     def continue_loop_on_deny(self) -> bool:
         return self._continue_loop_on_deny
@@ -526,3 +461,15 @@ class SessionProcessor:
             mcp_info=mcp_info,
             tool_input=tool_input,
         )
+
+    def _build_observer(self, **kwargs: Optional[callable]) -> Optional[StreamObserver]:
+        if not any(kwargs.values()):
+            return None
+        return CallbackObserver(call=self._call_callback, **kwargs)
+
+    @staticmethod
+    async def _call_callback(callback: callable, *args: Any) -> None:
+        if asyncio.iscoroutinefunction(callback):
+            await callback(*args)
+        else:
+            callback(*args)

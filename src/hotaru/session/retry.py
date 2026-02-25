@@ -7,19 +7,7 @@ from datetime import timezone
 from email.utils import parsedate_to_datetime
 from typing import Mapping, Optional
 
-try:
-    from openai import APIConnectionError as OpenAIAPIConnectionError
-    from openai import APITimeoutError as OpenAIAPITimeoutError
-except ImportError:
-    OpenAIAPIConnectionError = None
-    OpenAIAPITimeoutError = None
-
-try:
-    from anthropic import APIConnectionError as AnthropicAPIConnectionError
-    from anthropic import APITimeoutError as AnthropicAPITimeoutError
-except ImportError:
-    AnthropicAPIConnectionError = None
-    AnthropicAPITimeoutError = None
+from ..provider.errors import retryable as _retryable
 
 
 def _now_ms() -> int:
@@ -36,24 +24,6 @@ def _float(value: object) -> Optional[float]:
     if num < 0:
         return None
     return num
-
-
-def _status(error: Exception) -> Optional[int]:
-    status = getattr(error, "status_code", None)
-    if isinstance(status, int):
-        return status
-    response = getattr(error, "response", None)
-    if response is None:
-        return None
-    code = getattr(response, "status_code", None)
-    if isinstance(code, int):
-        return code
-    if code is None:
-        return None
-    try:
-        return int(code)
-    except (TypeError, ValueError):
-        return None
 
 
 def _headers(error: Exception) -> Optional[Mapping[str, str]]:
@@ -127,22 +97,4 @@ class SessionRetry:
 
     @classmethod
     def retryable(cls, error: Exception) -> bool:
-        connection_errors = tuple(
-            value
-            for value in (
-                OpenAIAPIConnectionError,
-                OpenAIAPITimeoutError,
-                AnthropicAPIConnectionError,
-                AnthropicAPITimeoutError,
-            )
-            if value is not None
-        )
-        if connection_errors and isinstance(error, connection_errors):
-            return True
-
-        code = _status(error)
-        if code is None:
-            return False
-        if code == 429:
-            return True
-        return 500 <= code <= 599
+        return _retryable(error)
