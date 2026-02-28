@@ -1,209 +1,684 @@
 # Hotaru Code
 
-## 架构图
+AI-powered coding agent with TUI, WebUI, and one-shot CLI interfaces. Supports multi-provider LLM integration, 20+ built-in tools, MCP protocol extensions, configurable permission system, and multi-agent orchestration.
+
+---
+
+## Architecture Diagrams
+
+### 1. System Architecture Overview
+
+Full-stack layered architecture from user interfaces down to storage.
 
 ```mermaid
 flowchart TB
-    User["用户"]
+    User["User"]
 
-    subgraph Entry["入口层（CLI / TUI / WebUI）"]
-        CLI["Typer CLI<br/>src/hotaru/cli/main.py"]
-        RunCmd["Run 命令<br/>src/hotaru/cli/cmd/run.py"]
-        TuiApp["Textual TUI<br/>src/hotaru/tui/app.py"]
-        WebCmd["Web 命令<br/>src/hotaru/cli/cmd/web.py"]
-        WebUI["React WebUI<br/>frontend/ -> src/hotaru/webui/dist"]
+    subgraph Entry["Interface Layer"]
+        CLI["Typer CLI<br/><code>cli/main.py</code>"]
+        TUI["Textual TUI<br/><code>tui/app.py</code>"]
+        WebUI["React WebUI<br/><code>frontend/</code>"]
     end
 
-    subgraph ApiLayer["传输与 API 层"]
-        SDKCtx["SDKContext<br/>src/hotaru/tui/context/sdk.py"]
-        ApiClient["HotaruAPIClient<br/>src/hotaru/api_client/client.py"]
-        Server["FastAPI Server + SSE/WebSocket<br/>src/hotaru/server/server.py"]
-        AppServices["App Services<br/>src/hotaru/app_services/*"]
-        Pty["PTY 服务<br/>src/hotaru/pty/pty.py"]
+    subgraph Transport["Transport Layer"]
+        SDKCtx["SDKContext<br/>(TUI → HTTP Client)"]
+        Server["FastAPI Server<br/>SSE + WebSocket<br/><code>server/app.py</code>"]
+        AppSvc["App Services<br/><code>app_services/*</code>"]
     end
 
-    subgraph Orchestration["会话编排层"]
-        Project["Project / Instance<br/>src/hotaru/project/*"]
-        PromptCtx["Prompt Orchestration<br/>src/hotaru/session/orchestration.py"]
-        SystemPrompt["SystemPrompt<br/>src/hotaru/session/system.py"]
-        Instruction["InstructionPrompt（AGENTS/CLAUDE）<br/>src/hotaru/session/instruction.py"]
-        SessionPrompt["SessionPrompt（主循环入口）<br/>src/hotaru/session/prompting.py"]
-        Processor["SessionProcessor（单步执行）<br/>src/hotaru/session/processor.py"]
-        LLM["LLM Streaming Adapter<br/>src/hotaru/session/llm.py"]
-        Retry["SessionRetry（指数退避 + Retry-After）<br/>src/hotaru/session/retry.py"]
-        SessionStore["Session + MessageStore<br/>src/hotaru/session/session.py + message_store.py"]
-        Command["Slash Command(/init)<br/>src/hotaru/command/*"]
-        Snapshot["SnapshotTracker<br/>src/hotaru/snapshot/tracker.py"]
+    subgraph Session["Session Orchestration"]
+        Orch["PromptOrchestration<br/>(model/agent/session resolve)"]
+        SysPr["SystemPrompt<br/>+ InstructionPrompt"]
+        SP["SessionPrompt<br/>(multi-turn loop)"]
+        Proc["SessionProcessor<br/>(single-step execution)"]
+        TR["TurnRunner<br/>(stream consumption)"]
+        TE["ToolExecutor<br/>(dispatch + permission)"]
+        Compact["Compaction<br/>(context overflow pruning)"]
     end
 
-    subgraph ModelLayer["模型与 Agent 层"]
-        Agent["Agent Registry<br/>src/hotaru/agent/agent.py"]
-        Provider["Provider Registry<br/>src/hotaru/provider/provider.py"]
-        Transform["ProviderTransform<br/>src/hotaru/provider/transform.py"]
-        OpenAISDK["OpenAI SDK<br/>src/hotaru/provider/sdk/openai.py"]
-        AnthropicSDK["Anthropic SDK<br/>src/hotaru/provider/sdk/anthropic.py"]
+    subgraph LLMLayer["LLM Adapter"]
+        LLM["LLM<br/>(unified streaming)"]
+        Xform["ProviderTransform<br/>(message normalization)"]
+        Retry["SessionRetry<br/>(exponential backoff)"]
+        OAI["OpenAI SDK"]
+        ANT["Anthropic SDK"]
     end
 
-    subgraph Tooling["工具与扩展层"]
-        ToolRegistry["ToolRegistry<br/>src/hotaru/tool/registry.py"]
-        BuiltinTools["内置工具集<br/>bash/read/edit/write/list/task/skill/..."]
-        Permission["Permission 引擎<br/>src/hotaru/permission/permission.py"]
-        MCP["MCP 管理器<br/>src/hotaru/mcp/mcp.py"]
-        MCPServers["本地/远程 MCP Servers"]
-        Skill["Skill 发现与加载<br/>src/hotaru/skill/*"]
-        TaskTool["Task Tool（子 Agent 委派）<br/>src/hotaru/tool/task.py"]
-        LSP["LSP 客户端（实验）<br/>src/hotaru/lsp/*"]
+    subgraph Tools["Tool & Extension Layer"]
+        ToolReg["ToolRegistry<br/>(20+ built-in tools)"]
+        Perm["Permission Engine<br/>(allow / ask / deny)"]
+        MCP["MCP Manager<br/>(stdio + HTTP/SSE)"]
+        Skill["Skill Discovery"]
+        TaskT["Task Tool<br/>(subagent delegation)"]
     end
 
-    subgraph Infra["基础设施层"]
-        Config["ConfigManager<br/>global/project/.hotaru/env/managed"]
-        Bus["Event Bus<br/>src/hotaru/core/bus.py"]
-        Storage["Storage API<br/>src/hotaru/storage/storage.py"]
-        StorageLock["RW Lock（进程内+进程间）<br/>src/hotaru/storage/lock.py"]
-        AtomicWrite["Atomic Write（tmp + fsync + replace）"]
-        TxLog["JSON Tx Log（_tx / _tx_stage）"]
-        Recovery["Crash Recovery（启动回放 committed tx）"]
-        GlobalPath["GlobalPath（config/data/cache/state）<br/>src/hotaru/core/global_paths.py"]
-        Shell["Shell 执行<br/>src/hotaru/shell"]
-        Patch["Patch 应用<br/>src/hotaru/patch"]
+    subgraph Core["Core Infrastructure"]
+        Agent["Agent Registry<br/>(build/plan/general/explore)"]
+        Provider["Provider Registry"]
+        Config["ConfigManager<br/>(multi-source merge)"]
+        Bus["Event Bus<br/>(ContextVar-scoped)"]
+        Store["SQLite Storage<br/>(WAL mode)"]
     end
 
-    User --> CLI
-    User --> TuiApp
-    User --> WebUI
-    CLI -->|默认| TuiApp
-    CLI -->|run| RunCmd
-    CLI -->|web| WebCmd
-    WebCmd --> Server
+    User --> CLI & TUI & WebUI
+    CLI -->|default| TUI
+    CLI -->|run| Orch
+    CLI -->|web| Server
+    TUI --> SDKCtx --> Server
+    WebUI -.->|HTTP/SSE/WS| Server
+    Server --> AppSvc --> SP & Agent & Provider & Perm
 
-    TuiApp --> SDKCtx
-    SDKCtx --> ApiClient
-    ApiClient -.->|HTTP/SSE| Server
-    WebUI -.->|HTTP/SSE/WebSocket| Server
+    Orch --> SysPr --> SP
+    SP --> Proc --> TR --> LLM
+    TR --> TE --> ToolReg & MCP
+    SP --> Compact
+    ToolReg --> Perm
+    TaskT --> SP
 
-    Server --> AppServices
-    Server --> Pty
-    AppServices --> SessionPrompt
-    AppServices --> SessionStore
-    AppServices --> Agent
-    AppServices --> Provider
-    AppServices --> Permission
-    AppServices --> Bus
-
-    RunCmd --> Project
-    TuiApp --> Project
-    RunCmd --> PromptCtx
-    RunCmd --> SessionPrompt
-    Command --> SessionPrompt
-    Project --> SessionPrompt
-    Project --> PromptCtx
-    PromptCtx --> SystemPrompt
-    SystemPrompt --> Instruction
-    SessionPrompt --> Processor
-    Processor --> LLM
+    LLM --> Xform --> OAI & ANT
     LLM --> Retry
-    SessionPrompt --> SessionStore
-    SessionPrompt --> Snapshot
 
-    Processor --> Agent
-    Processor --> Provider
-    LLM --> Transform
-    Transform --> OpenAISDK
-    Transform --> AnthropicSDK
-
-    Processor --> ToolRegistry
-    ToolRegistry --> BuiltinTools
-    BuiltinTools --> Permission
-    BuiltinTools --> TaskTool
-    BuiltinTools --> Skill
-    BuiltinTools --> LSP
-
-    Processor --> MCP
-    MCP --> MCPServers
-    MCP --> Processor
-    TaskTool --> SessionPrompt
-
-    Agent --> Config
-    Provider --> Config
-    ToolRegistry --> Config
-    Skill --> Config
-    MCP --> Config
-    Permission --> Config
-    Snapshot --> Config
-
-    SessionStore --> Storage
-    Project --> Storage
-    Permission --> Storage
-    Storage --> StorageLock
-    Storage --> AtomicWrite
-    Storage --> TxLog
-    TxLog --> Recovery
-    Recovery --> Storage
-    Storage --> GlobalPath
-
-    Snapshot --> GlobalPath
-    BuiltinTools --> Shell
-    BuiltinTools --> Patch
-
-    Permission --> Bus
-    MCP --> Bus
-    Project --> Bus
-    SessionStore --> Bus
-    Server --> Bus
-    Pty --> Bus
-    LSP --> Bus
+    Agent & Provider & Skill & MCP --> Config
+    Perm --> Bus
+    SP -.-> Store
+    Perm -.-> Store
 ```
 
-Hotaru Code 是一个 AI 编码助手。
+### 2. Agentic Loop — Session Processing Sequence
 
-它提供 TUI、WebUI 与一次性 Run 模式，并支持工具调用、权限控制、会话持久化、MCP 扩展、Skill 与 Agent 配置。
+The core ReAct loop: the LLM generates text/tool-calls, tools execute, results feed back until completion.
 
-## 功能介绍
+```mermaid
+sequenceDiagram
+    participant U as User / Interface
+    participant SP as SessionPrompt
+    participant P as SessionProcessor
+    participant TR as TurnRunner
+    participant LLM as LLM Adapter
+    participant TE as ToolExecutor
+    participant Perm as Permission
+    participant API as Provider API
 
-### 1. 多种交互模式
+    U->>SP: prompt(user_message)
+    SP->>SP: persist user message
+    SP->>P: process(user_message, system_prompt)
 
-- `hotaru`：默认进入 TUI（Textual）
-- `hotaru web`：启动 WebUI（HTTP + SSE）
-- `hotaru run "你的需求"`：一次性执行
-- 支持内置 `/init` 命令：自动生成/更新 `AGENTS.md`
+    loop Agentic Loop (until stop or max_turns)
+        P->>P: prepare turn (resolve agent, tools, ruleset)
+        P->>TR: run(stream_input)
+        TR->>LLM: stream(messages, tools, system)
+        LLM->>API: HTTP streaming request
 
-### 2. Agent + 权限体系
+        loop Stream Chunks
+            API-->>LLM: text / tool_call / reasoning delta
+            LLM-->>TR: StreamChunk
 
-- 内置 Agent：`build`、`plan`、`general`、`explore`（以及内部隐藏 agent）
-- 支持通过 `hotaru agent create` 生成 Markdown Agent 配置
-- 支持加载 `.opencode/agents/`、`.hotaru/agents/` 等路径下的 Markdown Agent
-- 权限规则支持 `allow / ask / deny`
-- 对敏感能力（如 `bash`、`edit`、外部目录访问等）可细粒度控制
-- 内置重复调用保护（doom loop）
+            alt Text chunk
+                TR-->>U: on_text(delta)
+            else Tool call complete
+                TR->>TE: execute_tool(name, input)
+                TE->>Perm: check permission
 
-### 3. 工具调用能力
+                alt Allowed
+                    Perm-->>TE: ok
+                else Ask
+                    Perm-->>U: permission.asked (via Bus)
+                    U-->>Perm: reply (once / always / reject)
+                end
 
-内置工具（按功能分组）：
+                TE-->>TR: tool result
+                TR-->>U: on_tool_end(output)
+            else Reasoning chunk
+                TR-->>U: on_reasoning_delta(text)
+            end
+        end
 
-- 文件与代码：`list`、`glob`、`grep`、`read`、`edit`、`write`、`multiedit`、`apply_patch`
-- 执行与编排：`bash`、`task`、`todoread`、`todowrite`、`question`
-- 外部信息：`webfetch`
-- 扩展能力：`skill`、`lsp`（实验开关）
-- 实验工具：`websearch`、`codesearch`、`batch`、`plan_enter`、`plan_exit`
+        TR-->>P: ProcessorResult
 
-说明：
+        alt Has tool calls → continue
+            P->>P: append assistant + tool_result messages
+        else No tool calls → stop
+            P-->>SP: final result
+        end
+    end
 
-- `websearch / codesearch` 需要 `experimental.enable_exa = true`
-- `lsp` 需要 `experimental.lsp_tool = true`
-- `batch` 需要 `experimental.batch_tool = true`
-- `plan_enter / plan_exit` 需要 `experimental.plan_mode = true`
-- 不同模型下会自动调整编辑工具（如 `apply_patch` 与 `edit/write` 的切换）
+    SP->>SP: check compaction overflow
+    SP->>SP: generate title (async)
+    SP->>SP: persist assistant message
+    SP-->>U: complete response
+```
 
-### 4. Provider / MCP / Skill 扩展
+### 3. Multi-Interface Architecture
 
-- Provider：支持 OpenAI、Anthropic 与 OpenAI-compatible 自定义服务
-- MCP：支持本地（stdio）和远程（HTTP/SSE）MCP，支持 OAuth 场景
-- Skill：支持本地目录发现，也支持远程技能索引拉取
-- 会话持久化：会话/消息存储为本地 JSON，可恢复历史上下文
+Three interfaces sharing one backend through different transport paths.
 
-## 安装与启动
+```mermaid
+flowchart LR
+    subgraph Interfaces
+        CLI["<b>CLI Run</b><br/>hotaru run 'prompt'<br/><i>One-shot, stdout</i>"]
+        TUI["<b>TUI</b><br/>hotaru<br/><i>Textual, interactive</i>"]
+        WebUI["<b>WebUI</b><br/>hotaru web<br/><i>React + Vite</i>"]
+    end
 
-### 1. 在本仓库源码使用（开发场景）
+    subgraph Transport
+        Direct["Direct Invocation<br/>(in-process)"]
+        HTTP["FastAPI HTTP<br/>/v1/sessions/*<br/>/v1/providers/*<br/>/v1/agents/*"]
+        SSE["SSE Stream<br/>/v1/events"]
+        WS["WebSocket<br/>/v1/ptys/{id}"]
+    end
+
+    subgraph Backend["Shared Backend"]
+        AppCtx["AppContext<br/>(service container)"]
+        SessionLoop["Session Loop"]
+        ToolExec["Tool Execution"]
+        Storage["SQLite Storage"]
+    end
+
+    CLI --> Direct --> AppCtx
+    TUI -->|SDKContext<br/>→ HotaruAPIClient| HTTP & SSE
+    WebUI --> HTTP & SSE & WS
+
+    HTTP --> AppCtx
+    SSE --> AppCtx
+    WS --> AppCtx
+
+    AppCtx --> SessionLoop --> ToolExec --> Storage
+```
+
+### 4. Tool Execution Pipeline
+
+From LLM tool_call to execution result, including permission check and doom loop detection.
+
+```mermaid
+flowchart TB
+    TC["LLM emits tool_call<br/>(name, input, id)"]
+
+    TC --> Allowed{"Tool in<br/>allowed_tools?"}
+    Allowed -->|No| Err1["Error: Unknown tool"]
+    Allowed -->|Yes| Resolve{"Built-in tool?"}
+
+    Resolve -->|Yes| DoomCheck["DoomLoopDetector<br/>check recent N signatures"]
+    Resolve -->|No| MCPCheck{"MCP tool?"}
+
+    MCPCheck -->|Yes| MCPExec["MCP Client<br/>call_tool(name, args)"]
+    MCPCheck -->|No| Err2["Error: Unknown tool"]
+
+    DoomCheck --> DoomResult{"Repeated<br/>≥ threshold?"}
+    DoomResult -->|Yes| AskDoom["Permission.ask<br/>(doom_loop)"]
+    DoomResult -->|No| PermCheck
+    AskDoom -->|Approved| PermCheck
+    AskDoom -->|Rejected| Blocked["Error: blocked"]
+
+    PermCheck["PermissionGuard.check<br/>(tool permissions)"]
+    PermCheck --> Evaluate{"Evaluate ruleset"}
+
+    Evaluate -->|allow| Execute
+    Evaluate -->|deny| DeniedErr["DeniedError"]
+    Evaluate -->|ask| HumanLoop["Publish PermissionAsked<br/>await Future"]
+
+    HumanLoop -->|once / always| Execute
+    HumanLoop -->|reject| RejectedErr["RejectedError"]
+
+    Execute["tool.execute(parsed_input, ctx)<br/>→ ToolResult"]
+    MCPExec --> Result
+    Execute --> Result["Return {output, title, metadata}"]
+
+    style TC fill:#e1f5fe
+    style Execute fill:#e8f5e9
+    style Result fill:#e8f5e9
+    style Err1 fill:#ffebee
+    style Err2 fill:#ffebee
+    style DeniedErr fill:#ffebee
+    style RejectedErr fill:#ffebee
+    style Blocked fill:#ffebee
+```
+
+### 5. Permission System — Human-in-the-Loop Flow
+
+Multi-scope permission memory with configurable persistence.
+
+```mermaid
+flowchart TB
+    ToolCall["Tool attempts action<br/>(e.g. bash, edit)"]
+
+    ToolCall --> BuildPatterns["Build permission patterns<br/>(tool type + file path / command)"]
+    BuildPatterns --> MergeRules["Merge rulesets:<br/>1. Agent default rules<br/>2. User config rules<br/>3. Approved memory rules"]
+
+    MergeRules --> EvalLoop["For each pattern:<br/>evaluate(permission, pattern, merged)"]
+
+    EvalLoop --> Match{"Last matching rule?"}
+
+    Match -->|allow| Pass["Proceed"]
+    Match -->|deny| Deny["Raise DeniedError"]
+    Match -->|ask / no match| AskUser
+
+    AskUser["Create PermissionRequest<br/>Bus.publish(PermissionAsked)<br/>await asyncio.Future"]
+
+    AskUser --> UI["UI shows permission dialog"]
+
+    UI --> Reply{"User reply?"}
+
+    Reply -->|once| Resolve["Resolve Future → proceed"]
+    Reply -->|always| Remember["Remember approval →<br/>resolve this + auto-resolve<br/>other matching pending"]
+    Reply -->|reject| Reject["Reject Future →<br/>also reject ALL pending<br/>for this session"]
+
+    Remember --> Scope{"Memory scope?"}
+    Scope -->|turn| Volatile["Discarded after this request"]
+    Scope -->|session| InMem["In-memory per session"]
+    Scope -->|project| ProjMem["In-memory per project"]
+    Scope -->|persisted| Disk["SQLite persistent storage"]
+
+    style Pass fill:#e8f5e9
+    style Deny fill:#ffebee
+    style Reject fill:#ffebee
+```
+
+### 6. Provider Transform Pipeline
+
+How messages are normalized across different LLM providers before API calls.
+
+```mermaid
+flowchart LR
+    subgraph Input["Raw Messages"]
+        Msgs["OpenAI-format messages<br/>(role, content, tool_calls)"]
+    end
+
+    subgraph Transform["ProviderTransform Pipeline"]
+        direction TB
+        T1["1. Normalize tool_call_id<br/>(Mistral: alphanum 9 chars<br/>Claude: no special chars)"]
+        T2["2. Apply interleaved reasoning<br/>(Moonshot reasoning_content<br/>Anthropic thinking blocks)"]
+        T3["3. Remap provider_options<br/>(sdk_key resolution)"]
+        T4["4. Inject cache controls<br/>(Anthropic: cacheControl<br/>OpenAI: cache_control<br/>Bedrock: cachePoint)"]
+        T5["5. Strip empty content<br/>(Anthropic rejects empty)"]
+        T1 --> T2 --> T3 --> T4 --> T5
+    end
+
+    subgraph Output["Provider-Specific"]
+        OAI["OpenAI SDK<br/>system as first message<br/>function tool_calls"]
+        ANT["Anthropic SDK<br/>system as separate param<br/>tool_use / tool_result blocks"]
+    end
+
+    Input --> Transform
+    T5 -->|api_type=openai| OAI
+    T5 -->|api_type=anthropic| ANT
+```
+
+### 7. MCP Integration Architecture
+
+Model Context Protocol client supporting local (stdio) and remote (HTTP/SSE) servers with OAuth.
+
+```mermaid
+flowchart TB
+    subgraph Config["hotaru.json"]
+        LocalCfg["type: local<br/>command: [npx, ..., server]"]
+        RemoteCfg["type: remote<br/>url: https://..."]
+    end
+
+    subgraph MCPManager["MCP Manager"]
+        Init["init() — read config<br/>create clients sequentially"]
+        State["MCPState<br/>clients + status per server"]
+    end
+
+    subgraph LocalTransport["Local Transport"]
+        Stdio["stdio_client<br/>(stdin/stdout pipes)"]
+        LocalProc["Child process<br/>(MCP server)"]
+    end
+
+    subgraph RemoteTransport["Remote Transport"]
+        HTTP["streamable_http_client<br/>(try first)"]
+        SSEFallback["sse_client<br/>(fallback)"]
+        OAuth["OAuth flow<br/>(if 401/403)"]
+    end
+
+    subgraph Protocol["MCP Protocol"]
+        Session["ClientSession<br/>initialize()"]
+        ListTools["list_tools()"]
+        CallTool["call_tool(name, args)"]
+        ListPrompts["list_prompts()"]
+        ReadResource["read_resource(uri)"]
+    end
+
+    subgraph Integration["Hotaru Integration"]
+        ToolResolver["ToolResolver<br/>prefix: {client}_{tool}"]
+        ToolExec["ToolExecutor<br/>route to MCP client"]
+        ToolDefs["Tool definitions<br/>injected into LLM context"]
+    end
+
+    Config --> Init --> State
+    LocalCfg --> Stdio --> LocalProc
+    RemoteCfg --> HTTP
+    HTTP -->|fail| SSEFallback
+    HTTP -->|401/403| OAuth
+
+    Stdio & HTTP & SSEFallback --> Session
+    Session --> ListTools & CallTool & ListPrompts & ReadResource
+
+    ListTools --> ToolResolver --> ToolDefs
+    CallTool --> ToolExec
+```
+
+### 8. AppContext Lifecycle — Startup Sequence
+
+Phased startup with health tracking and rollback on critical failures.
+
+```mermaid
+sequenceDiagram
+    participant Entry as CLI / TUI / Web
+    participant Ctx as AppContext
+    participant Bus as Event Bus
+    participant Cfg as ConfigManager
+    participant DB as SQLite Storage
+    participant Tools as ToolRegistry
+    participant MCP as MCP Manager
+    participant LSP as LSP Manager
+    participant Skills as Skill Discovery
+    participant Agents as Agent Registry
+
+    Entry->>Ctx: AppContext()
+    Note over Ctx: Constructs all subsystems:<br/>Bus, Config, Permission, Question,<br/>Skills, Agents, Tools, MCP, LSP, Runner
+
+    Entry->>Ctx: startup()
+
+    rect rgb(230, 245, 255)
+        Note over Ctx: Phase A — Bind context vars
+        Ctx->>Bus: Bus.provide(bus)
+        Ctx->>Cfg: ConfigManager.provide(config)
+    end
+
+    rect rgb(230, 255, 230)
+        Note over Ctx: Phase B — Config + Storage
+        Ctx->>Cfg: load() (merge all config sources)
+        Ctx->>DB: initialize() (WAL mode, migrations)
+    end
+
+    rect rgb(255, 245, 230)
+        Note over Ctx: Phase C — Tools (sync, fast)
+        Ctx->>Tools: init() (register 20+ built-in tools)
+    end
+
+    rect rgb(255, 230, 230)
+        Note over Ctx: Phase D — MCP + LSP (parallel, health-tracked)
+        par
+            Ctx->>MCP: init() [critical=true]
+            MCP-->>Ctx: ready / failed
+        and
+            Ctx->>LSP: init() [critical=false]
+            LSP-->>Ctx: ready / failed
+        end
+
+        alt Critical failure
+            Ctx->>Ctx: rollback_startup()
+            Ctx-->>Entry: RuntimeError
+        else Degraded (LSP failed)
+            Note over Ctx: status = "degraded"
+        else All ready
+            Note over Ctx: status = "ready"
+        end
+    end
+
+    rect rgb(240, 230, 255)
+        Note over Ctx: Phase E — Skills + Agents (parallel)
+        par
+            Ctx->>Skills: init()
+        and
+            Ctx->>Agents: init()
+        end
+    end
+
+    Ctx-->>Entry: started = true
+```
+
+### 9. Subagent Delegation (Task Tool)
+
+The Task tool spawns isolated child sessions with scoped agents and tool sets.
+
+```mermaid
+flowchart TB
+    subgraph Parent["Parent Session (build agent)"]
+        LLM1["LLM decides to delegate"]
+        TaskCall["Task Tool call:<br/>subagent_type=explore<br/>prompt='find all API routes'"]
+    end
+
+    subgraph Resolution["Task Resolution"]
+        AgentLookup["Agent Registry lookup<br/>(explore → subagent mode)"]
+        ModelResolve["Resolve model<br/>(agent override or inherit parent)"]
+        ChildSession["Create child Session<br/>(new session_id, same project)"]
+    end
+
+    subgraph Child["Child Session (explore agent)"]
+        ChildProc["SessionProcessor<br/>(scoped tools, own ruleset)"]
+        ChildLLM["LLM streaming"]
+        ChildTools["Restricted tool set:<br/>grep, glob, list, read, bash"]
+        ChildLoop["Agentic loop<br/>(independent turns)"]
+    end
+
+    subgraph Return["Result Aggregation"]
+        ChildResult["Child final text output"]
+        ParentResume["Injected as tool_result<br/>into parent messages"]
+    end
+
+    LLM1 --> TaskCall
+    TaskCall --> AgentLookup --> ModelResolve --> ChildSession
+    ChildSession --> ChildProc --> ChildLLM --> ChildTools
+    ChildTools --> ChildLoop --> ChildResult
+    ChildResult --> ParentResume
+
+    style Parent fill:#e3f2fd
+    style Child fill:#fff3e0
+    style Return fill:#e8f5e9
+```
+
+### 10. Storage Architecture
+
+SQLite with WAL mode, namespace-routed tables, and automatic JSON migration.
+
+```mermaid
+flowchart TB
+    subgraph Callers
+        Session["Session"]
+        MsgStore["MessageStore"]
+        Permission["Permission"]
+        Project["Project"]
+    end
+
+    subgraph StorageAPI["Storage API"]
+        Read["read(key)"]
+        Write["write(key, data)"]
+        Update["update(key, fn)<br/>(BEGIN IMMEDIATE)"]
+        Tx["transaction(ops[])"]
+        List["list(prefix)"]
+    end
+
+    subgraph KeyRouting["Namespace Routing"]
+        Router{"key[0] →<br/>table mapping"}
+        T1["sessions"]
+        T2["session_index"]
+        T3["messages"]
+        T4["parts"]
+        T5["permission_approval"]
+        T6["kv (fallback)"]
+    end
+
+    subgraph SQLite["SQLite (WAL mode)"]
+        DB["storage.db<br/>PRAGMA journal_mode=WAL<br/>PRAGMA synchronous=NORMAL<br/>PRAGMA busy_timeout=5000"]
+        Migration["JSON → SQLite<br/>auto-migration on first run"]
+    end
+
+    Session & MsgStore & Permission & Project --> StorageAPI
+    StorageAPI --> Router
+    Router --> T1 & T2 & T3 & T4 & T5 & T6
+    T1 & T2 & T3 & T4 & T5 & T6 --> DB
+    DB --- Migration
+```
+
+### 11. Configuration Merge Strategy
+
+Multi-source configuration with layered priority resolution.
+
+```mermaid
+flowchart LR
+    subgraph Sources["Config Sources (low → high priority)"]
+        direction TB
+        S1["1. Global config dir<br/><code>~/.config/hotaru/</code>"]
+        S2["2. Project <code>hotaru.json</code><br/>(walk up from cwd)"]
+        S3["3. <code>.hotaru/hotaru.json</code><br/>(walk up from cwd)"]
+        S4["4. Env var<br/><code>HOTARU_CONFIG_CONTENT</code>"]
+        S5["5. Managed config dir<br/>(highest priority)"]
+    end
+
+    subgraph Merge["ConfigManager.load()"]
+        Deep["Deep merge<br/>(later overrides earlier)"]
+        Env["Resolve <code>{env:VAR}</code><br/>placeholders in values"]
+        Validate["Pydantic validation<br/>→ AppConfig"]
+    end
+
+    subgraph Consumers["Consumers"]
+        Agents["Agent definitions<br/>+ permissions"]
+        Providers["Provider registry<br/>+ API keys"]
+        Tools["Tool enablement<br/>(experimental flags)"]
+        Perms["Permission rules"]
+        MCPCfg["MCP server configs"]
+    end
+
+    S1 --> Deep
+    S2 --> Deep
+    S3 --> Deep
+    S4 --> Deep
+    S5 --> Deep
+    Deep --> Env --> Validate
+    Validate --> Agents & Providers & Tools & Perms & MCPCfg
+```
+
+### 12. WebUI Frontend Architecture
+
+React SPA communicating with FastAPI backend via REST + SSE.
+
+```mermaid
+flowchart TB
+    subgraph Frontend["React Frontend (Vite)"]
+        App["App.tsx"]
+
+        subgraph Hooks["Custom Hooks"]
+            useSession["useSession<br/>(session CRUD)"]
+            useMessages["useMessages<br/>(message list + apply)"]
+            useEvents["useEvents<br/>(SSE subscription)"]
+            useProviders["useProviders<br/>(model/agent select)"]
+            usePermissions["usePermissions<br/>(HITL dialogs)"]
+            usePty["usePty<br/>(terminal mgmt)"]
+        end
+
+        subgraph Components["UI Components"]
+            Layout["Layout"]
+            Header["Header<br/>(model/agent/theme)"]
+            Sidebar["Sidebar<br/>(session list)"]
+            ChatView["ChatView<br/>(messages + composer)"]
+            PermCard["PermissionCard"]
+            QuestCard["QuestionCard"]
+            Terminal["TerminalPanel<br/>(xterm.js via WS)"]
+        end
+    end
+
+    subgraph API["api.ts"]
+        SessAPI["sessions.*<br/>list/create/send/interrupt"]
+        ProvAPI["providers.*<br/>list/models"]
+        PermAPI["permissions.*<br/>list/reply"]
+        QuestAPI["questions.*<br/>list/reply/reject"]
+        PtyAPI["pty.*<br/>create/close/resize"]
+    end
+
+    subgraph Backend["FastAPI Backend (:4096)"]
+        REST["REST Endpoints<br/>/v1/sessions<br/>/v1/providers<br/>/v1/agents"]
+        SSE["SSE Stream<br/>/v1/events"]
+        WS["WebSocket<br/>/v1/ptys/{id}"]
+    end
+
+    App --> Hooks --> API
+    App --> Components
+    useEvents -.->|EventSource| SSE
+    SessAPI & ProvAPI & PermAPI & QuestAPI --> REST
+    PtyAPI --> REST
+    Terminal -.-> WS
+    SSE -.->|real-time events| useEvents
+```
+
+### 13. Event Bus System
+
+ContextVar-scoped pub/sub with typed Pydantic event schemas.
+
+```mermaid
+flowchart TB
+    subgraph Publishers
+        PermPub["Permission<br/>PermissionAsked<br/>PermissionReplied"]
+        MCPPub["MCP<br/>ToolsChanged<br/>BrowserOpenFailed"]
+        SessionPub["Session<br/>MessageCreated<br/>PartUpdated"]
+        PtyPub["PTY<br/>PtyOutput<br/>PtyExit"]
+    end
+
+    subgraph Bus["Event Bus (ContextVar-scoped)"]
+        Registry["Event Registry<br/>BusEvent.define(type, schema)"]
+        PubSub["Bus.publish(event, props)<br/>Bus.subscribe(event, callback)"]
+        Wildcard["Wildcard subscriber<br/>Bus.subscribe_all(callback)"]
+    end
+
+    subgraph Subscribers
+        SSEBridge["EventService<br/>→ SSE stream"]
+        TUIBridge["TUI event handler<br/>→ widget updates"]
+        AutoResolve["Permission auto-resolve<br/>(on 'always' reply)"]
+    end
+
+    Publishers --> PubSub
+    PubSub --> Subscribers
+    Registry --> PubSub
+    Wildcard --> SSEBridge
+
+    style Bus fill:#fff8e1
+```
+
+---
+
+## Feature Overview
+
+Hotaru Code is an AI coding assistant.
+
+It provides TUI, WebUI, and one-shot Run mode with tool calling, permission control, session persistence, MCP extensions, and Skill/Agent configuration.
+
+### Multi-Interface Modes
+
+- `hotaru` — default TUI (Textual)
+- `hotaru web` — WebUI (HTTP + SSE)
+- `hotaru run "your prompt"` — one-shot execution
+- Built-in `/init` command for generating/updating `AGENTS.md`
+
+### Agent + Permission System
+
+- Built-in agents: `build`, `plan`, `general`, `explore` (+ hidden internal agents)
+- Custom Markdown agents from `.hotaru/agents/` directories
+- Permission rules: `allow / ask / deny` with glob patterns
+- Fine-grained control over `bash`, `edit`, external directory access
+- Doom loop detection for repeated tool calls
+
+### Built-in Tools
+
+| Category | Tools |
+|----------|-------|
+| File & Code | `list`, `glob`, `grep`, `read`, `edit`, `write`, `multiedit`, `apply_patch` |
+| Execution | `bash`, `task`, `todoread`, `todowrite`, `question` |
+| Web | `webfetch` |
+| Extensions | `skill`, `lsp` (experimental) |
+| Experimental | `websearch`, `codesearch`, `batch`, `plan_enter`, `plan_exit` |
+
+### Provider / MCP / Skill Extensions
+
+- **Provider**: OpenAI, Anthropic, and OpenAI-compatible custom services
+- **MCP**: Local (stdio) and remote (HTTP/SSE) with OAuth support
+- **Skill**: Local directory discovery + remote skill index
+- **Persistence**: Sessions/messages stored in SQLite, recoverable across restarts
+
+---
+
+## Installation
+
+### From source (development)
 
 ```bash
 uv sync
@@ -211,7 +686,7 @@ uv run hotaru --help
 uv run hotaru
 ```
 
-### 2. 作为命令行工具安装（已发布场景）
+### As CLI tool (published)
 
 ```bash
 uv tool install hotaru-code
@@ -219,125 +694,90 @@ uv tool update-shell
 hotaru --help
 ```
 
-可选：
+Or one-off:
 
 ```bash
 uvx --from hotaru-code hotaru --help
 ```
 
-### 3. 配置 API Key
+### Configure API Key
 
-至少配置一个可用 Provider 的密钥（或使用`/connect`命令连接自定义API）：
+At least one provider key is required (or use `/connect` for custom API):
 
 ```bash
 # macOS/Linux
 export OPENAI_API_KEY="your-key"
-# 或
+# or
 export ANTHROPIC_API_KEY="your-key"
 ```
 
 ```powershell
 # Windows PowerShell
 $env:OPENAI_API_KEY = "your-key"
-# 或
+# or
 $env:ANTHROPIC_API_KEY = "your-key"
 ```
 
-## 使用方法
+---
 
-### 1. TUI 模式
+## Usage
 
-```bash
-# 默认进入 TUI
-hotaru
-
-# 指定模型/agent
-hotaru --model openai/gpt-5 --agent build
-
-# 切换工作目录并带初始 prompt
-hotaru --directory ../another-repo --prompt "先阅读项目结构并总结"
-
-# 显式使用 tui 子命令
-hotaru tui --continue
-```
-
-### 2. Run 模式（一次性）
+### TUI Mode
 
 ```bash
-# 基础
-hotaru run "请分析这个仓库的结构"
-
-# 指定模型/agent/自动通过权限
-hotaru run "修复 tests 失败" --model openai/gpt-5 --agent build --yes
-
-# 附加文件（可重复 -f）
-hotaru run "根据附件生成发布说明" -f CHANGELOG.md -f docs/release.md
-
-# 输出 JSON 事件流
-hotaru run "总结这段日志" --json
-
-# 触发内置 /init
-hotaru run "/init 请补充 monorepo 规范"
-
-# 从 stdin 追加输入
-cat error.log | hotaru run "总结错误并给修复建议"
+hotaru                                          # default TUI
+hotaru --model openai/gpt-5 --agent build       # specify model/agent
+hotaru --directory ../another-repo --prompt "read project structure"
+hotaru tui --continue                            # resume last session
 ```
 
-### 3. WebUI 模式
+### Run Mode (one-shot)
 
 ```bash
-# 启动 WebUI（默认绑定 127.0.0.1:4096）
-hotaru web
-
-# 自定义 host/port，并自动打开浏览器
-hotaru web --host 127.0.0.1 --port 4096 --open
+hotaru run "analyze this repo"
+hotaru run "fix tests" --model openai/gpt-5 --agent build --yes
+hotaru run "generate release notes" -f CHANGELOG.md -f docs/release.md
+hotaru run "summarize this log" --json           # JSON event stream output
+cat error.log | hotaru run "summarize and fix"   # stdin input
 ```
 
-若你在源码仓库开发前端：
+### WebUI Mode
 
 ```bash
-cd frontend
-npm ci
-npm run build
+hotaru web                                       # default 127.0.0.1:4096
+hotaru web --host 0.0.0.0 --port 8080 --open    # custom host/port + open browser
 ```
 
-构建产物会直接输出到 `src/hotaru/webui/dist`，然后回到项目根目录运行 `hotaru web`。
-PyPI 发布流程会在 `uv build` 前自动执行这一步，无需手工同步前端产物。
-
-### 4. 会话与配置管理
+Frontend development:
 
 ```bash
-hotaru providers            # 列出已可用 provider/model
-hotaru agents               # 列出可见 agent
-hotaru sessions -n 20       # 列出最近会话
-hotaru config --show        # 展示合并后的配置
-hotaru config --path        # 展示配置目录
-
-hotaru run "继续处理上次任务" -c
-hotaru run "继续指定会话" -s <session_id>
-
-hotaru agent list
-hotaru agent create --description "Review Python code and propose safe refactors" --mode primary
+cd frontend && npm ci && npm run build           # output → src/hotaru/webui/dist
 ```
 
-### 4. LSP 调试命令
+### Session & Config Management
 
 ```bash
-# 查询某个文件的 LSP diagnostics（JSON 输出）
-hotaru debug lsp diagnostics src/main.py
+hotaru providers            # list available providers/models
+hotaru agents               # list visible agents
+hotaru sessions -n 20       # list recent sessions
+hotaru config --show        # display merged config
+hotaru config --path        # show config directory
+hotaru agent create --description "Code reviewer" --mode primary
 ```
 
-## 配置说明
+---
 
-Hotaru 会合并多来源配置（后者覆盖前者）：
+## Configuration
 
-1. 全局配置目录（可用 `hotaru config --path` 查看）
-2. 当前目录向上查找的 `hotaru.json` / `hotaru.jsonc`
-3. 当前目录向上查找的 `.hotaru/hotaru.json` / `.hotaru/hotaru.jsonc`（含 `~/.hotaru`）
-4. 环境变量 `HOTARU_CONFIG_CONTENT`
-5. 托管配置目录（最高优先级）
+Hotaru merges configs from multiple sources (later overrides earlier):
 
-### 最小 `hotaru.json` 示例
+1. Global config dir (`hotaru config --path`)
+2. `hotaru.json` / `hotaru.jsonc` (walk up from cwd)
+3. `.hotaru/hotaru.json` / `.hotaru/hotaru.jsonc` (walk up from cwd, including `~/.hotaru`)
+4. Environment variable `HOTARU_CONFIG_CONTENT`
+5. Managed config directory (highest priority)
+
+### Minimal `hotaru.json`
 
 ```json
 {
@@ -364,41 +804,14 @@ Hotaru 会合并多来源配置（后者覆盖前者）：
 }
 ```
 
-### 权限记忆与 HITL 行为配置
+### Permission Memory Scope
 
-- `permission_memory_scope`：控制权限弹窗里选择 `always` 后的记忆范围，默认 `session`。
-- `continue_loop_on_deny`：当用户拒绝权限/问题时，是否继续当前执行循环，默认 `false`（立即停止当前轮）。
+- `turn` — discarded after current request
+- `session` — in-memory per session (default)
+- `project` — in-memory per project (cleared on restart)
+- `persisted` — same as project but persisted to SQLite
 
-`permission_memory_scope` 可选值：
-
-- `turn`：`always` 仅对当前请求生效，不记忆到后续步骤。
-- `session`：记忆到当前会话（默认）。
-- `project`：记忆到同一项目内的所有会话（仅内存态，进程重启后清空）。
-- `persisted`：与 `project` 相同，但会持久化到本地存储，重启后仍可复用。
-
-推荐配置示例：
-
-```json
-{
-  "permission_memory_scope": "persisted",
-  "continue_loop_on_deny": false
-}
-```
-
-### 实验功能开关示例
-
-```json
-{
-  "experimental": {
-    "plan_mode": true,
-    "enable_exa": false,
-    "lsp_tool": false,
-    "batch_tool": false
-  }
-}
-```
-
-### 自定义 OpenAI-compatible Provider 示例
+### Custom Provider
 
 ```json
 {
@@ -411,28 +824,21 @@ Hotaru 会合并多来源配置（后者覆盖前者）：
         "apiKey": "{env:MY_PROVIDER_API_KEY}"
       },
       "models": {
-        "my-model": {
-          "name": "My Model"
-        }
+        "my-model": { "name": "My Model" }
       }
     }
   }
 }
 ```
 
-### MCP 示例（本地服务）
+### MCP Server
 
 ```json
 {
   "mcp": {
     "filesystem": {
       "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "."
-      ],
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."],
       "enabled": true,
       "timeout": 30
     }
@@ -440,7 +846,7 @@ Hotaru 会合并多来源配置（后者覆盖前者）：
 }
 ```
 
-### Markdown Agent 示例（`.hotaru/agents/reviewer.md`）
+### Markdown Agent (`.hotaru/agents/reviewer.md`)
 
 ```markdown
 ---
@@ -454,38 +860,65 @@ tools:
 You are a reviewer agent. Focus on correctness, regression risk, and test gaps.
 ```
 
-## 项目结构
+### Experimental Features
 
-- `src/hotaru/cli/`：CLI 入口与子命令
-- `src/hotaru/tui/`：Textual TUI
-- `src/hotaru/session/`：会话、消息与执行循环（`SessionPrompt.loop + SessionProcessor`）
-- `src/hotaru/tool/`：内置工具与注册中心
-- `src/hotaru/provider/`：Provider 与模型抽象
-- `src/hotaru/mcp/`：MCP 客户端与认证
-- `src/hotaru/permission/`：权限规则与交互
-- `src/hotaru/skill/`：Skill 发现与加载
-- `src/hotaru/lsp/`：LSP 客户端与服务管理
-
-## 会话架构（当前）
-
-- 外层编排：`SessionPrompt.prompt()/loop()` 负责多轮循环、compaction、structured output、工具解析与策略注入
-- 单轮执行：`SessionProcessor.process_step()` 只处理一次流式响应与工具执行
-- 重试韧性：`session/retry.py` 负责可重试错误判定、指数退避与 `Retry-After/Retry-After-Ms` 延迟解析
-- 主消息模型：`session/message_store.py`（message + part 分离存储）
-- Provider 语义对齐：`provider/transform.py` 统一消息归一化、tool-call id、provider 选项映射与缓存提示注入
-
-## 开发
-
-```bash
-# 运行测试
-uv run pytest tests
-
-# 构建包
-uv build
+```json
+{
+  "experimental": {
+    "plan_mode": true,
+    "enable_exa": false,
+    "lsp_tool": false,
+    "batch_tool": false
+  }
+}
 ```
 
-## 说明
+---
 
-- Python 版本要求：`>=3.12`
-- 包名：`hotaru-code`
-- 命令行入口：`hotaru`
+## Project Structure
+
+```
+src/hotaru/
+├── cli/           CLI entry point and subcommands (Typer)
+├── tui/           Terminal UI (Textual) — screens, widgets, dialogs
+├── server/        FastAPI HTTP server — routes, SSE, WebSocket
+├── session/       Session loop, processor, LLM adapter, compaction
+├── tool/          20+ built-in tools and ToolRegistry
+├── provider/      Provider registry, transform layer, SDK wrappers
+├── agent/         Agent registry and Markdown agent loading
+├── permission/    Permission engine (allow/ask/deny rules)
+├── mcp/           MCP client (stdio and HTTP/SSE) + OAuth
+├── skill/         Skill discovery and loading
+├── lsp/           LSP client and server management
+├── core/          Config, event bus, global paths, context
+├── storage/       SQLite storage with WAL mode
+├── project/       Project/instance management
+├── runtime/       AppContext lifecycle container
+├── app_services/  Service layer for HTTP routes
+├── api_client/    HTTP client for TUI → Server communication
+├── pty/           PTY session management for WebSocket terminal
+├── shell/         Shell execution utilities
+├── patch/         Patch application
+├── command/       Slash command system
+├── snapshot/      Snapshot tracking
+├── question/      Question/answer HITL system
+└── webui/dist/    Built React frontend assets
+frontend/          React + TypeScript WebUI source
+tests/             Mirrors src/hotaru/ structure
+```
+
+## Development
+
+```bash
+uv run pytest tests     # run tests
+uv build                # build package
+```
+
+## Technical Details
+
+- Python `>=3.12`, package name `hotaru-code`, entry point `hotaru`
+- Backend: FastAPI + Uvicorn, SQLite (WAL), asyncio
+- Frontend: React + TypeScript + Vite, xterm.js for terminal
+- LLM SDKs: `anthropic`, `openai` (OpenAI-compatible)
+- MCP: `mcp` SDK (ClientSession, stdio/HTTP/SSE transports)
+- TUI: Textual framework
