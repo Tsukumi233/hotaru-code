@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/Tsukumi233/hotaru-code/compare/v1.1.0...v1.2.0) (2026-02-28)
+
+
+### Features
+
+* **mcp:** implement oauth e2e flow across core/cli/server/tui ([83a1ece](https://github.com/Tsukumi233/hotaru-code/commit/83a1ece78b70a595fd93e8a514c040fb76f2d99e))
+* 添加示例 agent 配置文件 ([d1d9e31](https://github.com/Tsukumi233/hotaru-code/commit/d1d9e312f9c56ba9ec493ff2f9862c8ac11cbc1f))
+
+
+### Bug Fixes
+
+* comment out unused 'once' method in Bus class ([5061823](https://github.com/Tsukumi233/hotaru-code/commit/5061823596859c5def4ce53e909e219e56cb338a))
+* update architecture diagram ([700d7a8](https://github.com/Tsukumi233/hotaru-code/commit/700d7a8a9b971943372d24f808efa47f8a3e7726))
+* update README.md ([6c7f89f](https://github.com/Tsukumi233/hotaru-code/commit/6c7f89fd5786895d39eb527a9e0a9fc154c90ae9))
+
 ## [1.1.0](https://github.com/Tsukumi233/hotaru-code/compare/v1.0.0...v1.1.0) (2026-02-25)
 
 
