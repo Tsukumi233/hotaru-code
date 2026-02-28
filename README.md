@@ -66,7 +66,8 @@ flowchart TB
     CLI -->|web| Server
     TUI --> SDKCtx --> Server
     WebUI -.->|HTTP/SSE/WS| Server
-    Server --> AppSvc --> SP & Agent & Provider & Perm
+    Server --> AppSvc --> SP
+    AppSvc --> Agent & Provider
 
     Orch --> SysPr --> SP
     SP --> Proc --> TR --> LLM
