@@ -641,7 +641,7 @@ flowchart TB
 
 Hotaru Code is an AI coding assistant.
 
-It provides TUI, WebUI, and one-shot Run mode with tool calling, permission control, session persistence, MCP extensions, and Skill/Agent configuration.
+It provides TUI, WebUI, and one-shot Run mode with tool calling, permission control, session persistence, MCP extensions, LSP support, and Skill/Agent configuration.
 
 ### Multi-Interface Modes
 
