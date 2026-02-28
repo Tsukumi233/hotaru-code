@@ -219,6 +219,94 @@ def test_v1_preference_routes_delegate_to_service(monkeypatch, app_ctx) -> None:
     assert captured["update"]["provider_id"] == "moonshot"
 
 
+def test_v1_mcp_routes_delegate_to_service(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
+    captured: dict[str, Any] = {}
+
+    from hotaru.mcp.mcp import MCPStatusConnected, MCPStatusNeedsAuth
+
+    async def fake_status():
+        captured["status"] = True
+        return {"demo": MCPStatusNeedsAuth()}
+
+    async def fake_connect(name: str, use_oauth: bool = False):
+        captured["connect"] = {"name": name, "use_oauth": use_oauth}
+
+    async def fake_disconnect(name: str):
+        captured["disconnect"] = {"name": name}
+
+    async def fake_supports_oauth(name: str):
+        captured["supports_oauth"] = name
+        return True
+
+    async def fake_start_auth(name: str):
+        captured["auth_start"] = {"name": name}
+        return {"authorization_url": "https://example.com/oauth"}
+
+    async def fake_finish_auth(name: str, code: str, state: str):
+        captured["auth_callback"] = {"name": name, "code": code, "state": state}
+        return MCPStatusConnected()
+
+    async def fake_authenticate(name: str):
+        captured["auth_authenticate"] = {"name": name}
+        return MCPStatusConnected()
+
+    async def fake_remove_auth(name: str):
+        captured["auth_remove"] = {"name": name}
+
+    monkeypatch.setattr(app_ctx.mcp, "status", fake_status)
+    monkeypatch.setattr(app_ctx.mcp, "connect", fake_connect)
+    monkeypatch.setattr(app_ctx.mcp, "disconnect", fake_disconnect)
+    monkeypatch.setattr(app_ctx.mcp, "supports_oauth", fake_supports_oauth)
+    monkeypatch.setattr(app_ctx.mcp, "start_auth", fake_start_auth)
+    monkeypatch.setattr(app_ctx.mcp, "finish_auth", fake_finish_auth)
+    monkeypatch.setattr(app_ctx.mcp, "authenticate", fake_authenticate)
+    monkeypatch.setattr(app_ctx.mcp, "remove_auth", fake_remove_auth)
+
+    app = Server._create_app(app_ctx)
+    with TestClient(app) as client:
+        headers = {"x-hotaru-directory": "/tmp"}
+        status = client.get("/v1/mcp", headers=headers)
+        assert status.status_code == 200
+        assert status.json()["demo"]["status"] == "needs_auth"
+
+        connect = client.post("/v1/mcp/demo/connect", headers=headers)
+        assert connect.status_code == 200
+        assert connect.json()["ok"] is True
+
+        disconnect = client.post("/v1/mcp/demo/disconnect", headers=headers)
+        assert disconnect.status_code == 200
+        assert disconnect.json()["ok"] is True
+
+        auth_start = client.post("/v1/mcp/demo/auth/start", headers=headers)
+        assert auth_start.status_code == 200
+        assert auth_start.json()["authorization_url"] == "https://example.com/oauth"
+
+        auth_callback = client.post(
+            "/v1/mcp/demo/auth/callback",
+            json={"code": "abc", "state": "def"},
+            headers=headers,
+        )
+        assert auth_callback.status_code == 200
+        assert auth_callback.json()["status"] == "connected"
+
+        auth_authenticate = client.post("/v1/mcp/demo/auth/authenticate", headers=headers)
+        assert auth_authenticate.status_code == 200
+        assert auth_authenticate.json()["status"] == "connected"
+
+        auth_remove = client.delete("/v1/mcp/demo/auth", headers=headers)
+        assert auth_remove.status_code == 200
+        assert auth_remove.json()["ok"] is True
+
+    assert captured["connect"]["name"] == "demo"
+    assert captured["connect"]["use_oauth"] is True
+    assert captured["disconnect"]["name"] == "demo"
+    assert captured["auth_start"]["name"] == "demo"
+    assert captured["auth_callback"]["code"] == "abc"
+    assert captured["auth_callback"]["state"] == "def"
+    assert captured["auth_authenticate"]["name"] == "demo"
+    assert captured["auth_remove"]["name"] == "demo"
+
+
 def test_v1_agent_route_accepts_null_description(monkeypatch, app_ctx) -> None:  # type: ignore[no-untyped-def]
     async def fake_agent_list(cls, **_kw):
         return [

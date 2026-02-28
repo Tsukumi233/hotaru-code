@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Optional
 
+from ..api_client import ApiClientError
 from .context import HomeRoute, SessionRoute
 from .context.route import PromptInfo
 from .routes import HomeScreen, SessionScreen
@@ -330,6 +331,90 @@ class ActionsMixin(ViewsMixin):
             callback=self._on_agent_selected
         )
 
+    def action_mcp_auth(self, argument: Optional[str] = None) -> None:
+        self.run_worker(self._mcp_auth(argument), exclusive=False)
+
+    def action_mcp_logout(self, argument: Optional[str] = None) -> None:
+        self.run_worker(self._mcp_logout(argument), exclusive=False)
+
+    def action_mcp_connect(self, argument: Optional[str] = None) -> None:
+        self.run_worker(self._mcp_connect(argument), exclusive=False)
+
+    def action_mcp_disconnect(self, argument: Optional[str] = None) -> None:
+        self.run_worker(self._mcp_disconnect(argument), exclusive=False)
+
+    async def _resolve_mcp_target(self, argument: Optional[str]) -> str:
+        target = str(argument or "").strip()
+        if target:
+            return target
+
+        status = await self.sdk_ctx.list_mcp_status()
+        names = sorted(status.keys())
+        if not names:
+            raise ValueError("No MCP servers configured.")
+
+        needs_auth = [name for name, item in status.items() if item.get("status") == "needs_auth"]
+        if len(needs_auth) == 1:
+            return needs_auth[0]
+        if len(names) == 1:
+            return names[0]
+        raise ValueError("Specify MCP server name, e.g. /mcp-auth <name>.")
+
+    async def _refresh_mcp_status(self) -> None:
+        status = await self.sdk_ctx.list_mcp_status()
+        self.sync_ctx.set_mcp_status(status)
+
+    async def _mcp_auth(self, argument: Optional[str]) -> None:
+        try:
+            name = await self._resolve_mcp_target(argument)
+            self.notify(f"Authenticating MCP '{name}'...")
+            result = await self.sdk_ctx.mcp_auth_authenticate(name)
+            await self._refresh_mcp_status()
+            state = str(result.get("status") or "unknown")
+            if state == "connected":
+                self.notify(f"MCP '{name}' authenticated.")
+                return
+            error = str(result.get("error") or "unknown error")
+            self.notify(f"MCP '{name}' auth result: {state} ({error})", severity="warning")
+        except (ApiClientError, ValueError, RuntimeError) as e:
+            self.notify(str(e), severity="error")
+
+    async def _mcp_logout(self, argument: Optional[str]) -> None:
+        try:
+            name = await self._resolve_mcp_target(argument)
+            result = await self.sdk_ctx.mcp_auth_remove(name)
+            await self._refresh_mcp_status()
+            if result.get("ok") is True:
+                self.notify(f"Removed MCP OAuth credentials for '{name}'.")
+                return
+            self.notify(f"Failed to remove MCP OAuth credentials for '{name}'.", severity="warning")
+        except (ApiClientError, ValueError, RuntimeError) as e:
+            self.notify(str(e), severity="error")
+
+    async def _mcp_connect(self, argument: Optional[str]) -> None:
+        try:
+            name = await self._resolve_mcp_target(argument)
+            result = await self.sdk_ctx.mcp_connect(name)
+            await self._refresh_mcp_status()
+            if result.get("ok") is True:
+                self.notify(f"Connected MCP '{name}'.")
+                return
+            self.notify(f"Failed to connect MCP '{name}'.", severity="warning")
+        except (ApiClientError, ValueError, RuntimeError) as e:
+            self.notify(str(e), severity="error")
+
+    async def _mcp_disconnect(self, argument: Optional[str]) -> None:
+        try:
+            name = await self._resolve_mcp_target(argument)
+            result = await self.sdk_ctx.mcp_disconnect(name)
+            await self._refresh_mcp_status()
+            if result.get("ok") is True:
+                self.notify(f"Disconnected MCP '{name}'.")
+                return
+            self.notify(f"Failed to disconnect MCP '{name}'.", severity="warning")
+        except (ApiClientError, ValueError, RuntimeError) as e:
+            self.notify(str(e), severity="error")
+
     def _on_agent_selected(self, agent_name: Optional[str]) -> None:
         if not agent_name:
             return
@@ -409,5 +494,13 @@ def register_default_commands(app) -> None:
             command.on_select = lambda s="palette", a=None: app.action_model_list(provider_filter=a or None)
         elif command.id in ("mcp.list", "status.view"):
             command.on_select = lambda s="palette", a=None: app.action_status_view()
+        elif command.id == "mcp.auth":
+            command.on_select = lambda s="palette", a=None: app.action_mcp_auth(a)
+        elif command.id == "mcp.logout":
+            command.on_select = lambda s="palette", a=None: app.action_mcp_logout(a)
+        elif command.id == "mcp.connect":
+            command.on_select = lambda s="palette", a=None: app.action_mcp_connect(a)
+        elif command.id == "mcp.disconnect":
+            command.on_select = lambda s="palette", a=None: app.action_mcp_disconnect(a)
 
         app.command_registry.register(command)

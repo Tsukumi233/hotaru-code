@@ -47,6 +47,14 @@ def test_transcript_commands_are_enabled() -> None:
     assert registry.get("project.init").enabled is True
     assert registry.get("project.init").slash_name == "init"
     assert registry.get("provider.connect").enabled is True
+    assert registry.get("mcp.auth").enabled is True
+    assert registry.get("mcp.auth").slash_name == "mcp-auth"
+    assert registry.get("mcp.logout").enabled is True
+    assert registry.get("mcp.logout").slash_name == "mcp-logout"
+    assert registry.get("mcp.connect").enabled is True
+    assert registry.get("mcp.connect").slash_name == "mcp-connect"
+    assert registry.get("mcp.disconnect").enabled is True
+    assert registry.get("mcp.disconnect").slash_name == "mcp-disconnect"
 
 
 def test_execute_passes_argument_to_callback() -> None:

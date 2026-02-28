@@ -145,6 +145,10 @@ class HelpDialog(DialogBase):
   [cyan]/export[/cyan]    Export session transcript
   [cyan]/share[/cyan]     Share session snapshot
   [cyan]/mcps[/cyan]      View MCP status
+  [cyan]/mcp-auth[/cyan]  Authenticate MCP (supports /mcp-auth <name>)
+  [cyan]/mcp-logout[/cyan] Remove MCP OAuth credentials
+  [cyan]/mcp-connect[/cyan] Connect MCP server
+  [cyan]/mcp-disconnect[/cyan] Disconnect MCP server
   [cyan]/status[/cyan]    View status
   [cyan]/help[/cyan]      Show this help
   [cyan]/exit[/cyan]      Exit application

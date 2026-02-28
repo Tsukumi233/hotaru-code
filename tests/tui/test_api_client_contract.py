@@ -53,6 +53,20 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
             return httpx.Response(200, json=[{"id": "gpt-5", "name": "GPT-5"}])
         if route == ("POST", "/v1/providers/connect"):
             return httpx.Response(200, json={"ok": True})
+        if route == ("GET", "/v1/mcp"):
+            return httpx.Response(200, json={"demo": {"status": "needs_auth"}})
+        if route == ("POST", "/v1/mcp/demo/connect"):
+            return httpx.Response(200, json={"ok": True})
+        if route == ("POST", "/v1/mcp/demo/disconnect"):
+            return httpx.Response(200, json={"ok": True})
+        if route == ("POST", "/v1/mcp/demo/auth/start"):
+            return httpx.Response(200, json={"authorization_url": "https://example.com/oauth"})
+        if route == ("POST", "/v1/mcp/demo/auth/callback"):
+            return httpx.Response(200, json={"status": "connected"})
+        if route == ("POST", "/v1/mcp/demo/auth/authenticate"):
+            return httpx.Response(200, json={"status": "connected"})
+        if route == ("DELETE", "/v1/mcp/demo/auth"):
+            return httpx.Response(200, json={"ok": True})
         if route == ("GET", "/v1/agents"):
             return httpx.Response(200, json=[{"name": "build", "mode": "primary"}])
         if route == ("GET", "/v1/preferences/current"):
@@ -103,6 +117,13 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
             },
         }
     )
+    await client.list_mcp_status()
+    await client.mcp_connect("demo")
+    await client.mcp_disconnect("demo")
+    await client.mcp_auth_start("demo")
+    await client.mcp_auth_callback("demo", {"code": "abc", "state": "def"})
+    await client.mcp_auth_authenticate("demo")
+    await client.mcp_auth_remove("demo")
     await client.list_agents()
     await client.get_current_preference()
     await client.update_current_preference({"agent": "build", "provider_id": "openai", "model_id": "gpt-5"})
@@ -132,6 +153,13 @@ async def test_api_client_calls_expected_v1_contract_endpoints() -> None:
         ("GET", "/v1/providers"),
         ("GET", "/v1/providers/openai/models"),
         ("POST", "/v1/providers/connect"),
+        ("GET", "/v1/mcp"),
+        ("POST", "/v1/mcp/demo/connect"),
+        ("POST", "/v1/mcp/demo/disconnect"),
+        ("POST", "/v1/mcp/demo/auth/start"),
+        ("POST", "/v1/mcp/demo/auth/callback"),
+        ("POST", "/v1/mcp/demo/auth/authenticate"),
+        ("DELETE", "/v1/mcp/demo/auth"),
         ("GET", "/v1/agents"),
         ("GET", "/v1/preferences/current"),
         ("PATCH", "/v1/preferences/current"),

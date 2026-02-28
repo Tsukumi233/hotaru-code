@@ -363,6 +363,30 @@ def create_default_commands() -> List[Command]:
             category=CommandCategory.AGENT,
             slash_name="mcps",
         ),
+        Command(
+            id="mcp.auth",
+            title="Authenticate MCP",
+            category=CommandCategory.AGENT,
+            slash_name="mcp-auth",
+        ),
+        Command(
+            id="mcp.logout",
+            title="Logout MCP OAuth",
+            category=CommandCategory.AGENT,
+            slash_name="mcp-logout",
+        ),
+        Command(
+            id="mcp.connect",
+            title="Connect MCP",
+            category=CommandCategory.AGENT,
+            slash_name="mcp-connect",
+        ),
+        Command(
+            id="mcp.disconnect",
+            title="Disconnect MCP",
+            category=CommandCategory.AGENT,
+            slash_name="mcp-disconnect",
+        ),
 
         # Provider commands
         Command(

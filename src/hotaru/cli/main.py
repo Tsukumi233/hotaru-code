@@ -17,6 +17,7 @@ from .. import __version__
 from ..runtime.logging import bootstrap_logging
 from .cmd.agent import app as agent_app
 from .cmd.debug import app as debug_app
+from .cmd.mcp import app as mcp_app
 
 app = typer.Typer(
     name="hotaru",
@@ -27,6 +28,7 @@ app = typer.Typer(
 )
 app.add_typer(agent_app, name="agent", help="Manage agents")
 app.add_typer(debug_app, name="debug", help="Debugging utilities")
+app.add_typer(mcp_app, name="mcp", help="Manage MCP servers")
 
 console = Console()
 

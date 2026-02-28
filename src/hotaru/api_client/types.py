@@ -58,6 +58,11 @@ class PreferenceCurrentPayload(TypedDict, total=False):
     model_id: str
 
 
+class McpAuthCallbackPayload(TypedDict):
+    code: str
+    state: str
+
+
 class StreamEvent(TypedDict, total=False):
     type: str
     data: JSONDict

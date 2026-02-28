@@ -459,6 +459,48 @@ class SDKContext:
 
         return result
 
+    async def list_mcp_status(self) -> dict[str, dict[str, Any]]:
+        if not hasattr(self._api_client, "list_mcp_status"):
+            return {}
+        result = await self._api_client.list_mcp_status()
+        return result if isinstance(result, dict) else {}
+
+    async def mcp_connect(self, name: str) -> dict[str, Any]:
+        if not hasattr(self._api_client, "mcp_connect"):
+            return {"ok": False}
+        result = await self._api_client.mcp_connect(name)
+        return result if isinstance(result, dict) else {"ok": bool(result)}
+
+    async def mcp_disconnect(self, name: str) -> dict[str, Any]:
+        if not hasattr(self._api_client, "mcp_disconnect"):
+            return {"ok": False}
+        result = await self._api_client.mcp_disconnect(name)
+        return result if isinstance(result, dict) else {"ok": bool(result)}
+
+    async def mcp_auth_start(self, name: str) -> dict[str, Any]:
+        if not hasattr(self._api_client, "mcp_auth_start"):
+            return {}
+        result = await self._api_client.mcp_auth_start(name)
+        return result if isinstance(result, dict) else {}
+
+    async def mcp_auth_callback(self, name: str, code: str, state: str) -> dict[str, Any]:
+        if not hasattr(self._api_client, "mcp_auth_callback"):
+            return {}
+        result = await self._api_client.mcp_auth_callback(name, {"code": code, "state": state})
+        return result if isinstance(result, dict) else {}
+
+    async def mcp_auth_authenticate(self, name: str) -> dict[str, Any]:
+        if not hasattr(self._api_client, "mcp_auth_authenticate"):
+            return {}
+        result = await self._api_client.mcp_auth_authenticate(name)
+        return result if isinstance(result, dict) else {}
+
+    async def mcp_auth_remove(self, name: str) -> dict[str, Any]:
+        if not hasattr(self._api_client, "mcp_auth_remove"):
+            return {"ok": False}
+        result = await self._api_client.mcp_auth_remove(name)
+        return result if isinstance(result, dict) else {"ok": bool(result)}
+
     async def connect_provider(
         self,
         provider_id: str,

@@ -14,9 +14,9 @@ import asyncio
 import json
 import os
 import re
-import secrets
 from contextlib import AsyncExitStack
 from typing import Any, Dict, List, Literal, Optional, Union
+from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel
 
@@ -181,6 +181,11 @@ async def _safe_aclose(stack: "AsyncExitStack") -> None:
         pass
 
 
+def _is_external_cancellation() -> bool:
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
+
+
 class MCPToolDefinition(BaseModel):
     """MCP tool definition from server."""
     name: str
@@ -247,15 +252,16 @@ class MCPClient:
         from mcp import ClientSession
         from mcp.client.streamable_http import streamable_http_client
 
-        # Build kwargs for transport
-        http_kwargs: Dict[str, Any] = {}
-        if headers:
-            http_kwargs["headers"] = headers
-
         # Try StreamableHTTP first
         stack = AsyncExitStack()
         try:
-            transport_cm = streamable_http_client(url, **http_kwargs)
+            http_client_kwargs: Dict[str, Any] = {}
+            if headers:
+                http_client_kwargs["headers"] = headers
+            if oauth_auth is not None:
+                http_client_kwargs["auth"] = oauth_auth
+            http_client = await stack.enter_async_context(httpx.AsyncClient(**http_client_kwargs))
+            transport_cm = streamable_http_client(url, http_client=http_client)
             read, write, _ = await stack.enter_async_context(transport_cm)
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
@@ -268,6 +274,11 @@ class MCPClient:
             auth_error = _auth_http_error(e)
             if auth_error:
                 raise auth_error from e
+        except asyncio.CancelledError as e:
+            await _safe_aclose(stack)
+            if _is_external_cancellation():
+                raise
+            raise ConnectionError("MCP transport cancelled") from e
         except BaseExceptionGroup:
             await _safe_aclose(stack)
         except Exception:
@@ -278,7 +289,11 @@ class MCPClient:
 
         stack = AsyncExitStack()
         try:
-            transport_cm = sse_client(url, **http_kwargs)
+            transport_cm = sse_client(
+                url,
+                headers=headers,
+                auth=oauth_auth,
+            )
             read, write = await stack.enter_async_context(transport_cm)
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
@@ -291,6 +306,11 @@ class MCPClient:
             if auth_error:
                 raise auth_error from e
             raise
+        except asyncio.CancelledError as e:
+            await _safe_aclose(stack)
+            if _is_external_cancellation():
+                raise
+            raise ConnectionError("MCP transport cancelled") from e
         except BaseExceptionGroup as eg:
             await _safe_aclose(stack)
             raise ConnectionError(f"MCP transport failed: {eg}") from eg
@@ -387,6 +407,20 @@ class MCPState:
         self.clients: Dict[str, MCPClient] = {}
         self.status: Dict[str, MCPStatus] = {}
 
+
+class PendingAuthFlow:
+    """Pending OAuth authorization flow for a single MCP server."""
+
+    def __init__(
+        self,
+        auth_task: "asyncio.Task[Dict[str, str]]",
+        callback_future: "asyncio.Future[tuple[str, str | None]]",
+        url_future: "asyncio.Future[str]",
+    ) -> None:
+        self.auth_task = auth_task
+        self.callback_future = callback_future
+        self.url_future = url_future
+
 def _sanitize_name(name: str) -> str:
     """Sanitize a name for use in tool/prompt/resource IDs."""
     return re.sub(r"[^a-zA-Z0-9_]", "_", name)
@@ -433,6 +467,22 @@ class MCP:
     def __init__(self) -> None:
         self._state: Optional[MCPState] = None
         self._init_lock = asyncio.Lock()
+        self._pending_auth: Dict[str, PendingAuthFlow] = {}
+        self._auth_locks: Dict[str, asyncio.Lock] = {}
+
+    def _auth_lock(self, mcp_name: str) -> asyncio.Lock:
+        return self._auth_locks.setdefault(mcp_name, asyncio.Lock())
+
+    async def _clear_pending_auth(self, mcp_name: str, cancel_task: bool = False) -> None:
+        flow = self._pending_auth.pop(mcp_name, None)
+        if not flow:
+            return
+        if cancel_task and not flow.auth_task.done():
+            flow.auth_task.cancel()
+        if not flow.callback_future.done():
+            flow.callback_future.cancel()
+        if not flow.url_future.done():
+            flow.url_future.cancel()
 
     async def _get_state(self) -> MCPState:
         """Get or initialize the MCP state."""
@@ -488,13 +538,14 @@ class MCP:
     async def _create_client(
         self,
         name: str,
-        config: Dict[str, Any]
+        config: Dict[str, Any],
+        use_oauth: bool = False,
     ) -> Dict[str, Any]:
         """Create an MCP client from configuration."""
         mcp_type = config.get("type")
 
         if mcp_type == "remote":
-            return await self._create_remote_client(name, config)
+            return await self._create_remote_client(name, config, use_oauth=use_oauth)
         elif mcp_type == "local":
             return await self._create_local_client(name, config)
         else:
@@ -506,7 +557,8 @@ class MCP:
     async def _create_remote_client(
         self,
         name: str,
-        config: Dict[str, Any]
+        config: Dict[str, Any],
+        use_oauth: bool = False,
     ) -> Dict[str, Any]:
         """Create a remote MCP client using StreamableHTTP/SSE transport."""
         url = config.get("url")
@@ -518,22 +570,57 @@ class MCP:
 
         timeout = config.get("timeout", DEFAULT_TIMEOUT)
         headers = config.get("headers")
+        oauth_auth = None
+        oauth_redirect_url: Optional[str] = None
 
+        if use_oauth and config.get("oauth") is not False:
+            from .oauth_provider import McpOAuthConfig, create_oauth_provider
+
+            oauth_cfg = config.get("oauth") if isinstance(config.get("oauth"), dict) else {}
+            mcp_oauth_config = McpOAuthConfig(
+                client_id=oauth_cfg.get("clientId") if oauth_cfg else None,
+                client_secret=oauth_cfg.get("clientSecret") if oauth_cfg else None,
+                scope=oauth_cfg.get("scope") if oauth_cfg else None,
+            )
+
+            async def redirect_handler(auth_url: str) -> None:
+                nonlocal oauth_redirect_url
+                oauth_redirect_url = auth_url
+
+            async def callback_handler() -> tuple[str, str | None]:
+                raise RuntimeError("OAuth callback required")
+
+            oauth_auth = create_oauth_provider(
+                mcp_name=name,
+                server_url=url,
+                config=mcp_oauth_config,
+                redirect_handler=redirect_handler,
+                callback_handler=callback_handler,
+            )
+
+        client: MCPClient | None = None
         try:
             client = MCPClient(name=name)
 
-            await asyncio.wait_for(
-                client.connect_remote(url, headers=headers),
-                timeout=timeout
-            )
+            async with asyncio.timeout(timeout):
+                await client.connect_remote(url, headers=headers, oauth_auth=oauth_auth)
 
             if client.connected:
                 # Verify connection by listing tools
                 try:
-                    await asyncio.wait_for(
-                        client.list_tools(),
-                        timeout=timeout
-                    )
+                    async with asyncio.timeout(timeout):
+                        await client.list_tools()
+                except asyncio.CancelledError as e:
+                    if _is_external_cancellation():
+                        raise
+                    log.error("failed to list tools after connect", {
+                        "name": name, "error": str(e)
+                    })
+                    await client.close()
+                    return {
+                        "client": None,
+                        "status": MCPStatusFailed(error=str(e) or "MCP tool listing cancelled")
+                    }
                 except Exception as e:
                     log.error("failed to list tools after connect", {
                         "name": name, "error": str(e)
@@ -561,6 +648,15 @@ class MCP:
                 "client": None,
                 "status": MCPStatusFailed(error="Connection timeout")
             }
+        except asyncio.CancelledError as e:
+            if _is_external_cancellation():
+                raise
+            if client and client.connected:
+                await client.close()
+            return {
+                "client": None,
+                "status": MCPStatusFailed(error=str(e) or "Connection cancelled")
+            }
         except MCPAuthError as e:
             if _needs_registration(e.error_code):
                 return {
@@ -574,6 +670,11 @@ class MCP:
                 "status": MCPStatusNeedsAuth()
             }
         except Exception as e:
+            if oauth_redirect_url:
+                return {
+                    "client": None,
+                    "status": MCPStatusNeedsAuth(),
+                }
             error_msg = str(e)
 
             log.debug("remote MCP connection failed", {
@@ -616,18 +717,14 @@ class MCP:
 
             client = MCPClient(name=name)
 
-            await asyncio.wait_for(
-                client.connect_stdio(command=cmd, args=args, cwd=cwd, env=env),
-                timeout=timeout
-            )
+            async with asyncio.timeout(timeout):
+                await client.connect_stdio(command=cmd, args=args, cwd=cwd, env=env)
 
             if client.connected:
                 # Verify connection by listing tools
                 try:
-                    await asyncio.wait_for(
-                        client.list_tools(),
-                        timeout=timeout
-                    )
+                    async with asyncio.timeout(timeout):
+                        await client.list_tools()
                 except Exception as e:
                     log.error("failed to list tools after connect", {
                         "name": name, "error": str(e)
@@ -693,26 +790,24 @@ class MCP:
         state = await self._get_state()
         return state.clients
 
-    async def connect(self, name: str) -> None:
+    async def connect(self, name: str, use_oauth: bool = False) -> None:
         """Connect to a specific MCP server."""
         config = await ConfigManager.get()
         mcp_config = config.mcp or {}
         mcp = mcp_config.get(name)
 
         if not mcp:
-            log.error("MCP config not found", {"name": name})
-            return
+            raise ValueError(f"MCP server not found: {name}")
 
         cfg_dict = _get_mcp_config_dict(mcp)
         if cfg_dict is None:
-            log.error("Invalid MCP config", {"name": name})
-            return
+            raise ValueError(f"Invalid MCP config for server: {name}")
 
         # Force enabled
         cfg_dict = dict(cfg_dict)
         cfg_dict["enabled"] = True
 
-        result = await self._create_client(name, cfg_dict)
+        result = await self._create_client(name, cfg_dict, use_oauth=use_oauth)
 
         state = await self._get_state()
         state.status[name] = result["status"]
@@ -725,6 +820,11 @@ class MCP:
 
     async def disconnect(self, name: str) -> None:
         """Disconnect from a specific MCP server."""
+        config = await ConfigManager.get()
+        mcp_config = config.mcp or {}
+        if name not in mcp_config:
+            raise ValueError(f"MCP server not found: {name}")
+
         state = await self._get_state()
 
         if name in state.clients:
@@ -937,71 +1037,133 @@ class MCP:
         from .oauth_callback import McpOAuthCallback
         from .oauth_provider import McpOAuthConfig, create_oauth_provider
 
-        config = await ConfigManager.get()
-        mcp_config = config.mcp or {}
-        mcp = mcp_config.get(mcp_name)
+        async with self._auth_lock(mcp_name):
+            pending = self._pending_auth.get(mcp_name)
+            if pending is None:
+                config = await ConfigManager.get()
+                mcp_config = config.mcp or {}
+                mcp = mcp_config.get(mcp_name)
 
-        if not mcp:
-            raise ValueError(f"MCP server not found: {mcp_name}")
+                if not mcp:
+                    raise ValueError(f"MCP server not found: {mcp_name}")
 
-        cfg_dict = _get_mcp_config_dict(mcp)
-        if cfg_dict is None:
-            raise ValueError(f"MCP server {mcp_name} is disabled or missing configuration")
+                cfg_dict = _get_mcp_config_dict(mcp)
+                if cfg_dict is None:
+                    raise ValueError(f"MCP server {mcp_name} is disabled or missing configuration")
 
-        if cfg_dict.get("type") != "remote":
-            raise ValueError(f"MCP server {mcp_name} is not a remote server")
+                if cfg_dict.get("type") != "remote":
+                    raise ValueError(f"MCP server {mcp_name} is not a remote server")
 
-        if cfg_dict.get("oauth") is False:
-            raise ValueError(f"MCP server {mcp_name} has OAuth explicitly disabled")
+                if cfg_dict.get("oauth") is False:
+                    raise ValueError(f"MCP server {mcp_name} has OAuth explicitly disabled")
 
-        # Start the callback server
-        await McpOAuthCallback.ensure_running()
+                # Start the callback server
+                await McpOAuthCallback.ensure_running()
 
-        # Generate and store state
-        oauth_state = secrets.token_hex(32)
-        await McpAuth.update_oauth_state(mcp_name, oauth_state)
+                # Build OAuth config from config entry
+                oauth_cfg = cfg_dict.get("oauth") if isinstance(cfg_dict.get("oauth"), dict) else {}
+                mcp_oauth_config = McpOAuthConfig(
+                    client_id=oauth_cfg.get("clientId") if oauth_cfg else None,
+                    client_secret=oauth_cfg.get("clientSecret") if oauth_cfg else None,
+                    scope=oauth_cfg.get("scope") if oauth_cfg else None,
+                )
 
-        # Build OAuth config from config entry
-        oauth_cfg = cfg_dict.get("oauth") if isinstance(cfg_dict.get("oauth"), dict) else {}
-        mcp_oauth_config = McpOAuthConfig(
-            client_id=oauth_cfg.get("clientId") if oauth_cfg else None,
-            client_secret=oauth_cfg.get("clientSecret") if oauth_cfg else None,
-            scope=oauth_cfg.get("scope") if oauth_cfg else None,
-        )
+                loop = asyncio.get_running_loop()
+                callback_future: asyncio.Future[tuple[str, str | None]] = loop.create_future()
+                url_future: asyncio.Future[str] = loop.create_future()
 
-        captured_url = None
-        async def redirect_handler(auth_url: str) -> None:
-            nonlocal captured_url
-            captured_url = auth_url
-        async def callback_handler():
-            # Wait for the OAuth callback
-            code = await McpOAuthCallback.wait_for_callback(oauth_state)
-            return code, oauth_state
+                async def redirect_handler(auth_url: str) -> None:
+                    parsed = parse_qs(urlparse(auth_url).query)
+                    state_values = parsed.get("state")
+                    oauth_state = state_values[0] if state_values else ""
+                    if oauth_state:
+                        await McpAuth.update_oauth_state(mcp_name, oauth_state)
+                    if not url_future.done():
+                        url_future.set_result(auth_url)
 
-        auth_provider = create_oauth_provider(
-            mcp_name=mcp_name,
-            server_url=cfg_dict["url"],
-            config=mcp_oauth_config,
-            redirect_handler=redirect_handler,
-            callback_handler=callback_handler,
-        )
+                async def callback_handler() -> tuple[str, str | None]:
+                    return await callback_future
 
-        # Try to connect with auth — this may trigger redirect
-        import httpx
-        from mcp import ClientSession
-        from mcp.client.streamable_http import streamable_http_client
+                auth_provider = create_oauth_provider(
+                    mcp_name=mcp_name,
+                    server_url=cfg_dict["url"],
+                    config=mcp_oauth_config,
+                    redirect_handler=redirect_handler,
+                    callback_handler=callback_handler,
+                )
+
+                async def auth_probe() -> Dict[str, str]:
+                    import httpx
+                    from mcp import ClientSession
+                    from mcp.client.streamable_http import streamable_http_client
+
+                    async with httpx.AsyncClient(auth=auth_provider, follow_redirects=True) as http_client:
+                        async with streamable_http_client(cfg_dict["url"], http_client=http_client) as (read, write, _):
+                            async with ClientSession(read, write) as session:
+                                await session.initialize()
+                                return {"authorization_url": ""}
+
+                pending = PendingAuthFlow(
+                    auth_task=asyncio.create_task(auth_probe()),
+                    callback_future=callback_future,
+                    url_future=url_future,
+                )
+                self._pending_auth[mcp_name] = pending
+
+            done, _ = await asyncio.wait(
+                {pending.auth_task, pending.url_future},
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=10.0,
+            )
+
+            if not done:
+                await self._clear_pending_auth(mcp_name, cancel_task=True)
+                raise RuntimeError("OAuth flow did not produce an authorization URL")
+
+            if pending.auth_task in done:
+                try:
+                    return pending.auth_task.result()
+                finally:
+                    await self._clear_pending_auth(mcp_name)
+
+            return {"authorization_url": pending.url_future.result()}
+
+    async def finish_auth(
+        self,
+        mcp_name: str,
+        code: str,
+        state: str,
+    ) -> MCPStatus:
+        """Complete OAuth authentication with code+state and reconnect."""
+        flow = self._pending_auth.get(mcp_name)
+        if flow is None:
+            raise RuntimeError(f"No pending OAuth flow for MCP server: {mcp_name}")
+
+        stored_state = await McpAuth.get_oauth_state(mcp_name)
+        if stored_state != state:
+            await McpAuth.clear_oauth_state(mcp_name)
+            await self._clear_pending_auth(mcp_name, cancel_task=True)
+            raise RuntimeError("OAuth state mismatch - potential CSRF attack")
+
+        if not flow.callback_future.done():
+            flow.callback_future.set_result((code, state))
 
         try:
-            async with httpx.AsyncClient(auth=auth_provider, follow_redirects=True) as http_client:
-                async with streamable_http_client(cfg_dict["url"], http_client=http_client) as (read, write, _):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        # Already authenticated
-                        return {"authorization_url": ""}
+            auth_result = await flow.auth_task
         except Exception:
-            if captured_url:
-                return {"authorization_url": captured_url}
+            await self._clear_pending_auth(mcp_name, cancel_task=True)
             raise
+        if auth_result.get("authorization_url"):
+            await self._clear_pending_auth(mcp_name, cancel_task=True)
+            raise RuntimeError("OAuth flow did not complete token exchange")
+
+        await McpAuth.clear_oauth_state(mcp_name)
+        await McpAuth.clear_code_verifier(mcp_name)
+        await self._clear_pending_auth(mcp_name)
+
+        await self.connect(mcp_name, use_oauth=True)
+        state_map = await self._get_state()
+        return state_map.status.get(mcp_name, MCPStatusFailed(error="Unknown error after auth"))
 
     async def authenticate(self, mcp_name: str) -> MCPStatus:
         """Complete OAuth authentication — opens browser and waits for callback."""
@@ -1013,18 +1175,22 @@ class MCP:
 
         if not auth_url:
             # Already authenticated, reconnect
-            await self.connect(mcp_name)
+            await self.connect(mcp_name, use_oauth=True)
             state = await self._get_state()
             return state.status.get(mcp_name, MCPStatusConnected())
 
         oauth_state = await McpAuth.get_oauth_state(mcp_name)
         if not oauth_state:
-            raise RuntimeError("OAuth state not found")
+            parsed = parse_qs(urlparse(auth_url).query)
+            state_values = parsed.get("state")
+            oauth_state = state_values[0] if state_values else ""
+            if not oauth_state:
+                raise RuntimeError("OAuth state not found")
+            await McpAuth.update_oauth_state(mcp_name, oauth_state)
 
         log.info("opening browser for oauth", {"mcp_name": mcp_name, "url": auth_url})
 
-        # Register callback BEFORE opening browser
-        callback_promise = McpOAuthCallback.wait_for_callback(oauth_state)
+        callback_promise = McpOAuthCallback.wait_for_callback(oauth_state, mcp_name=mcp_name)
 
         try:
             webbrowser.open(auth_url)
@@ -1032,22 +1198,8 @@ class MCP:
             log.warn("failed to open browser, user must open URL manually", {"mcp_name": mcp_name})
             await Bus.publish(BrowserOpenFailed, BrowserOpenFailedProps(mcp_name=mcp_name, url=auth_url))
 
-        # Wait for callback
-        await callback_promise
-
-        # Validate and clear state
-        stored_state = await McpAuth.get_oauth_state(mcp_name)
-        if stored_state != oauth_state:
-            await McpAuth.clear_oauth_state(mcp_name)
-            raise RuntimeError("OAuth state mismatch - potential CSRF attack")
-
-        await McpAuth.clear_oauth_state(mcp_name)
-        await McpAuth.clear_code_verifier(mcp_name)
-
-        # Reconnect with new tokens
-        await self.connect(mcp_name)
-        state = await self._get_state()
-        return state.status.get(mcp_name, MCPStatusFailed(error="Unknown error after auth"))
+        code = await callback_promise
+        return await self.finish_auth(mcp_name, code=code, state=oauth_state)
 
     async def remove_auth(self, mcp_name: str) -> None:
         """Remove OAuth credentials for an MCP server."""
@@ -1056,6 +1208,8 @@ class MCP:
         await McpAuth.remove(mcp_name)
         McpOAuthCallback.cancel_pending(mcp_name)
         await McpAuth.clear_oauth_state(mcp_name)
+        await McpAuth.clear_code_verifier(mcp_name)
+        await self._clear_pending_auth(mcp_name, cancel_task=True)
         log.info("removed oauth credentials", {"mcp_name": mcp_name})
 
     async def shutdown(self) -> None:

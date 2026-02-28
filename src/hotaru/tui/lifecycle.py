@@ -251,6 +251,23 @@ class LifecycleMixin:
         bind_sdk_event("message.part.updated")
         bind_sdk_event("message.part.delta")
         bind_sdk_event("session.status")
+        self._runtime_unsubscribers.append(
+            self.sdk_ctx.on_event(
+                "mcp.tools.changed",
+                lambda _data: self.run_worker(self._refresh_runtime_status(), exclusive=False),
+            )
+        )
+        self._runtime_unsubscribers.append(
+            self.sdk_ctx.on_event(
+                "mcp.browser.open.failed",
+                lambda data: self.notify(
+                    f"Open this URL manually for MCP OAuth: {data.get('url')}",
+                    severity="warning",
+                )
+                if isinstance(data, dict) and data.get("url")
+                else None,
+            )
+        )
 
     def _schedule_lsp_refresh(self) -> None:
         task = self._lsp_refresh_task

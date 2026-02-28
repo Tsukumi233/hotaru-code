@@ -8,6 +8,7 @@ from urllib.parse import quote
 import httpx
 
 from .types import (
+    McpAuthCallbackPayload,
     PermissionReplyPayload,
     PreferenceCurrentPayload,
     ProviderConnectPayload,
@@ -308,6 +309,38 @@ class HotaruAPIClient:
             "/v1/providers/connect",
             json_body=dict(payload),
         )
+        return result if isinstance(result, dict) else {"ok": bool(result)}
+
+    async def list_mcp_status(self) -> dict[str, dict[str, Any]]:
+        result = await self._request_json("GET", "/v1/mcp")
+        return result if isinstance(result, dict) else {}
+
+    async def mcp_connect(self, name: str) -> dict[str, Any]:
+        result = await self._request_json("POST", f"/v1/mcp/{name}/connect")
+        return result if isinstance(result, dict) else {"ok": bool(result)}
+
+    async def mcp_disconnect(self, name: str) -> dict[str, Any]:
+        result = await self._request_json("POST", f"/v1/mcp/{name}/disconnect")
+        return result if isinstance(result, dict) else {"ok": bool(result)}
+
+    async def mcp_auth_start(self, name: str) -> dict[str, Any]:
+        result = await self._request_json("POST", f"/v1/mcp/{name}/auth/start")
+        return result if isinstance(result, dict) else {}
+
+    async def mcp_auth_callback(self, name: str, payload: McpAuthCallbackPayload | dict[str, Any]) -> dict[str, Any]:
+        result = await self._request_json(
+            "POST",
+            f"/v1/mcp/{name}/auth/callback",
+            json_body=dict(payload),
+        )
+        return result if isinstance(result, dict) else {}
+
+    async def mcp_auth_authenticate(self, name: str) -> dict[str, Any]:
+        result = await self._request_json("POST", f"/v1/mcp/{name}/auth/authenticate")
+        return result if isinstance(result, dict) else {}
+
+    async def mcp_auth_remove(self, name: str) -> dict[str, Any]:
+        result = await self._request_json("DELETE", f"/v1/mcp/{name}/auth")
         return result if isinstance(result, dict) else {"ok": bool(result)}
 
     async def list_agents(self) -> list[dict[str, Any]]:

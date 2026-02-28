@@ -166,6 +166,23 @@ class ProviderConnectResponse(BaseModel):
     provider: ProviderResponse | None = None
 
 
+class McpAuthStartResponse(BaseModel):
+    authorization_url: str
+
+
+class McpAuthCallbackRequest(BaseModel):
+    code: str
+    state: str
+
+
+class McpAuthRemoveResponse(BaseModel):
+    ok: bool
+
+
+class McpConnectResponse(BaseModel):
+    ok: bool
+
+
 class AgentResponse(BaseModel):
     name: str
     description: str = ""

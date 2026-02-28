@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from ..runtime import AppContext
 from .errors import register_error_handlers
 from .middleware import AccessLogMiddleware, RequestContextMiddleware
-from .routes import agents, events, permissions, preferences, providers, ptys, questions, sessions, system
+from .routes import agents, events, mcp, permissions, preferences, providers, ptys, questions, sessions, system
 from .schemas import ErrorResponse
 
 
@@ -68,5 +68,6 @@ def create_app(
     app.include_router(permissions.router)
     app.include_router(questions.router)
     app.include_router(events.router)
+    app.include_router(mcp.router)
     app.include_router(ptys.router)
     return app
